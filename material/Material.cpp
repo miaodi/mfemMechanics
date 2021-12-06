@@ -7,12 +7,12 @@ Eigen::Vector<double, 6> Voigt( const Eigen::Matrix3d& tensor, const bool isStra
     if ( isStrain )
     {
         return Eigen::Vector<double, 6>{ { tensor( 0, 0 ), tensor( 1, 1 ), tensor( 2, 2 ), 2 * tensor( 0, 1 ),
-                                           2 * tensor( 0, 2 ), 2 * tensor( 1, 2 ) } };
+                                           2 * tensor( 1, 2 ), 2 * tensor( 0, 2 ) } };
     }
     else
     {
         return Eigen::Vector<double, 6>{
-            { tensor( 0, 0 ), tensor( 1, 1 ), tensor( 2, 2 ), tensor( 0, 1 ), tensor( 0, 2 ), tensor( 1, 2 ) } };
+            { tensor( 0, 0 ), tensor( 1, 1 ), tensor( 2, 2 ), tensor( 0, 1 ), tensor( 1, 2 ), tensor( 0, 2 ) } };
     }
 }
 
@@ -20,15 +20,15 @@ Eigen::Matrix3d InverseVoigt( const Eigen::Vector<double, 6>& vector, const bool
 {
     if ( isStrain )
     {
-        return Eigen::Matrix3d{ { vector( 0 ), vector( 3 ) / 2, vector( 4 ) / 2 },
-                                { vector( 3 ) / 2, vector( 1 ), vector( 5 ) / 2 },
-                                { vector( 4 ) / 2, vector( 5 ) / 2, vector( 2 ) } };
+        return Eigen::Matrix3d{ { vector( 0 ), vector( 3 ) / 2, vector( 5 ) / 2 },
+                                { vector( 3 ) / 2, vector( 1 ), vector( 4 ) / 2 },
+                                { vector( 6 ) / 2, vector( 4 ) / 2, vector( 2 ) } };
     }
     else
     {
-        return Eigen::Matrix3d{ { vector( 0 ), vector( 3 ), vector( 4 ) },
-                                { vector( 3 ), vector( 1 ), vector( 5 ) },
-                                { vector( 4 ), vector( 5 ), vector( 2 ) } };
+        return Eigen::Matrix3d{ { vector( 0 ), vector( 3 ), vector( 5 ) },
+                                { vector( 3 ), vector( 1 ), vector( 4 ) },
+                                { vector( 5 ), vector( 4 ), vector( 2 ) } };
     }
 }
 
@@ -40,14 +40,14 @@ ElasticMaterial::ElasticMaterial() : mRefModuli(), mCurModuli()
 
 Eigen::Matrix3d ElasticMaterial::getGreenLagrangeStrainTensor() const
 {
-    Eigen::Matrix3d dudX = *mdxdX - Eigen::Matrix3d::Identity();
     if ( isSamllDeformation() )
     {
+        Eigen::Matrix3d dudX = *mdxdX - Eigen::Matrix3d::Identity();
         return .5 * ( dudX + dudX.transpose() );
     }
     else
     {
-        return .5 * ( dudX.transpose() * dudX - Eigen::Matrix3d::Identity() );
+        return .5 * ( ( *mdxdX ).transpose() * ( *mdxdX ) - Eigen::Matrix3d::Identity() );
     }
 }
 
@@ -106,8 +106,8 @@ void IsotropicElasticMaterial::updateRefModuli()
 void IsotropicElasticMaterial::updateCurModuli()
 {
     const Eigen::Matrix3d& F = *mdxdX;
-    static const Eigen::Matrix<int, 3, 3> indexMap{ { 0, 5, 4 }, { 5, 1, 3 }, { 4, 3, 2 } };
-    static const Eigen::Matrix<int, 2, 6> inverseMap{ { 0, 1, 2, 0, 0, 1 }, { 0, 1, 2, 1, 2, 2 } };
+    static const Eigen::Matrix<int, 3, 3> indexMap{ { 0, 3, 5 }, { 3, 1, 4 }, { 5, 4, 2 } };
+    static const Eigen::Matrix<int, 2, 6> inverseMap{ { 0, 1, 2, 0, 1, 0 }, { 0, 1, 2, 1, 2, 2 } };
     const double determinant = F.determinant();
     for ( int i = 0; i < 6; i++ )
     {

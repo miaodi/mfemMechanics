@@ -8,10 +8,12 @@ set(CMAKE_CXX_FLAGS_DEBUG "-g")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 
 message(STATUS "Looking for mfem ...")
-if(CMAKE_BUILD_TYPE EQUAL "DEBUG")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(MFEM_DIR "/home/dimiao/repo/mfem/debug")
+    message("debug ${MFEM_DIR}")
 else()
     set(MFEM_DIR "/home/dimiao/repo/mfem/release")
+    message("release ${MFEM_DIR}")
 endif()
 
 if (MFEM_DIR)

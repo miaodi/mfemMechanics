@@ -2,11 +2,13 @@
 #pragma once
 #include "Material.h"
 #include "mfem.hpp"
+#include <Eigen/Dense>
 #include <memory>
 #include <vector>
 
 namespace plugin
 {
+Eigen::MatrixXd mapper( const int dim, const int dof );
 class ElasticityIntegrator : public mfem::BilinearFormIntegrator
 {
 public:
@@ -67,11 +69,33 @@ public:
 
 protected:
     mfem::DenseMatrix mDShape, mGShape;
-
     Eigen::Matrix<double, 3, 3> mdxdX;
-
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
-
+    Eigen::MatrixXd mGeomStiff;
     ElasticMaterial* mMaterialModel{ nullptr };
+};
+
+class NonlinearVectorBoundaryLFIntegrator : public mfem::NonlinearFormIntegrator
+{
+public:
+    NonlinearVectorBoundaryLFIntegrator( mfem::VectorCoefficient& QG ) : mfem::NonlinearFormIntegrator(), Q( QG )
+    {
+    }
+
+    virtual void AssembleFaceVector( const mfem::FiniteElement& el1,
+                                     const mfem::FiniteElement& el2,
+                                     mfem::FaceElementTransformations& Tr,
+                                     const mfem::Vector& elfun,
+                                     mfem::Vector& elvect ) override;
+
+    virtual void AssembleFaceGrad( const mfem::FiniteElement& el1,
+                                   const mfem::FiniteElement& el2,
+                                   mfem::FaceElementTransformations& Tr,
+                                   const mfem::Vector& elfun,
+                                   mfem::DenseMatrix& elmat ) override;
+
+protected:
+    mfem::Vector shape, vec;
+    mfem::VectorCoefficient& Q;
 };
 } // namespace plugin

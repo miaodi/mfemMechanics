@@ -52,13 +52,13 @@ void InitialDeformation( const Vector& x, Vector& y )
     // Set the initial configuration. Having this different from the reference
     // configuration can help convergence
     y = x;
-    y[1] = x[1] + .25 * x[0];
+    y[1] = x[1] + .05 * x[0];
 }
 
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "/home/dimiao/repo/mfem/data/beam-tet.mesh";
+    const char* mesh_file = "../test.mesh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -83,13 +83,6 @@ int main( int argc, char* argv[] )
     Mesh* mesh = new Mesh( mesh_file, 1, 1 );
     int dim = mesh->Dimension();
 
-    if ( mesh->attributes.Max() < 2 || mesh->bdr_attributes.Max() < 2 )
-    {
-        cerr << "\nInput mesh should have at least two materials and "
-             << "two boundary attributes! (See schematic in ex2.cpp)\n"
-             << endl;
-        return 3;
-    }
 
     // 3. Select the order of the finite element discretization space. For NURBS
     //    meshes, we increase the order by degree elevation.
@@ -125,7 +118,7 @@ int main( int argc, char* argv[] )
     else
     {
         fec = new H1_FECollection( order, dim );
-        fespace = new FiniteElementSpace( mesh, fec, dim, Ordering::byVDIM );
+        fespace = new FiniteElementSpace( mesh, fec, dim );
     }
     cout << "Number of finite element unknowns: " << fespace->GetTrueVSize() << endl << "Assembling: " << flush;
 
@@ -137,7 +130,6 @@ int main( int argc, char* argv[] )
     ess_bdr = 0;
     ess_bdr[0] = 1;
 
-    ess_bdr[1] = 1;
     fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
 
     // 8. Define the solution vector x as a finite element grid function
@@ -150,38 +142,50 @@ int main( int argc, char* argv[] )
     VectorFunctionCoefficient deform( dim, InitialDeformation );
     VectorFunctionCoefficient refconfig( dim, ReferenceConfiguration );
 
-    x_gf.ProjectCoefficient( deform );
+    x_gf.ProjectCoefficient( refconfig );
     x_ref.ProjectCoefficient( refconfig );
 
-    // Vector Nu( mesh->attributes.Max() );
-    // Nu = .25;
-    // PWConstCoefficient nu_func( Nu );
+    VectorArrayCoefficient f( dim );
+    for ( int i = 0; i < dim - 1; i++ )
+    {
+        f.Set( i, new ConstantCoefficient( 0.0 ) );
+    }
+    {
+        Vector pull_force( mesh->bdr_attributes.Max() );
+        pull_force = 0.0;
+        pull_force( 1 ) = -1.0e8;
+        f.Set( 0, new PWConstCoefficient( pull_force ) );
+    }
 
-    // Vector E( mesh->attributes.Max() );
-    // E = 2.5e8;
-    // PWConstCoefficient E_func( E );
+    Vector Nu( mesh->attributes.Max() );
+    Nu = .3;
+    PWConstCoefficient nu_func( Nu );
 
-    // IsotropicElasticMaterial iem( E_func, nu_func );
+    Vector E( mesh->attributes.Max() );
+    E = 2.5e8;
+    PWConstCoefficient E_func( E );
 
-    // auto intg = new plugin::NonlinearElasticityIntegrator( iem );
+    IsotropicElasticMaterial iem( E_func, nu_func );
+    iem.setLargeDeformation();
+
+    auto intg = new plugin::NonlinearElasticityIntegrator( iem );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
-    {
-        nlf->AddDomainIntegrator( new HyperelasticNLFIntegrator( new NeoHookeanModel( 1.5e6, 10e9 ) ) );
-        nlf->SetEssentialBC( ess_bdr );
-    }
+    // {
+    //     nlf->AddDomainIntegrator( new HyperelasticNLFIntegrator( new NeoHookeanModel( 1.5e6, 10e9 ) ) );
+    // }
+    nlf->AddDomainIntegrator( intg );
+    nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
+    nlf->SetEssentialBC( ess_bdr );
+    // Vector r;
+    // r.SetSize(nlf->Height());
+    // nlf->Mult(x_gf, r);
 
     GeneralResidualMonitor newton_monitor( "Newton", 1 );
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
 
     // Set up the Jacobian solver
-    GMRESSolver* j_gmres = new GMRESSolver();
-    j_gmres->iterative_mode = false;
-    j_gmres->SetRelTol( 1e-12 );
-    j_gmres->SetAbsTol( 1e-12 );
-    j_gmres->SetMaxIter( 300 );
-    j_gmres->SetPrintLevel( -1 );
-    j_gmres->SetMonitor( j_monitor );
+    auto j_gmres = new UMFPackSolver();
 
     auto newton_solver = new NewtonSolver();
 
@@ -191,13 +195,14 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-6 );
+    newton_solver->SetRelTol( 1e-7 );
     newton_solver->SetAbsTol( 1e-9 );
-    newton_solver->SetMaxIter( 20 );
+    newton_solver->SetMaxIter( 10 );
 
     Vector zero;
     newton_solver->Mult( zero, x_gf );
-    MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
+
+    // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
     subtract( x_gf, x_ref, x_def );
 
     // 15. Save data in the ParaView format

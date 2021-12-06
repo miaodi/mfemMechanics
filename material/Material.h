@@ -57,6 +57,11 @@ public:
         mdxdX = &F;
     }
 
+    void setLargeDeformation()
+    {
+        mSmallDeformation = false;
+    }
+
 protected:
     // moduli in reference configuration
     Eigen::Matrix<double, 6, 6> mRefModuli;
