@@ -1,6 +1,7 @@
 
 #include "FEMPlugin.h"
 #include "Material.h"
+#include "PostProc.h"
 #include "mfem.hpp"
 #include <fstream>
 #include <iostream>
@@ -78,6 +79,8 @@ int main( int argc, char* argv[] )
     }
     args.PrintOptions( cout );
 
+    bool small = true;
+
     // 2. Read the mesh from the given mesh file. We can handle triangular,
     //    quadrilateral, tetrahedral or hexahedral elements with the same code.
     Mesh* mesh = new Mesh( mesh_file, 1, 1 );
@@ -103,7 +106,7 @@ int main( int argc, char* argv[] )
     //    largest number that gives a final mesh with no more than 5,000
     //    elements.
     {
-        int ref_levels = (int)floor( log( 10000. / mesh->GetNE() ) / log( 2. ) / dim );
+        int ref_levels = (int)floor( log( 20000. / mesh->GetNE() ) / log( 2. ) / dim );
         for ( int l = 0; l < ref_levels; l++ )
         {
             mesh->UniformRefinement();
@@ -139,7 +142,6 @@ int main( int argc, char* argv[] )
 
     ess_bdr[1] = 1;
     fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
-
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
     //    which satisfies the boundary conditions.
@@ -158,10 +160,9 @@ int main( int argc, char* argv[] )
     bdr2[1] = 1;
     GridFunction bcgf( fespace );
     Vector vec( 3 );
-    vec( 1 ) = .5;
+    vec( 1 ) = .2;
     VectorConstantCoefficient vcc( vec );
     bcgf.ProjectBdrCoefficient( vcc, bdr2 );
-
     Vector Nu( mesh->attributes.Max() );
     Nu = .33;
     PWConstCoefficient nu_func( Nu );
@@ -172,58 +173,85 @@ int main( int argc, char* argv[] )
 
     IsotropicElasticMaterial iem( E_func, nu_func );
     iem.setLargeDeformation();
-
-    auto intg = new plugin::NonlinearElasticityIntegrator( iem );
-
-    NonlinearForm* nlf = new NonlinearForm( fespace );
-    // {
-    //     nlf->AddDomainIntegrator( new HyperelasticNLFIntegrator( new NeoHookeanModel( 1.5e6, 10e9 ) ) );
-    // }
-    nlf->AddDomainIntegrator( intg );
-    nlf->SetEssentialBC( ess_bdr );
-
-    GeneralResidualMonitor newton_monitor( "Newton", 1 );
-    GeneralResidualMonitor j_monitor( "GMRES", 3 );
-
-    // BilinearForm* a = new BilinearForm( fespace );
-    // auto ei = new plugin::ElasticityIntegrator( iem );
-    // ei->resizeRefEleTransVec( mesh->GetNE() );
-    // a->AddDomainIntegrator( ei );
-
-    // a->Assemble();
-
-    // Set up the Jacobian solver
-    auto* j_gmres = new CGSolver();
-    j_gmres->iterative_mode = false;
-    j_gmres->SetRelTol( 1e-12 );
-    j_gmres->SetAbsTol( 1e-12 );
-    j_gmres->SetMaxIter( 2000 );
-    j_gmres->SetPrintLevel( -1 );
-    // j_gmres->SetMonitor( j_monitor );
-
-    auto newton_solver = new NewtonSolver();
-
-    // Set the newton solve parameters
-    newton_solver->iterative_mode = true;
-    newton_solver->SetSolver( *j_gmres );
-    newton_solver->SetOperator( *nlf );
-    newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-8 );
-    newton_solver->SetAbsTol( 1e-10 );
-    newton_solver->SetMaxIter( 50 );
-    for ( int i = 0; i < 20; i++ )
+    if ( small )
     {
-        x_gf += bcgf;
+        for ( int i = 0; i < 30; i++ )
+        {
+            x_def += bcgf;
+        }
 
-        Vector zero;
-        newton_solver->Mult( zero, x_gf );
+        BilinearForm* a = new BilinearForm( fespace );
+        auto ei = new plugin::ElasticityIntegrator( iem );
+        ei->resizeRefEleTransVec( mesh->GetNE() );
+        a->AddDomainIntegrator( ei );
+
+        a->Assemble();
+
+        LinearForm* b = new LinearForm( fespace );
+        cout << "r.h.s. ... " << flush;
+        b->Assemble();
+
+        SparseMatrix A;
+        Vector B, X;
+        a->FormLinearSystem( ess_tdof_list, x_def, *b, A, X, B );
+
+        GSSmoother M( A );
+        PCG( A, M, B, X, 1, 500, 1e-8, 0.0 );
+
+        // 12. Recover the solution as a finite element grid function.
+        a->RecoverFEMSolution( X, *b, x_def );
     }
-    // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
-    subtract( x_gf, x_ref, x_def );
+    else
+    {
+        auto intg = new plugin::NonlinearElasticityIntegrator( iem );
+
+        NonlinearForm* nlf = new NonlinearForm( fespace );
+        nlf->AddDomainIntegrator( intg );
+        nlf->SetEssentialBC( ess_bdr );
+
+        GeneralResidualMonitor newton_monitor( "Newton", 1 );
+        GeneralResidualMonitor j_monitor( "GMRES", 3 );
+
+        // Set up the Jacobian solver
+        auto* j_gmres = new CGSolver();
+        j_gmres->iterative_mode = false;
+        j_gmres->SetRelTol( 1e-12 );
+        j_gmres->SetAbsTol( 1e-12 );
+        j_gmres->SetMaxIter( 2000 );
+        j_gmres->SetPrintLevel( -1 );
+        // j_gmres->SetMonitor( j_monitor );
+
+        auto newton_solver = new NewtonSolver();
+
+        // Set the newton solve parameters
+        newton_solver->iterative_mode = true;
+        newton_solver->SetSolver( *j_gmres );
+        newton_solver->SetOperator( *nlf );
+        newton_solver->SetPrintLevel( -1 );
+        newton_solver->SetMonitor( newton_monitor );
+        newton_solver->SetRelTol( 1e-8 );
+        newton_solver->SetAbsTol( 1e-10 );
+        newton_solver->SetMaxIter( 50 );
+        for ( int i = 0; i < 30; i++ )
+        {
+            x_gf += bcgf;
+
+            Vector zero;
+            newton_solver->Mult( zero, x_gf );
+        }
+        // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
+        subtract( x_gf, x_ref, x_def );
+    }
+
+    FiniteElementSpace scalar_space( mesh, fec );
+
+    plugin::StressCoefficient stress_c( dim, iem );
+    stress_c.SetDisplacement( x_def );
 
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "test", mesh );
+    // Visualize the stress components.
+    const char* c = "xyz";
+    ParaViewDataCollection paraview_dc( "test1", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );
@@ -231,13 +259,26 @@ int main( int argc, char* argv[] )
     paraview_dc.SetHighOrderOutput( true );
     paraview_dc.SetTime( 0.0 ); // set the time
     paraview_dc.RegisterField( "Displace", &x_def );
+    for ( int i = 0; i < dim; i++ )
+    {
+        for ( int j = 0; j < dim; j++ )
+        {
+            stress_c.SetComponent( i, j );
+            auto stress = new GridFunction( &scalar_space );
+            stress->ProjectCoefficient( stress_c );
+            string x( 1, c[i] );
+            string y( 1, c[j] );
+            string name = "S" + x + y;
+
+            paraview_dc.RegisterField( name, stress );
+        }
+    }
     paraview_dc.Save();
     if ( fec )
     {
         delete fespace;
         delete fec;
     }
-    delete newton_solver;
     delete mesh;
 
     return 0;

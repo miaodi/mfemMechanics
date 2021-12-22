@@ -1,6 +1,6 @@
 project(plugin)
 
-set(pluginSrc FEMPlugin.cpp)
+set(pluginSrc FEMPlugin.cpp PostProc.cpp)
 
 
 set(PLUGIN_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} PARENT_SCOPE)
