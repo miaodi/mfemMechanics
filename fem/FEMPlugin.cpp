@@ -33,7 +33,7 @@ void ElasticityIntegrator::AssembleElementMatrix( const FiniteElement& el, Eleme
     const int eleNum = Trans.ElementNo;
 
     MFEM_ASSERT( dim == Trans.GetSpaceDim(), "" );
-    MFEM_ASSERT( eleNum < ElasticityIntegrator::refEleTransVec.size(),
+    MFEM_ASSERT( (size_t)eleNum < ElasticityIntegrator::refEleTransVec.size(),
                  "ElasticityIntegrator::refEleTransVec has not been "
                  "initiated yet." );
     if ( ElasticityIntegrator::refEleTransVec[eleNum] == nullptr )

@@ -184,44 +184,44 @@ int main( int argc, char* argv[] )
     GeneralResidualMonitor newton_monitor( "Newton", 1 );
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
 
-    // Set up the Jacobian solver
-    auto j_gmres = new UMFPackSolver();
+    // // Set up the Jacobian solver
+    // auto j_gmres = new UMFPackSolver();
 
-    auto newton_solver = new NewtonSolver();
+    // auto newton_solver = new NewtonSolver();
 
-    // Set the newton solve parameters
-    newton_solver->iterative_mode = true;
-    newton_solver->SetSolver( *j_gmres );
-    newton_solver->SetOperator( *nlf );
-    newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-7 );
-    newton_solver->SetAbsTol( 1e-9 );
-    newton_solver->SetMaxIter( 10 );
+    // // Set the newton solve parameters
+    // newton_solver->iterative_mode = true;
+    // newton_solver->SetSolver( *j_gmres );
+    // newton_solver->SetOperator( *nlf );
+    // newton_solver->SetPrintLevel( -1 );
+    // newton_solver->SetMonitor( newton_monitor );
+    // newton_solver->SetRelTol( 1e-7 );
+    // newton_solver->SetAbsTol( 1e-9 );
+    // newton_solver->SetMaxIter( 10 );
 
-    Vector zero;
-    newton_solver->Mult( zero, x_gf );
+    // Vector zero;
+    // newton_solver->Mult( zero, x_gf );
 
-    // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
-    subtract( x_gf, x_ref, x_def );
+    // // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
+    // subtract( x_gf, x_ref, x_def );
 
-    // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "test", mesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x_def );
-    paraview_dc.Save();
-    if ( fec )
-    {
-        delete fespace;
-        delete fec;
-    }
-    delete newton_solver;
-    delete mesh;
+    // // 15. Save data in the ParaView format
+    // ParaViewDataCollection paraview_dc( "test", mesh );
+    // paraview_dc.SetPrefixPath( "ParaView" );
+    // paraview_dc.SetLevelsOfDetail( order );
+    // paraview_dc.SetCycle( 0 );
+    // paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    // paraview_dc.SetHighOrderOutput( true );
+    // paraview_dc.SetTime( 0.0 ); // set the time
+    // paraview_dc.RegisterField( "Displace", &x_def );
+    // paraview_dc.Save();
+    // if ( fec )
+    // {
+    //     delete fespace;
+    //     delete fec;
+    // }
+    // delete newton_solver;
+    // delete mesh;
 
     return 0;
 }

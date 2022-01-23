@@ -79,7 +79,7 @@ int main( int argc, char* argv[] )
     }
     args.PrintOptions( cout );
 
-    bool small = true;
+    bool small = false;
 
     // 2. Read the mesh from the given mesh file. We can handle triangular,
     //    quadrilateral, tetrahedral or hexahedral elements with the same code.
@@ -106,7 +106,7 @@ int main( int argc, char* argv[] )
     //    largest number that gives a final mesh with no more than 5,000
     //    elements.
     {
-        int ref_levels = (int)floor( log( 20000. / mesh->GetNE() ) / log( 2. ) / dim );
+        int ref_levels = (int)floor( log( 2000. / mesh->GetNE() ) / log( 2. ) / dim );
         for ( int l = 0; l < ref_levels; l++ )
         {
             mesh->UniformRefinement();
@@ -173,6 +173,9 @@ int main( int argc, char* argv[] )
 
     IsotropicElasticMaterial iem( E_func, nu_func );
     iem.setLargeDeformation();
+
+    FiniteElementSpace scalar_space( mesh, fec );
+
     if ( small )
     {
         for ( int i = 0; i < 30; i++ )
@@ -200,6 +203,36 @@ int main( int argc, char* argv[] )
 
         // 12. Recover the solution as a finite element grid function.
         a->RecoverFEMSolution( X, *b, x_def );
+
+        plugin::StressCoefficient stress_c( dim, iem );
+        stress_c.SetDisplacement( x_def );
+
+        // 15. Save data in the ParaView format
+        // Visualize the stress components.
+        const char* c = "xyz";
+        ParaViewDataCollection paraview_dc( "test1", mesh );
+        paraview_dc.SetPrefixPath( "ParaView" );
+        paraview_dc.SetLevelsOfDetail( order );
+        paraview_dc.SetCycle( 0 );
+        paraview_dc.SetDataFormat( VTKFormat::BINARY );
+        paraview_dc.SetHighOrderOutput( true );
+        paraview_dc.SetTime( 0.0 ); // set the time
+        paraview_dc.RegisterField( "Displace", &x_def );
+        for ( int i = 0; i < dim; i++ )
+        {
+            for ( int j = 0; j < dim; j++ )
+            {
+                stress_c.SetComponent( i, j );
+                auto stress = new GridFunction( &scalar_space );
+                stress->ProjectCoefficient( stress_c );
+                string x( 1, c[i] );
+                string y( 1, c[j] );
+                string name = "S" + x + y;
+
+                paraview_dc.RegisterField( name, stress );
+            }
+        }
+        paraview_dc.Save();
     }
     else
     {
@@ -232,48 +265,53 @@ int main( int argc, char* argv[] )
         newton_solver->SetRelTol( 1e-8 );
         newton_solver->SetAbsTol( 1e-10 );
         newton_solver->SetMaxIter( 50 );
+
+        plugin::StressCoefficient stress_c( dim, iem );
+        stress_c.SetDisplacement( x_def );
+
+        // 15. Save data in the ParaView format
+        // Visualize the stress components.
+        const char* c = "xyz";
+        ParaViewDataCollection paraview_dc( "test1", mesh );
+        paraview_dc.SetPrefixPath( "ParaView" );
+        paraview_dc.SetLevelsOfDetail( order );
+        paraview_dc.SetCycle( 0 );
+        paraview_dc.SetDataFormat( VTKFormat::BINARY );
+        paraview_dc.SetHighOrderOutput( true );
+        paraview_dc.SetTime( 0.0 ); // set the time
+        paraview_dc.RegisterField( "Displace", &x_def );
+        for ( int i = 0; i < dim; i++ )
+        {
+            for ( int j = 0; j < dim; j++ )
+            {
+                stress_c.SetComponent( i, j );
+                auto stress = new GridFunction( &scalar_space );
+                stress->ProjectCoefficient( stress_c );
+                string x( 1, c[i] );
+                string y( 1, c[j] );
+                string name = "S" + x + y;
+
+                paraview_dc.RegisterField( name, stress );
+            }
+        }
+
         for ( int i = 0; i < 30; i++ )
         {
             x_gf += bcgf;
-
             Vector zero;
             newton_solver->Mult( zero, x_gf );
+
+            subtract( x_gf, x_ref, x_def );
+
+            plugin::StressCoefficient stress_c( dim, iem );
+            stress_c.SetDisplacement( x_def );
+
+            paraview_dc.SetCycle( i );
+            paraview_dc.SetTime( i ); // set the time
+            paraview_dc.Save();
         }
         // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
-        subtract( x_gf, x_ref, x_def );
     }
-
-    FiniteElementSpace scalar_space( mesh, fec );
-
-    plugin::StressCoefficient stress_c( dim, iem );
-    stress_c.SetDisplacement( x_def );
-
-    // 15. Save data in the ParaView format
-    // Visualize the stress components.
-    const char* c = "xyz";
-    ParaViewDataCollection paraview_dc( "test1", mesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x_def );
-    for ( int i = 0; i < dim; i++ )
-    {
-        for ( int j = 0; j < dim; j++ )
-        {
-            stress_c.SetComponent( i, j );
-            auto stress = new GridFunction( &scalar_space );
-            stress->ProjectCoefficient( stress_c );
-            string x( 1, c[i] );
-            string y( 1, c[j] );
-            string name = "S" + x + y;
-
-            paraview_dc.RegisterField( name, stress );
-        }
-    }
-    paraview_dc.Save();
     if ( fec )
     {
         delete fespace;
