@@ -48,14 +48,6 @@ void ReferenceConfiguration( const Vector& x, Vector& y )
     y = x;
 }
 
-void InitialDeformation( const Vector& x, Vector& y )
-{
-    // Set the initial configuration. Having this different from the reference
-    // configuration can help convergence
-    y = x;
-    y[1] = x[1] + .05 * x[0];
-}
-
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
@@ -63,6 +55,7 @@ int main( int argc, char* argv[] )
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
+    int refineLvl = 0;
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -71,6 +64,7 @@ int main( int argc, char* argv[] )
                     "Enable static condensation." );
     args.AddOption( &visualization, "-vis", "--visualization", "-no-vis", "--no-visualization",
                     "Enable or disable GLVis visualization." );
+    args.AddOption( &refineLvl, "-r", "--refine-level", "Finite element refine level." );
     args.Parse();
     if ( !args.Good() )
     {
@@ -114,13 +108,12 @@ int main( int argc, char* argv[] )
     // //    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
     // //    largest number that gives a final mesh with no more than 5,000
     // //    elements.
-    // {
-    //     int ref_levels = (int)floor( log( 500. / mesh->GetNE() ) / log( 2. ) / dim );
-    //     for ( int l = 0; l < ref_levels; l++ )
-    //     {
-    //         mesh->UniformRefinement();
-    //     }
-    // }
+    {
+        for ( int l = 0; l < refineLvl; l++ )
+        {
+            mesh->UniformRefinement();
+        }
+    }
     // mesh->UniformRefinement();
 
     // 5. Define a finite element space on the mesh. Here we use vector finite
@@ -151,92 +144,94 @@ int main( int argc, char* argv[] )
     ess_bdr[0] = 1;
     fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
 
-    // 7. Set up the linear form b(.) which corresponds to the right-hand side of
-    //    the FEM linear system. In this case, b_i equals the boundary integral
-    //    of f*phi_i where f represents a "pull down" force on the Neumann part
-    //    of the boundary and phi_i are the basis functions in the finite element
-    //    fespace. The force is defined by the VectorArrayCoefficient object f,
-    //    which is a vector of Coefficient objects. The fact that f is non-zero
-    //    on boundary attribute 2 is indicated by the use of piece-wise constants
-    //    coefficient for its last component.
-    VectorArrayCoefficient f( dim );
-        f.Set( 0, new ConstantCoefficient( 0.0 ) );
-        f.Set( 1, new ConstantCoefficient( 0.0 ) );
-    {
-        Vector pull_force( mesh->bdr_attributes.Max() );
-        pull_force = 0.0;
-        pull_force( 1 ) = 1.0e-4;
-        f.Set( 2, new PWConstCoefficient( pull_force ) );
-    }
-
-    LinearForm* b = new LinearForm( fespace );
-    b->AddBoundaryIntegrator( new VectorBoundaryLFIntegrator( f ) );
-    cout << "r.h.s. ... " << flush;
-    b->Assemble();
-
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
     //    which satisfies the boundary conditions.
-    GridFunction x( fespace );
-    x = 0.0;
+    GridFunction x_gf( fespace );
+    GridFunction x_ref( fespace );
+    GridFunction x_def( fespace );
 
-    // 9. Set up the bilinear form a(.,.) on the finite element space
-    //    corresponding to the linear elasticity integrator with piece-wise
-    //    constants coefficient lambda and mu.
-    Vector lambda( mesh->attributes.Max() );
-    lambda = 1.0;
-    PWConstCoefficient lambda_func( lambda );
-    Vector mu( mesh->attributes.Max() );
-    mu = 1.0;
-    PWConstCoefficient mu_func( mu );
+    VectorFunctionCoefficient refconfig( dim, ReferenceConfiguration );
 
-    BilinearForm* a = new BilinearForm( fespace );
-    a->AddDomainIntegrator( new ElasticityIntegrator( lambda_func, mu_func ) );
+    x_gf.ProjectCoefficient( refconfig );
+    x_ref.ProjectCoefficient( refconfig );
 
-    // 10. Assemble the bilinear form and the corresponding linear system,
-    //     applying any necessary transformations such as: eliminating boundary
-    //     conditions, applying conforming constraints for non-conforming AMR,
-    //     static condensation, etc.
-    cout << "matrix ... " << flush;
-    if ( static_cond )
+    VectorArrayCoefficient f( dim );
+    for ( int i = 0; i < dim; i++ )
     {
-        a->EnableStaticCondensation();
+        f.Set( i, new ConstantCoefficient( 0.0 ) );
     }
-    a->Assemble();
 
-    SparseMatrix A;
-    Vector B, X;
-    a->FormLinearSystem( ess_tdof_list, x, *b, A, X, B );
-    cout << "done." << endl;
+    Vector Nu( mesh->attributes.Max() );
+    Nu = .0;
+    PWConstCoefficient nu_func( Nu );
 
-    cout << "Size of linear system: " << A.Height() << endl;
+    Vector E( mesh->attributes.Max() );
+    E = 1.2e6;
+    PWConstCoefficient E_func( E );
 
-    // 11. Define a simple symmetric Gauss-Seidel preconditioner and use it to
-    //     solve the system Ax=b with PCG.
-    GSSmoother M( A );
-    PCG( A, M, B, X, 1, 500, 1e-8, 0.0 );
+    IsotropicElasticMaterial iem( E_func, nu_func );
+    iem.setLargeDeformation();
 
-    // 12. Recover the solution as a finite element grid function.
-    a->RecoverFEMSolution( X, *b, x );
+    auto intg = new plugin::NonlinearElasticityIntegrator( iem );
+
+    NonlinearForm* nlf = new NonlinearForm( fespace );
+    // {
+    //     nlf->AddDomainIntegrator( new HyperelasticNLFIntegrator( new NeoHookeanModel( 1.5e6, 10e9 ) ) );
+    // }
+    nlf->AddDomainIntegrator( intg );
+    nlf->SetEssentialBC( ess_bdr );
+    // Vector r;
+    // r.SetSize(nlf->Height());
+    // nlf->Mult(x_gf, r);
+
+    GeneralResidualMonitor newton_monitor( "Newton", 1 );
+    GeneralResidualMonitor j_monitor( "GMRES", 3 );
+
+    // Set up the Jacobian solver
+    auto j_gmres = new UMFPackSolver();
+
+    auto newton_solver = new NewtonSolver();
+
+    // Set the newton solve parameters
+    newton_solver->iterative_mode = true;
+    newton_solver->SetSolver( *j_gmres );
+    newton_solver->SetOperator( *nlf );
+    newton_solver->SetPrintLevel( -1 );
+    newton_solver->SetMonitor( newton_monitor );
+    newton_solver->SetRelTol( 1e-7 );
+    newton_solver->SetAbsTol( 1e-8 );
+    newton_solver->SetMaxIter( 20 );
+
+    for ( int i = 1; i <= 10; i++ )
+    {
+        Vector pull_force( mesh->bdr_attributes.Max() );
+        pull_force = 0.0;
+        pull_force( 1 ) = .4 * i;
+        f.Set( 2, new PWConstCoefficient( pull_force ) );
+        nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
+        Vector zero;
+        newton_solver->Mult( zero, x_gf );
+    }
+    // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
+    subtract( x_gf, x_ref, x_def );
 
     // 15. Save data in the ParaView format
-    // Visualize the stress components.
-    const char* c = "xyz";
-    ParaViewDataCollection paraview_dc( "test1", mesh );
+    ParaViewDataCollection paraview_dc( "test", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );
     paraview_dc.SetDataFormat( VTKFormat::BINARY );
     paraview_dc.SetHighOrderOutput( true );
     paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x );
+    paraview_dc.RegisterField( "Displace", &x_def );
     paraview_dc.Save();
-
     if ( fec )
     {
         delete fespace;
         delete fec;
     }
+    delete newton_solver;
     delete mesh;
 
     return 0;

@@ -6,10 +6,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_FLAGS "-Wall")
 set(CMAKE_CXX_FLAGS_DEBUG "-g")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+set(CMAKE_FIND_DEBUG_MODE 1)
+find_package(mfem REQUIRED NAMES MFEM  HINTS /home/dimiao/repo/mfem/release)
 
-find_package(mfem REQUIRED NAMES MFEM)
-
-find_package (Eigen3 3.3 REQUIRED NO_MODULE)
+find_package (Eigen3 3.3 REQUIRED NO_MODULE HINTS /home/dimiao/repo/eigen-3.4.0/build)
 
 add_subdirectory(util)
 add_subdirectory(material)

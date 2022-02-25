@@ -62,6 +62,7 @@ int main( int argc, char* argv[] )
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
+    int refineLvl = 0;
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -70,6 +71,7 @@ int main( int argc, char* argv[] )
                     "Enable static condensation." );
     args.AddOption( &visualization, "-vis", "--visualization", "-no-vis", "--no-visualization",
                     "Enable or disable GLVis visualization." );
+    args.AddOption( &refineLvl, "-r", "--refine-level", "Finite element refine level." );
     args.Parse();
     if ( !args.Good() )
     {
@@ -83,7 +85,6 @@ int main( int argc, char* argv[] )
     Mesh* mesh = new Mesh( mesh_file, 1, 1 );
     int dim = mesh->Dimension();
 
-
     // 3. Select the order of the finite element discretization space. For NURBS
     //    meshes, we increase the order by degree elevation.
     if ( mesh->NURBSext )
@@ -95,13 +96,10 @@ int main( int argc, char* argv[] )
     //    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
     //    largest number that gives a final mesh with no more than 5,000
     //    elements.
-    // {
-    //     int ref_levels = (int)floor( log( 1000. / mesh->GetNE() ) / log( 2. ) / dim );
-    //     for ( int l = 0; l < ref_levels; l++ )
-    //     {
-    //         mesh->UniformRefinement();
-    //     }
-    // }
+    for ( int l = 0; l < refineLvl; l++ )
+    {
+        mesh->UniformRefinement();
+    }
 
     // 5. Define a finite element space on the mesh. Here we use vector finite
     //    elements, i.e. dim copies of a scalar finite element space. The vector
@@ -146,15 +144,9 @@ int main( int argc, char* argv[] )
     x_ref.ProjectCoefficient( refconfig );
 
     VectorArrayCoefficient f( dim );
-    for ( int i = 0; i < dim - 1; i++ )
+    for ( int i = 0; i < dim; i++ )
     {
         f.Set( i, new ConstantCoefficient( 0.0 ) );
-    }
-    {
-        Vector pull_force( mesh->bdr_attributes.Max() );
-        pull_force = 0.0;
-        pull_force( 1 ) = -1.0e8;
-        f.Set( 0, new PWConstCoefficient( pull_force ) );
     }
 
     Vector Nu( mesh->attributes.Max() );
@@ -175,7 +167,6 @@ int main( int argc, char* argv[] )
     //     nlf->AddDomainIntegrator( new HyperelasticNLFIntegrator( new NeoHookeanModel( 1.5e6, 10e9 ) ) );
     // }
     nlf->AddDomainIntegrator( intg );
-    nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
     nlf->SetEssentialBC( ess_bdr );
     // Vector r;
     // r.SetSize(nlf->Height());
@@ -184,44 +175,51 @@ int main( int argc, char* argv[] )
     GeneralResidualMonitor newton_monitor( "Newton", 1 );
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
 
-    // // Set up the Jacobian solver
-    // auto j_gmres = new UMFPackSolver();
+    // Set up the Jacobian solver
+    auto j_gmres = new UMFPackSolver();
 
-    // auto newton_solver = new NewtonSolver();
+    auto newton_solver = new NewtonSolver();
 
-    // // Set the newton solve parameters
-    // newton_solver->iterative_mode = true;
-    // newton_solver->SetSolver( *j_gmres );
-    // newton_solver->SetOperator( *nlf );
-    // newton_solver->SetPrintLevel( -1 );
-    // newton_solver->SetMonitor( newton_monitor );
-    // newton_solver->SetRelTol( 1e-7 );
-    // newton_solver->SetAbsTol( 1e-9 );
-    // newton_solver->SetMaxIter( 10 );
+    // Set the newton solve parameters
+    newton_solver->iterative_mode = true;
+    newton_solver->SetSolver( *j_gmres );
+    newton_solver->SetOperator( *nlf );
+    newton_solver->SetPrintLevel( -1 );
+    newton_solver->SetMonitor( newton_monitor );
+    newton_solver->SetRelTol( 1e-7 );
+    newton_solver->SetAbsTol( 1e-9 );
+    newton_solver->SetMaxIter( 10 );
 
-    // Vector zero;
-    // newton_solver->Mult( zero, x_gf );
+    for ( int i = 1; i <= 6; i++ )
+    {
+        Vector pull_force( mesh->bdr_attributes.Max() );
+        pull_force = 0.0;
+        pull_force( 1 ) = 1.0e5 * i;
+        f.Set( 2, new PWConstCoefficient( pull_force ) );
+        nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
+        Vector zero;
+        newton_solver->Mult( zero, x_gf );
+    }
+    // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
+    subtract( x_gf, x_ref, x_def );
 
-    // // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
-    // subtract( x_gf, x_ref, x_def );
-
-    // // 15. Save data in the ParaView format
-    // ParaViewDataCollection paraview_dc( "test", mesh );
-    // paraview_dc.SetPrefixPath( "ParaView" );
-    // paraview_dc.SetLevelsOfDetail( order );
-    // paraview_dc.SetCycle( 0 );
-    // paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    // paraview_dc.SetHighOrderOutput( true );
-    // paraview_dc.SetTime( 0.0 ); // set the time
-    // paraview_dc.RegisterField( "Displace", &x_def );
-    // paraview_dc.Save();
-    // if ( fec )
-    // {
-    //     delete fespace;
-    //     delete fec;
-    // }
-    // delete newton_solver;
-    // delete mesh;
+    // 15. Save data in the ParaView format
+    ParaViewDataCollection paraview_dc( "test", mesh );
+    paraview_dc.SetPrefixPath( "ParaView" );
+    paraview_dc.SetLevelsOfDetail( order );
+    paraview_dc.SetCycle( 0 );
+    paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    paraview_dc.SetHighOrderOutput( true );
+    paraview_dc.SetTime( 0.0 ); // set the time
+    paraview_dc.RegisterField( "Displace", &x_def );
+    paraview_dc.Save();
+    if ( fec )
+    {
+        delete fespace;
+        delete fec;
+    }
+    delete newton_solver;
+    delete mesh;
 
     return 0;
 }

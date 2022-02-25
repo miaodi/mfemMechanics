@@ -349,7 +349,8 @@ void NonlinearVectorBoundaryLFIntegrator::AssembleFaceVector( const mfem::Finite
         {
             for ( int s = 0; s < dof; s++ )
             {
-                elvect( dof * k + s ) += vec( k ) * shape( s );
+                // move r.h.s to l.h.s, hence minus
+                elvect( dof * k + s ) -= vec( k ) * shape( s );
             }
         }
     }
