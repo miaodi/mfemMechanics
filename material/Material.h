@@ -1,12 +1,17 @@
 #pragma once
 #include "mfem.hpp"
 #include <Eigen/Dense>
+#include "typeDef.h"
 
 namespace util
 {
-Eigen::Vector<double, 6> Voigt( const Eigen::Matrix3d& tensor, const bool isStrain );
+Eigen::Vector6d Voigt( const Eigen::Matrix3d& tensor, const bool isStrain );
 
-Eigen::Matrix3d InverseVoigt( const Eigen::Vector<double, 6>& vector, const bool isStrain );
+Eigen::Matrix3d InverseVoigt( const Eigen::Vector6d& vector, const bool isStrain );
+
+short Voigt( const short i, const short pos );
+
+void symmetricIdentityTensor( Eigen::Matrix6d& tensor );
 
 } // namespace util
 
@@ -17,7 +22,7 @@ public:
 
     Eigen::Matrix3d getGreenLagrangeStrainTensor() const;
 
-    Eigen::Vector<double, 6> getGreenLagrangeStrainVector() const;
+    Eigen::Vector6d getGreenLagrangeStrainVector() const;
 
     bool isSamllDeformation() const
     {
@@ -26,22 +31,22 @@ public:
 
     Eigen::Matrix3d getPK2StressTensor() const;
 
-    Eigen::Vector<double, 6> getPK2StressVector() const;
+    Eigen::Vector6d getPK2StressVector() const;
 
     Eigen::Matrix3d getCauchyStressTensor() const;
 
-    Eigen::Vector<double, 6> getCauchyStressVector() const;
+    Eigen::Vector6d getCauchyStressVector() const;
 
     virtual void updateRefModuli() = 0;
 
     virtual void updateCurModuli() = 0;
 
-    const Eigen::Matrix<double, 6, 6>& getRefModuli() const
+    const Eigen::Matrix6d& getRefModuli() const
     {
         return mRefModuli;
     }
 
-    const Eigen::Matrix<double, 6, 6>& getCurModuli() const
+    const Eigen::Matrix6d& getCurModuli() const
     {
         return mCurModuli;
     }
@@ -64,10 +69,10 @@ public:
 
 protected:
     // moduli in reference configuration
-    Eigen::Matrix<double, 6, 6> mRefModuli;
+    Eigen::Matrix6d mRefModuli;
 
     // moduli in current configuration
-    Eigen::Matrix<double, 6, 6> mCurModuli;
+    Eigen::Matrix6d mCurModuli;
     const Eigen::Matrix3d* mdxdX{ nullptr };
     bool mSmallDeformation{ true };
 
@@ -101,4 +106,10 @@ public:
 protected:
     mfem::Coefficient* mE{ nullptr };
     mfem::Coefficient* mNu{ nullptr };
+};
+
+class NeoHookeanMaterial : public ElasticMaterial
+{
+public:
+protected:
 };

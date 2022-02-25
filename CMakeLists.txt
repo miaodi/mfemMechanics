@@ -11,6 +11,7 @@ find_package(mfem REQUIRED NAMES MFEM)
 
 find_package (Eigen3 3.3 REQUIRED NO_MODULE)
 
+add_subdirectory(util)
 add_subdirectory(material)
 add_subdirectory(fem)
 
@@ -33,3 +34,7 @@ target_link_libraries(ex16 PRIVATE ${MFEM_LIBRARIES} matlib femplugin)
 add_executable(ex2 ex2.cpp)
 target_include_directories(ex2 PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})
 target_link_libraries(ex2 PRIVATE ${MFEM_LIBRARIES} matlib femplugin)
+
+add_executable(beam beam.cpp)
+target_include_directories(beam PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})
+target_link_libraries(beam PRIVATE ${MFEM_LIBRARIES} matlib femplugin)

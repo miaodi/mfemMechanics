@@ -2,21 +2,23 @@
 
 namespace util
 {
-Eigen::Vector<double, 6> Voigt( const Eigen::Matrix3d& tensor, const bool isStrain )
+Eigen::Vector6d Voigt( const Eigen::Matrix3d& tensor, const bool isStrain )
 {
     if ( isStrain )
     {
-        return Eigen::Vector<double, 6>{ { tensor( 0, 0 ), tensor( 1, 1 ), tensor( 2, 2 ), 2 * tensor( 0, 1 ),
-                                           2 * tensor( 1, 2 ), 2 * tensor( 0, 2 ) } };
+        return Eigen::Vector6d{ { tensor( Voigt( 0, 0 ), Voigt( 0, 1 ) ), tensor( Voigt( 1, 0 ), Voigt( 1, 1 ) ),
+                                  tensor( Voigt( 2, 0 ), Voigt( 2, 1 ) ), 2 * tensor( Voigt( 3, 0 ), Voigt( 3, 1 ) ),
+                                  2 * tensor( Voigt( 4, 0 ), Voigt( 4, 1 ) ), 2 * tensor( Voigt( 5, 0 ), Voigt( 5, 1 ) ) } };
     }
     else
     {
-        return Eigen::Vector<double, 6>{
-            { tensor( 0, 0 ), tensor( 1, 1 ), tensor( 2, 2 ), tensor( 0, 1 ), tensor( 1, 2 ), tensor( 0, 2 ) } };
+        return Eigen::Vector6d{ { tensor( Voigt( 0, 0 ), Voigt( 0, 1 ) ), tensor( Voigt( 1, 0 ), Voigt( 1, 1 ) ),
+                                  tensor( Voigt( 2, 0 ), Voigt( 2, 1 ) ), tensor( Voigt( 3, 0 ), Voigt( 3, 1 ) ),
+                                  tensor( Voigt( 4, 0 ), Voigt( 4, 1 ) ), tensor( Voigt( 5, 0 ), Voigt( 5, 1 ) ) } };
     }
 }
 
-Eigen::Matrix3d InverseVoigt( const Eigen::Vector<double, 6>& vector, const bool isStrain )
+Eigen::Matrix3d InverseVoigt( const Eigen::Vector6d& vector, const bool isStrain )
 {
     if ( isStrain )
     {
@@ -30,6 +32,30 @@ Eigen::Matrix3d InverseVoigt( const Eigen::Vector<double, 6>& vector, const bool
                                 { vector( 3 ), vector( 1 ), vector( 4 ) },
                                 { vector( 5 ), vector( 4 ), vector( 2 ) } };
     }
+}
+
+short Voigt( const short i, const short pos )
+{
+    bool even = pos % 2;
+    switch ( i )
+    {
+    case 0:
+        return 0;
+    case 1:
+        return 1;
+    case 2:
+        return 2;
+    case 3:
+        return even ? 0 : 1;
+    case 4:
+        return even ? 1 : 2;
+    case 5:
+        return even ? 0 : 2;
+    }
+}
+
+void symmetricIdentityTensor( Eigen::Matrix6d& tensor )
+{
 }
 
 } // namespace util
@@ -51,12 +77,12 @@ Eigen::Matrix3d ElasticMaterial::getGreenLagrangeStrainTensor() const
     }
 }
 
-Eigen::Vector<double, 6> ElasticMaterial::getGreenLagrangeStrainVector() const
+Eigen::Vector6d ElasticMaterial::getGreenLagrangeStrainVector() const
 {
     return util::Voigt( getGreenLagrangeStrainTensor(), true );
 }
 
-Eigen::Vector<double, 6> ElasticMaterial::getPK2StressVector() const
+Eigen::Vector6d ElasticMaterial::getPK2StressVector() const
 {
     return getRefModuli() * getGreenLagrangeStrainVector();
 }
@@ -71,7 +97,7 @@ Eigen::Matrix3d ElasticMaterial::getCauchyStressTensor() const
     return 1. / mdxdX->determinant() * ( *mdxdX * getPK2StressTensor() * mdxdX->transpose() );
 }
 
-Eigen::Vector<double, 6> ElasticMaterial::getCauchyStressVector() const
+Eigen::Vector6d ElasticMaterial::getCauchyStressVector() const
 {
     return util::Voigt( getCauchyStressTensor(), false );
 }
