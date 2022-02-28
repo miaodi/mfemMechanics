@@ -343,6 +343,7 @@ void NonlinearVectorBoundaryLFIntegrator::AssembleFaceVector( const mfem::Finite
 
         // Use Tr transformation in case Q depends on boundary attribute
         Q.Eval( vec, Tr, ip );
+        // vec.Print();
         vec *= Tr.Weight() * ip.weight;
         el1.CalcShape( eip, shape );
         for ( int k = 0; k < vdim; k++ )

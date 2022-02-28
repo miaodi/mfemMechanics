@@ -51,11 +51,29 @@ short Voigt( const short i, const short pos )
         return even ? 1 : 2;
     case 5:
         return even ? 0 : 2;
+    default:
+        // TODO: add warning
+        return -1;
     }
 }
 
-void symmetricIdentityTensor( Eigen::Matrix6d& tensor )
+void symmetricIdentityTensor( const Eigen::Matrix3d& C, Eigen::Matrix6d& CC )
 {
+    CC.setZero();
+
+    for ( short i = 0; i < 6; ++i )
+        for ( short j = 0; j < 6; ++j )
+            CC( i, j ) = .5 * ( C( Voigt( i, 0 ), Voigt( j, 2 ) ) * C( Voigt( i, 1 ), Voigt( j, 3 ) ) +
+                                C( Voigt( i, 0 ), Voigt( j, 3 ) ) * C( Voigt( i, 1 ), Voigt( j, 2 ) ) );
+}
+
+void tensorProduct( const Eigen::Matrix3d& A, const Eigen::Matrix3d& B, Eigen::Matrix6d& CC )
+{
+    CC.setZero();
+
+    for ( short i = 0; i < 6; ++i )
+        for ( short j = 0; j < 6; ++j )
+            CC( i, j ) = A( Voigt( i, 0 ), Voigt( i, 1 ) ) * B( Voigt( j, 2 ), Voigt( j, 3 ) );
 }
 
 } // namespace util
@@ -82,14 +100,14 @@ Eigen::Vector6d ElasticMaterial::getGreenLagrangeStrainVector() const
     return util::Voigt( getGreenLagrangeStrainTensor(), true );
 }
 
-Eigen::Vector6d ElasticMaterial::getPK2StressVector() const
-{
-    return getRefModuli() * getGreenLagrangeStrainVector();
-}
-
 Eigen::Matrix3d ElasticMaterial::getPK2StressTensor() const
 {
     return util::InverseVoigt( getPK2StressVector(), false );
+}
+
+Eigen::Vector6d ElasticMaterial::getPK2StressVector() const
+{
+    return util::Voigt( getPK2StressTensor(), false );
 }
 
 Eigen::Matrix3d ElasticMaterial::getCauchyStressTensor() const
@@ -102,34 +120,7 @@ Eigen::Vector6d ElasticMaterial::getCauchyStressVector() const
     return util::Voigt( getCauchyStressTensor(), false );
 }
 
-void IsotropicElasticMaterial::updateRefModuli()
-{
-    const double Nu = this->Nu();
-    const double E = this->E();
-
-    const double mu = E / ( 2. * ( 1. + Nu ) );
-    const double lambda = ( Nu * E ) / ( ( 1 + Nu ) * ( 1. - 2. * Nu ) );
-    const double dilatation = lambda + 2. * mu;
-
-    mRefModuli.setZero();
-
-    mRefModuli( 0, 0 ) = dilatation;
-    mRefModuli( 1, 1 ) = dilatation;
-    mRefModuli( 2, 2 ) = dilatation;
-
-    mRefModuli( 0, 1 ) = lambda;
-    mRefModuli( 0, 2 ) = lambda;
-    mRefModuli( 1, 0 ) = lambda;
-    mRefModuli( 1, 2 ) = lambda;
-    mRefModuli( 2, 0 ) = lambda;
-    mRefModuli( 2, 1 ) = lambda;
-
-    mRefModuli( 3, 3 ) = mu;
-    mRefModuli( 4, 4 ) = mu;
-    mRefModuli( 5, 5 ) = mu;
-}
-
-void IsotropicElasticMaterial::updateCurModuli()
+void ElasticMaterial::updateCurModuli()
 {
     const Eigen::Matrix3d& F = *mdxdX;
     static const Eigen::Matrix<int, 3, 3> indexMap{ { 0, 3, 5 }, { 3, 1, 4 }, { 5, 4, 2 } };
@@ -159,4 +150,36 @@ void IsotropicElasticMaterial::updateCurModuli()
             mCurModuli( i, j ) = 1. / determinant * term;
         }
     }
+}
+
+void IsotropicElasticMaterial::updateRefModuli()
+{
+    const double Nu = this->Nu();
+    const double E = this->E();
+
+    const double mu = E / ( 2. * ( 1. + Nu ) );
+    const double lambda = ( Nu * E ) / ( ( 1 + Nu ) * ( 1. - 2. * Nu ) );
+    const double dilatation = lambda + 2. * mu;
+
+    mRefModuli.setZero();
+
+    mRefModuli( 0, 0 ) = dilatation;
+    mRefModuli( 1, 1 ) = dilatation;
+    mRefModuli( 2, 2 ) = dilatation;
+
+    mRefModuli( 0, 1 ) = lambda;
+    mRefModuli( 0, 2 ) = lambda;
+    mRefModuli( 1, 0 ) = lambda;
+    mRefModuli( 1, 2 ) = lambda;
+    mRefModuli( 2, 0 ) = lambda;
+    mRefModuli( 2, 1 ) = lambda;
+
+    mRefModuli( 3, 3 ) = mu;
+    mRefModuli( 4, 4 ) = mu;
+    mRefModuli( 5, 5 ) = mu;
+}
+
+Eigen::Vector6d IsotropicElasticMaterial::getPK2StressVector() const
+{
+    return getRefModuli() * getGreenLagrangeStrainVector();
 }

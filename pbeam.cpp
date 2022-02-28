@@ -12,9 +12,22 @@ using namespace mfem;
 class GeneralResidualMonitor : public IterativeSolverMonitor
 {
 public:
-    GeneralResidualMonitor( const std::string& prefix_, int print_lvl ) : prefix( prefix_ )
+    GeneralResidualMonitor( MPI_Comm comm, const std::string& prefix_, int print_lvl ) : prefix( prefix_ )
     {
+#ifndef MFEM_USE_MPI
         print_level = print_lvl;
+#else
+        int rank;
+        MPI_Comm_rank( comm, &rank );
+        if ( rank == 0 )
+        {
+            print_level = print_lvl;
+        }
+        else
+        {
+            print_level = -1;
+        }
+#endif
     }
 
     virtual void MonitorResidual( int it, double norm, const Vector& r, bool final );
@@ -50,12 +63,19 @@ void ReferenceConfiguration( const Vector& x, Vector& y )
 
 int main( int argc, char* argv[] )
 {
+    // 1. Initialize MPI.
+    int num_procs, myid;
+    MPI_Init( &argc, &argv );
+    MPI_Comm_size( MPI_COMM_WORLD, &num_procs );
+    MPI_Comm_rank( MPI_COMM_WORLD, &myid );
+
     // 1. Parse command-line options.
     const char* mesh_file = "../beam.mesh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
-    int refineLvl = 0;
+    int ser_ref_levels = -1, par_ref_levels = 1;
+    const char* petscrc_file = "";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -64,57 +84,62 @@ int main( int argc, char* argv[] )
                     "Enable static condensation." );
     args.AddOption( &visualization, "-vis", "--visualization", "-no-vis", "--no-visualization",
                     "Enable or disable GLVis visualization." );
-    args.AddOption( &refineLvl, "-r", "--refine-level", "Finite element refine level." );
+    args.AddOption( &ser_ref_levels, "-rs", "--refine-serial",
+                    "Number of times to refine the mesh uniformly in serial." );
+    args.AddOption( &par_ref_levels, "-rp", "--refine-parallel",
+                    "Number of times to refine the mesh uniformly in parallel." );
+    args.AddOption( &petscrc_file, "-petscopts", "--petscopts", "PetscOptions file to use." );
     args.Parse();
     if ( !args.Good() )
     {
-        args.PrintUsage( cout );
+        if ( myid == 0 )
+        {
+            args.PrintUsage( cout );
+        }
+        MPI_Finalize();
         return 1;
     }
-    args.PrintOptions( cout );
+    if ( myid == 0 )
+    {
+        args.PrintOptions( cout );
+    }
+
+    MFEMInitializePetsc( NULL, NULL, petscrc_file, NULL );
 
     // 2. Read the mesh from the given mesh file. We can handle triangular,
     //    quadrilateral, tetrahedral or hexahedral elements with the same code.
     Mesh* mesh = new Mesh( mesh_file, 1, 1 );
     int dim = mesh->Dimension();
 
-    for ( int k = 0; k < 7; k++ )
+    if ( mesh->bdr_attributes.Max() < 2 )
     {
-        int ne = mesh->GetNE();
-        Array<Refinement> refinements;
-        for ( int i = 0; i < ne; i++ )
-        {
-            refinements.Append( Refinement( i, 1 ) );
-        }
-        mesh->GeneralRefinement( refinements );
-    }
-    for ( int k = 0; k < 3; k++ )
-    {
-        int ne = mesh->GetNE();
-        Array<Refinement> refinements;
-        for ( int i = 0; i < ne; i++ )
-        {
-            refinements.Append( Refinement( i, 2 ) );
-        }
-        mesh->GeneralRefinement( refinements );
+        if ( myid == 0 )
+            cerr << "\nInput mesh should have at least "
+                 << "two boundary attributes! (See schematic in ex2.cpp)\n"
+                 << endl;
+        MPI_Finalize();
+        return 3;
     }
 
-    // for ( int i = 0; i < 2; i++ )
-    // {
-    //     mesh->UniformRefinement();
-    // }
-
-    // // 4. Refine the mesh to increase the resolution. In this example we do
-    // //    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
-    // //    largest number that gives a final mesh with no more than 5,000
-    // //    elements.
     {
-        for ( int l = 0; l < refineLvl; l++ )
+        int ref_levels = ser_ref_levels >= 0 ? ser_ref_levels : (int)floor( log( 1000. / mesh->GetNE() ) / log( 2. ) / dim );
+        for ( int l = 0; l < ref_levels; l++ )
         {
             mesh->UniformRefinement();
         }
     }
-    // mesh->UniformRefinement();
+
+    // 6. Define a parallel mesh by a partitioning of the serial mesh. Refine
+    //    this mesh further in parallel to increase the resolution. Once the
+    //    parallel mesh is defined, the serial mesh can be deleted.
+    ParMesh* pmesh = new ParMesh( MPI_COMM_WORLD, *mesh );
+    delete mesh;
+    {
+        for ( int l = 0; l < par_ref_levels; l++ )
+        {
+            pmesh->UniformRefinement();
+        }
+    }
 
     // 5. Define a finite element space on the mesh. Here we use vector finite
     //    elements, i.e. dim copies of a scalar finite element space. The vector
@@ -122,24 +147,20 @@ int main( int argc, char* argv[] )
     //    constructor. For NURBS meshes, we use the (degree elevated) NURBS space
     //    associated with the mesh nodes.
     FiniteElementCollection* fec;
-    FiniteElementSpace* fespace;
-    if ( mesh->NURBSext )
+    ParFiniteElementSpace* fespace;
+    fec = new H1_FECollection( order, dim );
+    fespace = new ParFiniteElementSpace( pmesh, fec, dim, Ordering::byVDIM );
+    HYPRE_BigInt size = fespace->GlobalTrueVSize();
+    if ( myid == 0 )
     {
-        fec = NULL;
-        fespace = mesh->GetNodes()->FESpace();
+        cout << "Number of finite element unknowns: " << size << endl << "Assembling: " << flush;
     }
-    else
-    {
-        fec = new H1_FECollection( order, dim );
-        fespace = new FiniteElementSpace( mesh, fec, dim, Ordering::byVDIM );
-    }
-    cout << "Number of finite element unknowns: " << fespace->GetTrueVSize() << endl << "Assembling: " << flush;
 
     // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
     //    In this example, the boundary conditions are defined by marking only
     //    boundary attribute 1 from the mesh as essential and converting it to a
     //    list of true dofs.
-    Array<int> ess_tdof_list, ess_bdr( mesh->bdr_attributes.Max() );
+    Array<int> ess_tdof_list, ess_bdr( pmesh->bdr_attributes.Max() );
     ess_bdr = 0;
     ess_bdr[0] = 1;
     fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
@@ -147,9 +168,9 @@ int main( int argc, char* argv[] )
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
     //    which satisfies the boundary conditions.
-    GridFunction x_gf( fespace );
-    GridFunction x_ref( fespace );
-    GridFunction x_def( fespace );
+    ParGridFunction x_gf( fespace );
+    ParGridFunction x_ref( fespace );
+    ParGridFunction x_def( fespace );
 
     VectorFunctionCoefficient refconfig( dim, ReferenceConfiguration );
 
@@ -162,11 +183,11 @@ int main( int argc, char* argv[] )
         f.Set( i, new ConstantCoefficient( 0.0 ) );
     }
 
-    Vector Nu( mesh->attributes.Max() );
+    Vector Nu( pmesh->attributes.Max() );
     Nu = .0;
     PWConstCoefficient nu_func( Nu );
 
-    Vector E( mesh->attributes.Max() );
+    Vector E( pmesh->attributes.Max() );
     E = 1.2e6;
     PWConstCoefficient E_func( E );
 
@@ -175,27 +196,21 @@ int main( int argc, char* argv[] )
 
     auto intg = new plugin::NonlinearElasticityIntegrator( iem );
 
-    NonlinearForm* nlf = new NonlinearForm( fespace );
-    // {
-    //     nlf->AddDomainIntegrator( new HyperelasticNLFIntegrator( new NeoHookeanModel( 1.5e6, 10e9 ) ) );
-    // }
+    auto* nlf = new ParNonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
     nlf->SetEssentialBC( ess_bdr );
-    // Vector r;
-    // r.SetSize(nlf->Height());
-    // nlf->Mult(x_gf, r);
 
-    GeneralResidualMonitor newton_monitor( "Newton", 1 );
-    GeneralResidualMonitor j_monitor( "GMRES", 3 );
+    GeneralResidualMonitor newton_monitor( fespace->GetComm(), "Newton", 1 );
+    GeneralResidualMonitor j_monitor( fespace->GetComm(), "GMRES", 3 );
 
     // Set up the Jacobian solver
-    auto j_gmres = new UMFPackSolver();
+    PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
 
-    auto newton_solver = new NewtonSolver();
+    auto newton_solver = new NewtonSolver( fespace->GetComm() );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
-    newton_solver->SetSolver( *j_gmres );
+    newton_solver->SetSolver( *petsc );
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
@@ -204,20 +219,23 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxIter( 20 );
 
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
-    for ( int i = 1; i <= 10; i++ )
+    Vector X( fespace->GetTrueVSize() );
+    x_gf.ParallelProject( X );
+    for ( int i = 1; i <= 1; i++ )
     {
-        Vector pull_force( mesh->bdr_attributes.Max() );
+        Vector pull_force( pmesh->bdr_attributes.Max() );
         pull_force = 0.0;
-        pull_force( 1 ) = 4 * i;
+        // pull_force( 1 ) = 4 * i;
         f.Set( 2, new PWConstCoefficient( pull_force ) );
         Vector zero;
-        newton_solver->Mult( zero, x_gf );
+        newton_solver->Mult( zero, X );
     }
+    x_gf.Distribute( X );
     // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
     subtract( x_gf, x_ref, x_def );
 
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "test", mesh );
+    ParaViewDataCollection paraview_dc( "test", pmesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );
@@ -232,7 +250,10 @@ int main( int argc, char* argv[] )
         delete fec;
     }
     delete newton_solver;
-    delete mesh;
+    delete pmesh;
 
+    MFEMFinalizePetsc();
+
+    MPI_Finalize();
     return 0;
 }

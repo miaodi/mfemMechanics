@@ -7,9 +7,13 @@ set(CMAKE_CXX_FLAGS "-Wall")
 set(CMAKE_CXX_FLAGS_DEBUG "-g")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 set(CMAKE_FIND_DEBUG_MODE 1)
-find_package(mfem REQUIRED NAMES MFEM  HINTS /home/dimiao/repo/mfem/release)
 
-find_package (Eigen3 3.3 REQUIRED NO_MODULE HINTS /home/dimiao/repo/eigen-3.4.0/build)
+find_package(MPI REQUIRED)
+
+find_package(mfem REQUIRED NAMES MFEM  HINTS ${CMAKE_SOURCE_DIR}/../mfem/release)
+
+find_package (Eigen3 3.4 REQUIRED NO_MODULE HINTS ${CMAKE_SOURCE_DIR}/../eigen/build)
+
 
 add_subdirectory(util)
 add_subdirectory(material)
@@ -35,6 +39,14 @@ add_executable(ex2 ex2.cpp)
 target_include_directories(ex2 PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})
 target_link_libraries(ex2 PRIVATE ${MFEM_LIBRARIES} matlib femplugin)
 
+add_executable(ex2p ex2p.cpp)
+target_include_directories(ex2p PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})
+target_link_libraries(ex2p PRIVATE ${MFEM_LIBRARIES} matlib femplugin)
+
 add_executable(beam beam.cpp)
 target_include_directories(beam PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})
 target_link_libraries(beam PRIVATE ${MFEM_LIBRARIES} matlib femplugin)
+
+add_executable(pbeam pbeam.cpp)
+target_include_directories(pbeam PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})
+target_link_libraries(pbeam PRIVATE ${MFEM_LIBRARIES} matlib femplugin)

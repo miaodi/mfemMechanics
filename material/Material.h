@@ -1,7 +1,7 @@
 #pragma once
 #include "mfem.hpp"
-#include <Eigen/Dense>
 #include "typeDef.h"
+#include <Eigen/Dense>
 
 namespace util
 {
@@ -13,6 +13,7 @@ short Voigt( const short i, const short pos );
 
 void symmetricIdentityTensor( Eigen::Matrix6d& tensor );
 
+void tensorProduct( const Eigen::Matrix3d& A, const Eigen::Matrix3d& B, Eigen::Matrix6d& CC );
 } // namespace util
 
 class ElasticMaterial
@@ -29,9 +30,9 @@ public:
         return mSmallDeformation;
     }
 
-    Eigen::Matrix3d getPK2StressTensor() const;
+    virtual Eigen::Matrix3d getPK2StressTensor() const;
 
-    Eigen::Vector6d getPK2StressVector() const;
+    virtual Eigen::Vector6d getPK2StressVector() const;
 
     Eigen::Matrix3d getCauchyStressTensor() const;
 
@@ -39,7 +40,7 @@ public:
 
     virtual void updateRefModuli() = 0;
 
-    virtual void updateCurModuli() = 0;
+    void updateCurModuli();
 
     const Eigen::Matrix6d& getRefModuli() const
     {
@@ -101,15 +102,9 @@ public:
 
     void updateRefModuli() override;
 
-    void updateCurModuli() override;
+    virtual Eigen::Vector6d getPK2StressVector() const;
 
 protected:
     mfem::Coefficient* mE{ nullptr };
     mfem::Coefficient* mNu{ nullptr };
-};
-
-class NeoHookeanMaterial : public ElasticMaterial
-{
-public:
-protected:
 };
