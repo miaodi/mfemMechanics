@@ -1,6 +1,7 @@
 
 #include "FEMPlugin.h"
 #include "Material.h"
+#include "NeoHookeanMaterial.h"
 #include "mfem.hpp"
 #include <fstream>
 #include <iostream>
@@ -149,18 +150,35 @@ int main( int argc, char* argv[] )
         f.Set( i, new ConstantCoefficient( 0.0 ) );
     }
 
-    Vector Nu( mesh->attributes.Max() );
-    Nu = .3;
-    PWConstCoefficient nu_func( Nu );
+    // Vector Nu( mesh->attributes.Max() );
+    // Nu = .3;
+    // PWConstCoefficient nu_func( Nu );
 
-    Vector E( mesh->attributes.Max() );
-    E = 2.5e8;
-    PWConstCoefficient E_func( E );
+    // Vector E( mesh->attributes.Max() );
+    // E = 2.5e6;
+    // PWConstCoefficient E_func( E );
 
-    IsotropicElasticMaterial iem( E_func, nu_func );
-    iem.setLargeDeformation();
+    // IsotropicElasticMaterial iem( E_func, nu_func );
+    // iem.setLargeDeformation();
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( iem );
+    double E = 2.5e6;
+
+    double nu = .3;
+
+    Vector Mu( mesh->attributes.Max() );
+    // Mu = 1.61148e6;
+    Mu = E / 2 / ( 1 + nu );
+
+    PWConstCoefficient mu_func( Mu );
+
+    Vector Lambda( mesh->attributes.Max() );
+    // Lambda = 499.92568e6;
+    Lambda = E * nu / ( 1 + nu ) / ( 1 - 2 * nu );
+    PWConstCoefficient lambda_func( Lambda );
+
+    NeoHookeanMaterial nh( mu_func, lambda_func );
+
+    auto intg = new plugin::NonlinearElasticityIntegrator( nh );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     // {
@@ -190,13 +208,13 @@ int main( int argc, char* argv[] )
     newton_solver->SetAbsTol( 1e-9 );
     newton_solver->SetMaxIter( 10 );
 
-    for ( int i = 1; i <= 6; i++ )
+    nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
+    for ( int i = 1; i <= 5; i++ )
     {
         Vector pull_force( mesh->bdr_attributes.Max() );
         pull_force = 0.0;
         pull_force( 1 ) = 1.0e5 * i;
-        f.Set( 2, new PWConstCoefficient( pull_force ) );
-        nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
+        f.Set( 0, new PWConstCoefficient( pull_force ) );
         Vector zero;
         newton_solver->Mult( zero, x_gf );
     }

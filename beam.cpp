@@ -1,6 +1,7 @@
 
 #include "FEMPlugin.h"
 #include "Material.h"
+#include "NeoHookeanMaterial.h"
 #include "PostProc.h"
 #include "mfem.hpp"
 #include <fstream>
@@ -162,18 +163,34 @@ int main( int argc, char* argv[] )
         f.Set( i, new ConstantCoefficient( 0.0 ) );
     }
 
-    Vector Nu( mesh->attributes.Max() );
-    Nu = .0;
-    PWConstCoefficient nu_func( Nu );
+    // Vector Nu( mesh->attributes.Max() );
+    // Nu = .0;
+    // PWConstCoefficient nu_func( Nu );
 
-    Vector E( mesh->attributes.Max() );
-    E = 1.2e6;
-    PWConstCoefficient E_func( E );
+    // Vector E( mesh->attributes.Max() );
+    // E = 1.2e6;
+    // PWConstCoefficient E_func( E );
 
-    IsotropicElasticMaterial iem( E_func, nu_func );
-    iem.setLargeDeformation();
+    // IsotropicElasticMaterial iem( E_func, nu_func );
+    // iem.setLargeDeformation();
+    double E = 1.2e6;
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( iem );
+    double nu = 0;
+
+    Vector Mu( mesh->attributes.Max() );
+    // Mu = 1.61148e6;
+    Mu = E / 2 / ( 1 + nu );
+
+    PWConstCoefficient mu_func( Mu );
+
+    Vector Lambda( mesh->attributes.Max() );
+    // Lambda = 499.92568e6;
+    Lambda = E * nu / ( 1 + nu ) / ( 1 - 2 * nu );
+    PWConstCoefficient lambda_func( Lambda );
+
+    NeoHookeanMaterial nh( mu_func, lambda_func, NeoHookeanType::Ln );
+
+    auto intg = new plugin::NonlinearElasticityIntegrator( nh );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     // {

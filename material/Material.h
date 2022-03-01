@@ -11,7 +11,7 @@ Eigen::Matrix3d InverseVoigt( const Eigen::Vector6d& vector, const bool isStrain
 
 short Voigt( const short i, const short pos );
 
-void symmetricIdentityTensor( Eigen::Matrix6d& tensor );
+void symmetricIdentityTensor( const Eigen::Matrix3d& C, Eigen::Matrix6d& CC );
 
 void tensorProduct( const Eigen::Matrix3d& A, const Eigen::Matrix3d& B, Eigen::Matrix6d& CC );
 } // namespace util
