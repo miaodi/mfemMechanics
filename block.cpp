@@ -52,7 +52,7 @@ void ReferenceConfiguration( const Vector& x, Vector& y )
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "../beam.mesh";
+    const char* mesh_file = "../block.mesh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -78,32 +78,6 @@ int main( int argc, char* argv[] )
     //    quadrilateral, tetrahedral or hexahedral elements with the same code.
     Mesh* mesh = new Mesh( mesh_file, 1, 1 );
     int dim = mesh->Dimension();
-
-    for ( int k = 0; k < 7; k++ )
-    {
-        int ne = mesh->GetNE();
-        Array<Refinement> refinements;
-        for ( int i = 0; i < ne; i++ )
-        {
-            refinements.Append( Refinement( i, 1 ) );
-        }
-        mesh->GeneralRefinement( refinements );
-    }
-    for ( int k = 0; k < 3; k++ )
-    {
-        int ne = mesh->GetNE();
-        Array<Refinement> refinements;
-        for ( int i = 0; i < ne; i++ )
-        {
-            refinements.Append( Refinement( i, 2 ) );
-        }
-        mesh->GeneralRefinement( refinements );
-    }
-
-    // for ( int i = 0; i < 2; i++ )
-    // {
-    //     mesh->UniformRefinement();
-    // }
 
     // // 4. Refine the mesh to increase the resolution. In this example we do
     // //    'ref_levels' of uniform refinement. We choose 'ref_levels' to be the
@@ -140,10 +114,41 @@ int main( int argc, char* argv[] )
     //    In this example, the boundary conditions are defined by marking only
     //    boundary attribute 1 from the mesh as essential and converting it to a
     //    list of true dofs.
-    Array<int> ess_tdof_list, ess_bdr( mesh->bdr_attributes.Max() );
+    Array<int> ess_tdof_list, temp_list, ess_bdr( mesh->bdr_attributes.Max() );
     ess_bdr = 0;
     ess_bdr[0] = 1;
-    fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
+    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 2 );
+    ess_tdof_list.Append( temp_list );
+
+    ess_bdr = 0;
+    ess_bdr[1] = 1;
+    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 1 );
+    ess_tdof_list.Append( temp_list );
+
+    ess_bdr = 0;
+    ess_bdr[2] = 1;
+    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 0 );
+    ess_tdof_list.Append( temp_list );
+
+    ess_bdr = 0;
+    ess_bdr[3] = 1;
+    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 0 );
+    ess_tdof_list.Append( temp_list );
+
+    ess_bdr = 0;
+    ess_bdr[3] = 1;
+    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 1 );
+    ess_tdof_list.Append( temp_list );
+
+    ess_bdr = 0;
+    ess_bdr[5] = 1;
+    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 0 );
+    ess_tdof_list.Append( temp_list );
+
+    ess_bdr = 0;
+    ess_bdr[5] = 1;
+    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 1 );
+    ess_tdof_list.Append( temp_list );
 
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
@@ -173,22 +178,17 @@ int main( int argc, char* argv[] )
 
     // IsotropicElasticMaterial iem( E_func, nu_func );
     // iem.setLargeDeformation();
-    double E = 1.2e6;
-
-    double nu = 0;
 
     Vector Mu( mesh->attributes.Max() );
-    // Mu = 1.61148e6;
-    Mu = E / 2 / ( 1 + nu );
+    Mu = 1.61148e6;
 
     PWConstCoefficient mu_func( Mu );
 
     Vector Lambda( mesh->attributes.Max() );
-    // Lambda = 499.92568e6;
-    Lambda = E * nu / ( 1 + nu ) / ( 1 - 2 * nu );
+    Lambda = 499.92568e6;
     PWConstCoefficient lambda_func( Lambda );
 
-    NeoHookeanMaterial nh( mu_func, lambda_func, NeoHookeanType::Ln );
+    NeoHookeanMaterial nh( mu_func, lambda_func, NeoHookeanType::Poly1 );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( nh );
 
@@ -206,7 +206,8 @@ int main( int argc, char* argv[] )
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
 
     // Set up the Jacobian solver
-    auto j_gmres = new UMFPackSolver();
+    // Set up the Jacobian solver
+    auto* j_gmres = new KLUSolver();
 
     auto newton_solver = new NewtonSolver();
 
@@ -221,12 +222,13 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxIter( 20 );
 
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
-    for ( int i = 1; i <= 10; i++ )
+    int steps = 10;
+    for ( int i = 1; i <= steps; i++ )
     {
-        Vector pull_force( mesh->bdr_attributes.Max() );
-        pull_force = 0.0;
-        pull_force( 1 ) = 4 * i;
-        f.Set( 2, new PWConstCoefficient( pull_force ) );
+        Vector push_force( mesh->bdr_attributes.Max() );
+        push_force = 0.0;
+        push_force( 5 ) = -3e6 / steps * i;
+        f.Set( 2, new PWConstCoefficient( push_force ) );
         Vector zero;
         newton_solver->Mult( zero, x_gf );
     }

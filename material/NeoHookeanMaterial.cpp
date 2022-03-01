@@ -38,11 +38,13 @@ void NeoHookeanMaterial::updateRefModuli()
     {
         mRefModuli *= lambda * ( 2 * J - 1 ) * J;
         mRefModuli += 2 * ( mu - lambda * ( J - 1 ) * J ) * mTempModuli;
+        break;
     }
     case NeoHookeanType::Ln:
     {
         mRefModuli *= lambda;
         mRefModuli += 2 * ( mu - lambda * log( J ) ) * mTempModuli;
+        break;
     }
     }
     // util::tensorProduct( CInv, CInv, mRefModuli );

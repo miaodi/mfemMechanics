@@ -47,6 +47,10 @@ add_executable(beam beam.cpp)
 target_include_directories(beam PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})
 target_link_libraries(beam PRIVATE ${MFEM_LIBRARIES} matlib femplugin)
 
+add_executable(block block.cpp)
+target_include_directories(block PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})
+target_link_libraries(block PRIVATE ${MFEM_LIBRARIES} matlib femplugin)
+
 # add_executable(pbeam pbeam.cpp)
 # target_include_directories(pbeam PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})
 # target_link_libraries(pbeam PRIVATE ${MFEM_LIBRARIES} matlib femplugin)
