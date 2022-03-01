@@ -181,11 +181,14 @@ int main( int argc, char* argv[] )
 
     Vector Mu( mesh->attributes.Max() );
     Mu = 1.61148e6;
+    // Mu = 80.194e6;
 
     PWConstCoefficient mu_func( Mu );
 
     Vector Lambda( mesh->attributes.Max() );
     Lambda = 499.92568e6;
+    // Lambda = 400889.806e6;
+
     PWConstCoefficient lambda_func( Lambda );
 
     NeoHookeanMaterial nh( mu_func, lambda_func, NeoHookeanType::Poly1 );
@@ -222,21 +225,10 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxIter( 20 );
 
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
-    int steps = 10;
-    for ( int i = 1; i <= steps; i++ )
-    {
-        Vector push_force( mesh->bdr_attributes.Max() );
-        push_force = 0.0;
-        push_force( 5 ) = -3e6 / steps * i;
-        f.Set( 2, new PWConstCoefficient( push_force ) );
-        Vector zero;
-        newton_solver->Mult( zero, x_gf );
-    }
-    // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
-    subtract( x_gf, x_ref, x_def );
+    int steps = 15;
 
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "test", mesh );
+    ParaViewDataCollection paraview_dc( "Block Compress", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );
@@ -245,6 +237,23 @@ int main( int argc, char* argv[] )
     paraview_dc.SetTime( 0.0 ); // set the time
     paraview_dc.RegisterField( "Displace", &x_def );
     paraview_dc.Save();
+
+    for ( int i = 1; i <= steps; i++ )
+    {
+        Vector push_force( mesh->bdr_attributes.Max() );
+        push_force = 0.0;
+        push_force( 5 ) = -3e6 / steps * i;
+        // push_force( 5 ) = -4e6 * p / steps * i;
+        f.Set( 2, new PWConstCoefficient( push_force ) );
+        Vector zero;
+        newton_solver->Mult( zero, x_gf );
+        subtract( x_gf, x_ref, x_def );
+        paraview_dc.SetCycle( i );
+        paraview_dc.SetTime( i ); // set the time
+        paraview_dc.Save();
+    }
+    // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
+
     if ( fec )
     {
         delete fespace;

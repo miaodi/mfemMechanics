@@ -210,7 +210,7 @@ int main( int argc, char* argv[] )
         // 15. Save data in the ParaView format
         // Visualize the stress components.
         const char* c = "xyz";
-        ParaViewDataCollection paraview_dc( "test1", mesh );
+        ParaViewDataCollection paraview_dc( "2DShearSmall", mesh );
         paraview_dc.SetPrefixPath( "ParaView" );
         paraview_dc.SetLevelsOfDetail( order );
         paraview_dc.SetCycle( 0 );
@@ -272,7 +272,7 @@ int main( int argc, char* argv[] )
         // 15. Save data in the ParaView format
         // Visualize the stress components.
         const char* c = "xyz";
-        ParaViewDataCollection paraview_dc( "test1", mesh );
+        ParaViewDataCollection paraview_dc( "2DShearLarge", mesh );
         paraview_dc.SetPrefixPath( "ParaView" );
         paraview_dc.SetLevelsOfDetail( order );
         paraview_dc.SetCycle( 0 );
@@ -280,18 +280,19 @@ int main( int argc, char* argv[] )
         paraview_dc.SetHighOrderOutput( true );
         paraview_dc.SetTime( 0.0 ); // set the time
         paraview_dc.RegisterField( "Displace", &x_def );
+        vector<vector<GridFunction*>> stress( 3, vector<GridFunction*>( 3, nullptr ) );
         for ( int i = 0; i < dim; i++ )
         {
             for ( int j = 0; j < dim; j++ )
             {
                 stress_c.SetComponent( i, j );
-                auto stress = new GridFunction( &scalar_space );
-                stress->ProjectCoefficient( stress_c );
+                stress[i][j] = new GridFunction( &scalar_space );
+                stress[i][j]->ProjectCoefficient( stress_c );
                 string x( 1, c[i] );
                 string y( 1, c[j] );
                 string name = "S" + x + y;
 
-                paraview_dc.RegisterField( name, stress );
+                paraview_dc.RegisterField( name, stress[i][j] );
             }
         }
 
@@ -303,9 +304,15 @@ int main( int argc, char* argv[] )
 
             subtract( x_gf, x_ref, x_def );
 
-            plugin::StressCoefficient stress_c( dim, iem );
             stress_c.SetDisplacement( x_def );
-
+            for ( int i = 0; i < dim; i++ )
+            {
+                for ( int j = 0; j < dim; j++ )
+                {
+                    stress_c.SetComponent( i, j );
+                    stress[i][j]->ProjectCoefficient( stress_c );
+                }
+            }
             paraview_dc.SetCycle( i );
             paraview_dc.SetTime( i ); // set the time
             paraview_dc.Save();

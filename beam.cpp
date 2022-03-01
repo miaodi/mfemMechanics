@@ -206,7 +206,7 @@ int main( int argc, char* argv[] )
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
 
     // Set up the Jacobian solver
-    auto j_gmres = new UMFPackSolver();
+    auto j_gmres = new KLUSolver();
 
     auto newton_solver = new NewtonSolver();
 
@@ -221,6 +221,18 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxIter( 20 );
 
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
+
+    // 15. Save data in the ParaView format
+    ParaViewDataCollection paraview_dc( "Beam", mesh );
+    paraview_dc.SetPrefixPath( "ParaView" );
+    paraview_dc.SetLevelsOfDetail( order );
+    paraview_dc.SetCycle( 0 );
+    paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    paraview_dc.SetHighOrderOutput( true );
+    paraview_dc.SetTime( 0.0 ); // set the time
+    paraview_dc.RegisterField( "Displace", &x_def );
+
+    paraview_dc.Save();
     for ( int i = 1; i <= 10; i++ )
     {
         Vector pull_force( mesh->bdr_attributes.Max() );
@@ -229,20 +241,13 @@ int main( int argc, char* argv[] )
         f.Set( 2, new PWConstCoefficient( pull_force ) );
         Vector zero;
         newton_solver->Mult( zero, x_gf );
+        // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
+        subtract( x_gf, x_ref, x_def );
+        paraview_dc.SetTime( i ); // set the time
+        paraview_dc.SetCycle( i );
+        paraview_dc.Save();
     }
-    // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
-    subtract( x_gf, x_ref, x_def );
 
-    // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "test", mesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x_def );
-    paraview_dc.Save();
     if ( fec )
     {
         delete fespace;
