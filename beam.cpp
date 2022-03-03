@@ -216,8 +216,8 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-7 );
-    newton_solver->SetAbsTol( 1e-8 );
+    newton_solver->SetRelTol( 1e-8 );
+    newton_solver->SetAbsTol( 1e-9 );
     newton_solver->SetMaxIter( 20 );
 
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );

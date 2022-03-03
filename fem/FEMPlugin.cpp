@@ -197,7 +197,7 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const FiniteElement& el
         w = ip.weight * Ttr.Weight();
 
         mGeomStiff =
-            (w * mGShapeEig * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) * mGShapeEig.transpose()).eval();
+            ( w * mGShapeEig * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) * mGShapeEig.transpose() ).eval();
         eigenMat += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
         for ( int j = 0; j < dim; j++ )
         {
