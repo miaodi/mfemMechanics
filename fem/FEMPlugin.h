@@ -18,23 +18,10 @@ public:
     }
     void AssembleElementMatrix( const mfem::FiniteElement& el, mfem::ElementTransformation& Trans, mfem::DenseMatrix& elmat );
 
-    static void resizeRefEleTransVec( const size_t size );
-
     void matrixB( const int dof, const int dim, const mfem::DenseMatrix& gshape, Eigen::Matrix<double, 6, Eigen::Dynamic>& B ) const;
-
-    void updateDeformationGradient( const int dim,
-                                    mfem::ElementTransformation& ref,
-                                    mfem::ElementTransformation& cur,
-                                    const mfem::IntegrationPoint& ip );
-
-    ~ElasticityIntegrator();
 
 protected:
     mfem::DenseMatrix mDShape, mGShape;
-
-    Eigen::Matrix<double, 3, 3> mdxdX;
-
-    static std::vector<std::unique_ptr<mfem::IsoparametricTransformation>> refEleTransVec;
 
     ElasticMaterial* mMaterialModel{ nullptr };
 };

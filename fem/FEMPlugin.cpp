@@ -18,34 +18,22 @@ Eigen::MatrixXd mapper( const int dim, const int dof )
     return res;
 }
 using namespace mfem;
-std::vector<std::unique_ptr<IsoparametricTransformation>> ElasticityIntegrator::refEleTransVec;
-
-void ElasticityIntegrator::resizeRefEleTransVec( const size_t size )
-{
-    refEleTransVec.resize( size );
-}
 
 void ElasticityIntegrator::AssembleElementMatrix( const FiniteElement& el, ElementTransformation& Trans, DenseMatrix& elmat )
 {
     int dof = el.GetDof();
     int dim = el.GetDim();
     double w{ 0 };
-    const int eleNum = Trans.ElementNo;
 
     MFEM_ASSERT( dim == Trans.GetSpaceDim(), "" );
     MFEM_ASSERT( (size_t)eleNum < ElasticityIntegrator::refEleTransVec.size(),
                  "ElasticityIntegrator::refEleTransVec has not been "
                  "initiated yet." );
-    if ( ElasticityIntegrator::refEleTransVec[eleNum] == nullptr )
-        ElasticityIntegrator::refEleTransVec[eleNum] =
-            std::make_unique<IsoparametricTransformation>( dynamic_cast<IsoparametricTransformation&>( Trans ) );
 
     mDShape.SetSize( dof, dim );
     mGShape.SetSize( dof, dim );
 
     elmat.SetSize( dof * dim );
-
-    mdxdX.setZero();
 
     Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * dim, dof * dim );
     Eigen::Matrix<double, 6, Eigen::Dynamic> B( 6, dof * dim );
@@ -64,12 +52,9 @@ void ElasticityIntegrator::AssembleElementMatrix( const FiniteElement& el, Eleme
         const IntegrationPoint& ip = ir->IntPoint( i );
 
         Trans.SetIntPoint( &ip );
-        updateDeformationGradient( dim, *ElasticityIntegrator::refEleTransVec[eleNum], Trans, ip );
 
         mMaterialModel->at( Trans, ip );
-        mMaterialModel->setDeformationGradient( mdxdX );
         mMaterialModel->updateRefModuli();
-        mMaterialModel->updateCurModuli();
 
         el.CalcDShape( ip, mDShape );
 
@@ -77,7 +62,7 @@ void ElasticityIntegrator::AssembleElementMatrix( const FiniteElement& el, Eleme
         Mult( mDShape, Trans.InverseJacobian(), mGShape );
 
         matrixB( dof, dim, mGShape, B );
-        eigenMat += w * B.transpose() * mMaterialModel->getCurModuli() * B;
+        eigenMat += w * B.transpose() * mMaterialModel->getRefModuli() * B;
     }
 }
 
@@ -121,36 +106,6 @@ void ElasticityIntegrator::matrixB( const int dof,
         MFEM_WARNING( "It is not for 1D analysis." );
     }
 }
-
-void ElasticityIntegrator::updateDeformationGradient( const int dim, ElementTransformation& ref, ElementTransformation& cur, const IntegrationPoint& ip )
-{
-    ref.SetIntPoint( &ip );
-    cur.SetIntPoint( &ip );
-    const auto& refInvJac = ref.InverseJacobian();
-    const auto& curJac = cur.Jacobian();
-
-    Eigen::Map<const Eigen::MatrixXd> refInvJacEig( refInvJac.Data(), dim, dim );
-    Eigen::Map<const Eigen::MatrixXd> curJacEig( curJac.Data(), dim, dim );
-    mdxdX.setZero();
-    // std::cout << "curJacEig: \n";
-    // std::cout << curJacEig << std::endl;
-    // std::cout << "refInvJacEig: \n";
-    // std::cout << refInvJacEig << std::endl;
-    mdxdX.block( 0, 0, dim, dim ) = curJacEig * refInvJacEig;
-    if ( dim == 2 )
-    {
-        mdxdX( 2, 2 ) = 1;
-    }
-}
-
-ElasticityIntegrator::~ElasticityIntegrator()
-{
-    if ( ElasticityIntegrator::refEleTransVec.size() )
-    {
-        ElasticityIntegrator::refEleTransVec.clear();
-    }
-}
-
 void NonlinearElasticityIntegrator::AssembleElementGrad( const FiniteElement& el, ElementTransformation& Ttr, const Vector& elfun, DenseMatrix& elmat )
 {
     double w;

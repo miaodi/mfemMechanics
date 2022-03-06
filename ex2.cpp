@@ -180,7 +180,6 @@ int main( int argc, char* argv[] )
 
     BilinearForm* a = new BilinearForm( fespace );
     auto intg = plugin::ElasticityIntegrator( iem );
-    plugin::ElasticityIntegrator::resizeRefEleTransVec( mesh->GetNE() );
     a->AddDomainIntegrator( &intg );
 
     a->Assemble();

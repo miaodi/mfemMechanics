@@ -64,6 +64,7 @@ int main( int argc, char* argv[] )
     bool static_cond = false;
     bool visualization = 1;
 
+    int ref_levels = -1;
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
     args.AddOption( &order, "-o", "--order", "Finite element order (polynomial degree)." );
@@ -71,6 +72,7 @@ int main( int argc, char* argv[] )
                     "Enable static condensation." );
     args.AddOption( &visualization, "-vis", "--visualization", "-no-vis", "--no-visualization",
                     "Enable or disable GLVis visualization." );
+    args.AddOption( &ref_levels, "-r", "--refine", "Number of times to refine the mesh uniformly." );
     args.Parse();
     if ( !args.Good() )
     {
@@ -79,7 +81,7 @@ int main( int argc, char* argv[] )
     }
     args.PrintOptions( cout );
 
-    bool small = false;
+    bool small = true;
 
     // 2. Read the mesh from the given mesh file. We can handle triangular,
     //    quadrilateral, tetrahedral or hexahedral elements with the same code.
@@ -106,7 +108,6 @@ int main( int argc, char* argv[] )
     //    largest number that gives a final mesh with no more than 5,000
     //    elements.
     {
-        int ref_levels = (int)floor( log( 2000. / mesh->GetNE() ) / log( 2. ) / dim );
         for ( int l = 0; l < ref_levels; l++ )
         {
             mesh->UniformRefinement();
@@ -172,7 +173,6 @@ int main( int argc, char* argv[] )
     PWConstCoefficient E_func( E );
 
     IsotropicElasticMaterial iem( E_func, nu_func );
-    iem.setLargeDeformation();
 
     FiniteElementSpace scalar_space( mesh, fec );
 
@@ -185,7 +185,6 @@ int main( int argc, char* argv[] )
 
         BilinearForm* a = new BilinearForm( fespace );
         auto ei = new plugin::ElasticityIntegrator( iem );
-        ei->resizeRefEleTransVec( mesh->GetNE() );
         a->AddDomainIntegrator( ei );
 
         a->Assemble();
@@ -236,6 +235,7 @@ int main( int argc, char* argv[] )
     }
     else
     {
+        iem.setLargeDeformation();
         auto intg = new plugin::NonlinearElasticityIntegrator( iem );
 
         NonlinearForm* nlf = new NonlinearForm( fespace );
