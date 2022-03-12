@@ -269,7 +269,14 @@ int main( int argc, char* argv[] )
         f.Set( i, new ConstantCoefficient( 0.0 ) );
     }
 
-    for ( int i = 1; i <= 10; i++ )
+    // 15. Save data in the ParaView format
+    ParaViewDataCollection paraview_dc( "test", pmesh );
+    paraview_dc.SetPrefixPath( "ParaView" );
+    paraview_dc.SetLevelsOfDetail( order );
+    paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    paraview_dc.SetHighOrderOutput( true );
+    paraview_dc.RegisterField( "Displace", &x_def );
+    for ( int i = 0; i <= 20; i++ )
     {
         Vector push_force( pmesh->bdr_attributes.Max() );
         push_force = 0.0;
@@ -278,21 +285,16 @@ int main( int argc, char* argv[] )
         Vector zero;
 
         newton_solver->Mult( zero, X );
-    }
-    x_gf.Distribute( X );
-    // // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
-    subtract( x_gf, x_ref, x_def );
 
-    // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "test", pmesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x_def );
-    paraview_dc.Save();
+        x_gf.Distribute( X );
+        // // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
+        subtract( x_gf, x_ref, x_def );
+
+        paraview_dc.SetTime( i ); // set the time
+        paraview_dc.SetCycle( i );
+
+        paraview_dc.Save();
+    }
 
     if ( fec )
     {

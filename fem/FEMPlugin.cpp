@@ -126,24 +126,28 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const FiniteElement& el
     {
         ir = &( IntRules.Get( el.GetGeomType(), 2 * el.GetOrder() + 3 ) ); // <---
     }
+
+    bool memo = mGShapes.count( &el );
+
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
         const IntegrationPoint& ip = ir->IntPoint( i );
         Ttr.SetIntPoint( &ip );
-
-        el.CalcDShape( ip, mDShape );
-        Mult( mDShape, Ttr.InverseJacobian(), mGShape );
-
-        Eigen::Map<const Eigen::MatrixXd> mGShapeEig( mGShape.Data(), dof, dim );
+        if ( !memo )
+        {
+            el.CalcDShape( ip, mDShape );
+            Mult( mDShape, Ttr.InverseJacobian(), mGShape );
+            mGShapes[&el].emplace_back( Eigen::Map<const Eigen::MatrixXd>( mGShape.Data(), dof, dim ) );
+        }
 
         mdxdX.setZero();
-        mdxdX.block( 0, 0, dim, dim ) = curCoords.transpose() * mGShapeEig;
+        mdxdX.block( 0, 0, dim, dim ) = curCoords.transpose() * mGShapes[&el][i];
         if ( dim == 2 )
         {
             mdxdX( 2, 2 ) = 1;
         }
 
-        matrixB( dof, dim, mGShape );
+        matrixB( dof, dim, mGShapes[&el][i] );
 
         mMaterialModel->at( Ttr, ip );
         mMaterialModel->setDeformationGradient( mdxdX );
@@ -152,7 +156,8 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const FiniteElement& el
         w = ip.weight * Ttr.Weight();
 
         mGeomStiff =
-            ( w * mGShapeEig * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) * mGShapeEig.transpose() ).eval();
+            ( w * mGShapes[&el][i] * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) * mGShapes[&el][i].transpose() )
+                .eval();
         eigenMat += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
         for ( int j = 0; j < dim; j++ )
         {
@@ -183,24 +188,26 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
     {
         ir = &( IntRules.Get( el.GetGeomType(), 2 * el.GetOrder() + 3 ) ); // <---
     }
+    bool memo = mGShapes.count( &el );
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
         const IntegrationPoint& ip = ir->IntPoint( i );
         Ttr.SetIntPoint( &ip );
-
-        el.CalcDShape( ip, mDShape );
-        Mult( mDShape, Ttr.InverseJacobian(), mGShape );
-
-        Eigen::Map<const Eigen::MatrixXd> mGShapeEig( mGShape.Data(), dof, dim );
+        if ( !memo )
+        {
+            el.CalcDShape( ip, mDShape );
+            Mult( mDShape, Ttr.InverseJacobian(), mGShape );
+            mGShapes[&el].emplace_back( Eigen::Map<const Eigen::MatrixXd>( mGShape.Data(), dof, dim ) );
+        }
 
         mdxdX.setZero();
-        mdxdX.block( 0, 0, dim, dim ) = curCoords.transpose() * mGShapeEig;
+        mdxdX.block( 0, 0, dim, dim ) = curCoords.transpose() * mGShapes[&el][i];
         if ( dim == 2 )
         {
             mdxdX( 2, 2 ) = 1;
         }
 
-        matrixB( dof, dim, mGShape );
+        matrixB( dof, dim, mGShapes[&el][i] );
 
         mMaterialModel->at( Ttr, ip );
         mMaterialModel->setDeformationGradient( mdxdX );
@@ -211,7 +218,7 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
     }
 }
 
-void NonlinearElasticityIntegrator::matrixB( const int dof, const int dim, const mfem::DenseMatrix& gshape )
+void NonlinearElasticityIntegrator::matrixB( const int dof, const int dim, const Eigen::MatrixXd& gshape )
 {
     mB.resize( 6, dof * dim );
     mB.setZero();

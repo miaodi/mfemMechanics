@@ -52,7 +52,7 @@ public:
                                       const mfem::Vector& elfun,
                                       mfem::DenseMatrix& elmat );
 
-    void matrixB( const int dof, const int dim, const mfem::DenseMatrix& gshape );
+    void matrixB( const int dof, const int dim, const Eigen::MatrixXd& gshape );
 
 protected:
     mfem::DenseMatrix mDShape, mGShape;
@@ -60,6 +60,7 @@ protected:
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
     Eigen::MatrixXd mGeomStiff;
     ElasticMaterial* mMaterialModel{ nullptr };
+    std::map<mfem::FiniteElement const* const, std::vector<Eigen::MatrixXd>> mGShapes;
 };
 
 class NonlinearVectorBoundaryLFIntegrator : public mfem::NonlinearFormIntegrator
