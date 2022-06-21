@@ -15,7 +15,7 @@ public:
     NeoHookeanMaterial( mfem::Coefficient& m, mfem::Coefficient& l, NeoHookeanType nh = NeoHookeanType::Poly1 )
         : ElasticMaterial(), mMu( &m ), mLambda( &l ), mNH( nh )
     {
-        setLargeDeformation();
+        setLargeDeformation( true );
     }
 
     virtual Eigen::Matrix3d getPK2StressTensor() const;

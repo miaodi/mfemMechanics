@@ -206,7 +206,10 @@ int main( int argc, char* argv[] )
 
     // NeoHookeanMaterial nh( mu_func, lambda_func );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( iem );
+    
+    plugin::Memorize mm( pmesh );
+
+    auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
 
     ParNonlinearForm* nlf = new ParNonlinearForm( fespace );
     // {

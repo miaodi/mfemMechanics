@@ -21,9 +21,9 @@ class ElasticMaterial
 public:
     ElasticMaterial();
 
-    Eigen::Matrix3d getGreenLagrangeStrainTensor() const;
+    virtual Eigen::Matrix3d getGreenLagrangeStrainTensor() const;
 
-    Eigen::Vector6d getGreenLagrangeStrainVector() const;
+    virtual Eigen::Vector6d getGreenLagrangeStrainVector() const;
 
     bool isSamllDeformation() const
     {
@@ -63,9 +63,14 @@ public:
         mdxdX = &F;
     }
 
-    void setLargeDeformation()
+    void setLargeDeformation( const bool flg )
     {
-        mSmallDeformation = false;
+        mSmallDeformation = !flg;
+    }
+
+    void setLambda( const double l )
+    {
+        mLambda = l;
     }
 
 protected:
@@ -79,6 +84,7 @@ protected:
 
     mfem::ElementTransformation* mEleTrans{ nullptr };
     const mfem::IntegrationPoint* mIntgP{ nullptr };
+    double mLambda{ 0 };
 };
 
 class IsotropicElasticMaterial : public ElasticMaterial
@@ -100,11 +106,54 @@ public:
         return mNu->Eval( *mEleTrans, *mIntgP );
     }
 
-    void updateRefModuli() override;
+    virtual void updateRefModuli() override;
 
     virtual Eigen::Vector6d getPK2StressVector() const;
 
 protected:
     mfem::Coefficient* mE{ nullptr };
     mfem::Coefficient* mNu{ nullptr };
+};
+
+class IsotropicElasticThermalMaterial : public IsotropicElasticMaterial
+{
+public:
+    IsotropicElasticThermalMaterial( mfem::Coefficient& E, mfem::Coefficient& nu, mfem::Coefficient& cte )
+        : IsotropicElasticMaterial( E, nu ), mCTE( &cte )
+    {
+    }
+
+    double E() const
+    {
+        MFEM_ASSERT( mEleTrans && mIntgP, "ElementTransformation or IntegrationPoint is not set" );
+        return mE->Eval( *mEleTrans, *mIntgP );
+    }
+
+    double Nu() const
+    {
+        MFEM_ASSERT( mEleTrans && mIntgP, "ElementTransformation or IntegrationPoint is not set" );
+        return mNu->Eval( *mEleTrans, *mIntgP );
+    }
+
+    void setInitialTemp( const double t0 )
+    {
+        mT0 = t0;
+    }
+    void setFinalTemp( const double tf )
+    {
+        mTF = tf;
+    }
+
+    double CTE() const
+    {
+        MFEM_ASSERT( mEleTrans && mIntgP, "ElementTransformation or IntegrationPoint is not set" );
+        return mCTE->Eval( *mEleTrans, *mIntgP );
+    }
+
+    virtual Eigen::Matrix3d getGreenLagrangeStrainTensor() const;
+
+protected:
+    mfem::Coefficient* mCTE{ nullptr };
+    double mT0{ 0 };
+    double mTF{ 0 };
 };

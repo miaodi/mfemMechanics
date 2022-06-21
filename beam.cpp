@@ -52,7 +52,7 @@ void ReferenceConfiguration( const Vector& x, Vector& y )
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "../beam.mesh";
+    const char* mesh_file = "../gmshBeam.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -79,26 +79,26 @@ int main( int argc, char* argv[] )
     Mesh* mesh = new Mesh( mesh_file, 1, 1 );
     int dim = mesh->Dimension();
 
-    for ( int k = 0; k < 7; k++ )
-    {
-        int ne = mesh->GetNE();
-        Array<Refinement> refinements;
-        for ( int i = 0; i < ne; i++ )
-        {
-            refinements.Append( Refinement( i, 1 ) );
-        }
-        mesh->GeneralRefinement( refinements );
-    }
-    for ( int k = 0; k < 3; k++ )
-    {
-        int ne = mesh->GetNE();
-        Array<Refinement> refinements;
-        for ( int i = 0; i < ne; i++ )
-        {
-            refinements.Append( Refinement( i, 2 ) );
-        }
-        mesh->GeneralRefinement( refinements );
-    }
+    // for ( int k = 0; k < 7; k++ )
+    // {
+    //     int ne = mesh->GetNE();
+    //     Array<Refinement> refinements;
+    //     for ( int i = 0; i < ne; i++ )
+    //     {
+    //         refinements.Append( Refinement( i, 1 ) );
+    //     }
+    //     mesh->GeneralRefinement( refinements );
+    // }
+    // for ( int k = 0; k < 3; k++ )
+    // {
+    //     int ne = mesh->GetNE();
+    //     Array<Refinement> refinements;
+    //     for ( int i = 0; i < ne; i++ )
+    //     {
+    //         refinements.Append( Refinement( i, 2 ) );
+    //     }
+    //     mesh->GeneralRefinement( refinements );
+    // }
 
     // for ( int i = 0; i < 2; i++ )
     // {
@@ -190,7 +190,9 @@ int main( int argc, char* argv[] )
 
     NeoHookeanMaterial nh( mu_func, lambda_func, NeoHookeanType::Ln );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( nh );
+    plugin::Memorize mm( mesh );
+
+    auto intg = new plugin::NonlinearElasticityIntegrator( nh, mm );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     // {
@@ -206,7 +208,7 @@ int main( int argc, char* argv[] )
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
 
     // Set up the Jacobian solver
-    auto j_gmres = new KLUSolver();
+    auto j_gmres = new UMFPackSolver();
 
     auto newton_solver = new NewtonSolver();
 
@@ -216,8 +218,8 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-8 );
-    newton_solver->SetAbsTol( 1e-9 );
+    newton_solver->SetRelTol( 1e-6 );
+    newton_solver->SetAbsTol( 1e-7 );
     newton_solver->SetMaxIter( 20 );
 
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );

@@ -17,6 +17,11 @@ Eigen::Matrix3d NeoHookeanMaterial::getPK2StressTensor() const
     {
         return mu * ( Eigen::Matrix3d::Identity() - CInv ) + lambda * log( J ) * CInv;
     }
+    case NeoHookeanType::Poly2:
+
+    default:
+        MFEM_ABORT( "Not implemented" );
+        return Eigen::Matrix3d();
     }
 }
 
@@ -46,11 +51,8 @@ void NeoHookeanMaterial::updateRefModuli()
         mRefModuli += 2 * ( mu - lambda * log( J ) ) * mTempModuli;
         break;
     }
+    case NeoHookeanType::Poly2:
+    default:
+        MFEM_ABORT( "Not implemented" );
     }
-    // util::tensorProduct( CInv, CInv, mRefModuli );
-    // mRefModuli *= lambda * J * J;
-
-    // util::symmetricIdentityTensor( CInv, mTempModuli );
-
-    // mRefModuli += ( mu - lambda * ( J * J - 1 ) / 2 ) * mTempModuli ;
 }

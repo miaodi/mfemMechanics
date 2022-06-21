@@ -70,11 +70,11 @@ int main( int argc, char* argv[] )
     MPI_Comm_rank( MPI_COMM_WORLD, &myid );
 
     // 1. Parse command-line options.
-    const char* mesh_file = "../beam.mesh";
+    const char* mesh_file = "../gmshBeam.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
-    int ser_ref_levels = -1, par_ref_levels = 1;
+    int ser_ref_levels = -1, par_ref_levels = -1;
     const char* petscrc_file = "";
 
     OptionsParser args( argc, argv );
@@ -121,13 +121,13 @@ int main( int argc, char* argv[] )
         return 3;
     }
 
-    {
-        int ref_levels = ser_ref_levels >= 0 ? ser_ref_levels : (int)floor( log( 1000. / mesh->GetNE() ) / log( 2. ) / dim );
-        for ( int l = 0; l < ref_levels; l++ )
-        {
-            mesh->UniformRefinement();
-        }
-    }
+    // {
+    //     int ref_levels = ser_ref_levels >= 0 ? ser_ref_levels : (int)floor( log( 1000. / mesh->GetNE() ) / log( 2. )
+    //     / dim ); for ( int l = 0; l < ref_levels; l++ )
+    //     {
+    //         mesh->UniformRefinement();
+    //     }
+    // }
 
     // 6. Define a parallel mesh by a partitioning of the serial mesh. Refine
     //    this mesh further in parallel to increase the resolution. Once the
@@ -192,13 +192,16 @@ int main( int argc, char* argv[] )
     PWConstCoefficient E_func( E );
 
     IsotropicElasticMaterial iem( E_func, nu_func );
-    iem.setLargeDeformation();
+    iem.setLargeDeformation( true );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( iem );
+    plugin::Memorize mm( pmesh );
+
+    auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
 
     auto* nlf = new ParNonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
     nlf->SetEssentialBC( ess_bdr );
+    nlf->SetGradientType( Operator::Type::PETSC_MATAIJ );
 
     GeneralResidualMonitor newton_monitor( fespace->GetComm(), "Newton", 1 );
     GeneralResidualMonitor j_monitor( fespace->GetComm(), "GMRES", 3 );
@@ -221,11 +224,32 @@ int main( int argc, char* argv[] )
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
     Vector X( fespace->GetTrueVSize() );
     x_gf.ParallelProject( X );
-    for ( int i = 1; i <= 1; i++ )
+    for ( int i = 1; i <= 10; i++ )
     {
+        // PetscParMatrix petscMat( fespace->GetComm(), &nlf->GetGradient( X ), mfem::Operator::PETSC_MATAIJ );
+
+        // petscMat.Print( "petscMat.bin", true );
+        // break;
+        // ofstream myfile;
+        // myfile.open( "example.dat" );
+        // mfem::Operator* A = &nlf->GetGradient( X );
+        // mfem::OperatorHandle ah( A, false );
+
+        // auto& ar = nlf->GetEssentialTrueDofs();
+        // PetscParVector dummy(fespace->GetComm(),0);
+        // ah.As<PetscParMatrix>()->EliminateRowsCols(ess_tdof_list, dummy, dummy, 1e6);
+        // ah.As<PetscParMatrix>()->Print( "petscMat.bin", true );
+        // if ( myid == 0 )
+        // {
+        //     cout << ah.As<PetscParMatrix>()->Height() << " : " << ah.As<PetscParMatrix>()->Width() << endl;
+        //     cout << ar.Size() << endl;
+        // }
+        // myfile.close();
+        // break;
+
         Vector pull_force( pmesh->bdr_attributes.Max() );
         pull_force = 0.0;
-        // pull_force( 1 ) = 4 * i;
+        pull_force( 1 ) = 4 * i;
         f.Set( 2, new PWConstCoefficient( pull_force ) );
         Vector zero;
         newton_solver->Mult( zero, X );

@@ -9,6 +9,15 @@
 using namespace std;
 using namespace mfem;
 
+class QuasiNewtonSolver : public NewtonSolver
+{
+public:
+    QuasiNewtonSolver( MPI_Comm comm_ ) : NewtonSolver( comm_ )
+    {
+    }
+    virtual void Mult( const Vector& b, Vector& x ) const;
+};
+
 class GeneralResidualMonitor : public IterativeSolverMonitor
 {
 public:
@@ -224,7 +233,9 @@ int main( int argc, char* argv[] )
 
     NeoHookeanMaterial nh( mu_func, lambda_func, NeoHookeanType::Poly1 );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( nh );
+    plugin::Memorize mm( pmesh );
+
+    auto intg = new plugin::NonlinearElasticityIntegrator( nh, mm );
 
     ParNonlinearForm* nlf = new ParNonlinearForm( fespace );
     // {
@@ -255,7 +266,7 @@ int main( int argc, char* argv[] )
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-7 );
-    newton_solver->SetAbsTol( 1e-9 );
+    newton_solver->SetAbsTol( 1e-8 );
     newton_solver->SetMaxIter( 20 );
 
     Vector X( fespace->GetTrueVSize() );
@@ -276,7 +287,7 @@ int main( int argc, char* argv[] )
     paraview_dc.SetDataFormat( VTKFormat::BINARY );
     paraview_dc.SetHighOrderOutput( true );
     paraview_dc.RegisterField( "Displace", &x_def );
-    for ( int i = 0; i <= 20; i++ )
+    for ( int i = 0; i <= 50; i++ )
     {
         Vector push_force( pmesh->bdr_attributes.Max() );
         push_force = 0.0;
@@ -306,4 +317,110 @@ int main( int argc, char* argv[] )
 
     MPI_Finalize();
     return 0;
+}
+
+void QuasiNewtonSolver::Mult( const Vector& b, Vector& x ) const
+{
+    MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
+    MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
+
+    int it;
+    double norm0, norm, norm_goal;
+    const bool have_b = ( b.Size() == Height() );
+
+    if ( !iterative_mode )
+    {
+        x = 0.0;
+    }
+
+    ProcessNewState( x );
+
+    oper->Mult( x, r );
+    if ( have_b )
+    {
+        r -= b;
+    }
+
+    norm0 = norm = Norm( r );
+    if ( print_options.first_and_last && !print_options.iterations )
+    {
+        mfem::out << "Newton iteration " << setw( 2 ) << 0 << " : ||r|| = " << norm << "...\n";
+    }
+    norm_goal = std::max( rel_tol * norm, abs_tol );
+
+    prec->iterative_mode = false;
+
+    // x_{i+1} = x_i - [DF(x_i)]^{-1} [F(x_i)-b]
+    for ( it = 0; true; it++ )
+    {
+        MFEM_ASSERT( IsFinite( norm ), "norm = " << norm );
+        if ( print_options.iterations )
+        {
+            mfem::out << "Newton iteration " << setw( 2 ) << it << " : ||r|| = " << norm;
+            if ( it > 0 )
+            {
+                mfem::out << ", ||r||/||r_0|| = " << norm / norm0;
+            }
+            mfem::out << '\n';
+        }
+        Monitor( it, norm, r, x );
+
+        if ( norm <= norm_goal )
+        {
+            converged = true;
+            break;
+        }
+
+        if ( it >= max_iter )
+        {
+            converged = false;
+            break;
+        }
+        if ( it == 0 )
+        {
+            grad = &oper->GetGradient( x );
+            prec->SetOperator( *grad );
+        }
+
+        if ( lin_rtol_type )
+        {
+            AdaptiveLinRtolPreSolve( x, it, norm );
+        }
+
+        prec->Mult( r, c ); // c = [DF(x_i)]^{-1} [F(x_i)-b]
+
+        if ( lin_rtol_type )
+        {
+            AdaptiveLinRtolPostSolve( c, r, it, norm );
+        }
+
+        const double c_scale = ComputeScalingFactor( x, b );
+        if ( c_scale == 0.0 )
+        {
+            converged = false;
+            break;
+        }
+        add( x, -c_scale, c, x );
+
+        ProcessNewState( x );
+
+        oper->Mult( x, r );
+        if ( have_b )
+        {
+            r -= b;
+        }
+        norm = Norm( r );
+    }
+
+    final_iter = it;
+    final_norm = norm;
+
+    if ( print_options.summary || ( !converged && print_options.warnings ) || print_options.first_and_last )
+    {
+        mfem::out << "Newton: Number of iterations: " << final_iter << '\n' << "   ||r|| = " << final_norm << '\n';
+    }
+    if ( print_options.summary || ( !converged && print_options.warnings ) )
+    {
+        mfem::out << "Newton: No convergence!\n";
+    }
 }

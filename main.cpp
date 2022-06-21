@@ -159,7 +159,7 @@ int main( int argc, char* argv[] )
     PWConstCoefficient E_func( E );
 
     IsotropicElasticMaterial iem( E_func, nu_func );
-    iem.setLargeDeformation();
+    iem.setLargeDeformation( true );
 
     // double E = 2.5e6;
 
@@ -178,7 +178,9 @@ int main( int argc, char* argv[] )
 
     // NeoHookeanMaterial nh( mu_func, lambda_func );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( iem );
+    plugin::Memorize mm( mesh );
+
+    auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     // {

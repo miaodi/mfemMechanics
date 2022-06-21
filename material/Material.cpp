@@ -183,3 +183,8 @@ Eigen::Vector6d IsotropicElasticMaterial::getPK2StressVector() const
 {
     return getRefModuli() * getGreenLagrangeStrainVector();
 }
+
+Eigen::Matrix3d IsotropicElasticThermalMaterial::getGreenLagrangeStrainTensor() const
+{
+    return ElasticMaterial::getGreenLagrangeStrainTensor() - Eigen::Matrix3d::Identity() * ( CTE() * ( mTF - mT0 ) * mLambda );
+}

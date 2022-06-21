@@ -185,6 +185,7 @@ int main( int argc, char* argv[] )
 
         BilinearForm* a = new BilinearForm( fespace );
         auto ei = new plugin::ElasticityIntegrator( iem );
+        iem.setLargeDeformation( false );
         a->AddDomainIntegrator( ei );
 
         a->Assemble();
@@ -235,8 +236,10 @@ int main( int argc, char* argv[] )
     }
     else
     {
-        iem.setLargeDeformation();
-        auto intg = new plugin::NonlinearElasticityIntegrator( iem );
+        iem.setLargeDeformation( true );
+        plugin::Memorize mm( mesh );
+
+        auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
 
         NonlinearForm* nlf = new NonlinearForm( fespace );
         nlf->AddDomainIntegrator( intg );

@@ -193,7 +193,9 @@ int main( int argc, char* argv[] )
 
     NeoHookeanMaterial nh( mu_func, lambda_func, NeoHookeanType::Poly1 );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( nh );
+    plugin::Memorize mm( mesh );
+
+    auto intg = new plugin::NonlinearElasticityIntegrator( nh, mm );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     // {

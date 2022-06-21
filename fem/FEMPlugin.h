@@ -9,6 +9,32 @@
 namespace plugin
 {
 Eigen::MatrixXd mapper( const int dim, const int dof );
+
+void smallDeformMatrixB( const int, const int, const Eigen::MatrixXd&, Eigen::Matrix<double, 6, Eigen::Dynamic>& );
+
+struct GaussPointStorage
+{
+    Eigen::MatrixXd GShape;
+    double DetdXdXi;
+};
+
+class Memorize
+{
+public:
+    Memorize( mfem::Mesh* );
+
+    void InitializeElement( const mfem::FiniteElement&, mfem::ElementTransformation&, const mfem::IntegrationRule& );
+
+    const Eigen::MatrixXd& GetdNdX( const int gauss ) const;
+
+    double GetDetdXdXi( const int gauss ) const;
+
+private:
+    std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mStorage;
+    mfem::DenseMatrix mDShape, mGShape;
+    int mElementNo{ 0 };
+};
+
 class ElasticityIntegrator : public mfem::BilinearFormIntegrator
 {
 public:
@@ -26,10 +52,32 @@ protected:
     ElasticMaterial* mMaterialModel{ nullptr };
 };
 
-class NonlinearElasticityIntegrator : public mfem::NonlinearFormIntegrator
+class NonlinearFormIntegratorLambda : public mfem::NonlinearFormIntegrator
 {
 public:
-    NonlinearElasticityIntegrator( ElasticMaterial& m ) : mfem::NonlinearFormIntegrator(), mMaterialModel{ &m }
+    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator(), mLambda{ 1. }
+    {
+    }
+
+    virtual void SetLambda( const double lambda ) const
+    {
+        mLambda = lambda;
+    }
+
+    double GetLambda() const
+    {
+        return mLambda;
+    }
+
+protected:
+    mutable double mLambda;
+};
+
+class NonlinearElasticityIntegrator : public NonlinearFormIntegratorLambda
+{
+public:
+    NonlinearElasticityIntegrator( ElasticMaterial& m, Memorize& memo )
+        : NonlinearFormIntegratorLambda(), mMaterialModel{ &m }, mMemo{ memo }
     {
     }
 
@@ -52,21 +100,50 @@ public:
                                       const mfem::Vector& elfun,
                                       mfem::DenseMatrix& elmat );
 
+    virtual void SetLambda( const double lambda ) const
+    {
+        NonlinearFormIntegratorLambda::SetLambda( lambda );
+        mMaterialModel->setLambda( lambda );
+    }
+
     void matrixB( const int dof, const int dim, const Eigen::MatrixXd& gshape );
 
+    void setNonlinear( const bool flg )
+    {
+        mNonlinear = flg;
+        mMaterialModel->setLargeDeformation( flg );
+    }
+
+    void setGeomStiff( const bool flg )
+    {
+        mOnlyGeomStiff = flg;
+    }
+
+    bool onlyGeomStiff() const
+    {
+        return mOnlyGeomStiff;
+    }
+
+    bool isNonlinear() const
+    {
+        return mNonlinear;
+    }
+
 protected:
-    mfem::DenseMatrix mDShape, mGShape;
     Eigen::Matrix<double, 3, 3> mdxdX;
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
     Eigen::MatrixXd mGeomStiff;
     ElasticMaterial* mMaterialModel{ nullptr };
-    std::map<mfem::FiniteElement const* const, std::vector<Eigen::MatrixXd>> mGShapes;
+    Memorize& mMemo;
+
+    bool mNonlinear{ true };
+    bool mOnlyGeomStiff{ false };
 };
 
-class NonlinearVectorBoundaryLFIntegrator : public mfem::NonlinearFormIntegrator
+class NonlinearVectorBoundaryLFIntegrator : public NonlinearFormIntegratorLambda
 {
 public:
-    NonlinearVectorBoundaryLFIntegrator( mfem::VectorCoefficient& QG ) : mfem::NonlinearFormIntegrator(), Q( QG )
+    NonlinearVectorBoundaryLFIntegrator( mfem::VectorCoefficient& QG ) : NonlinearFormIntegratorLambda(), Q( QG )
     {
     }
 
@@ -85,5 +162,32 @@ public:
 protected:
     mfem::Vector shape, vec;
     mfem::VectorCoefficient& Q;
+};
+
+class NonlinearPressureIntegrator : public NonlinearFormIntegratorLambda
+{
+public:
+    NonlinearPressureIntegrator( mfem::Coefficient& QG ) : NonlinearFormIntegratorLambda(), Q( QG )
+    {
+    }
+
+    virtual void AssembleFaceVector( const mfem::FiniteElement& el1,
+                                     const mfem::FiniteElement& el2,
+                                     mfem::FaceElementTransformations& Tr,
+                                     const mfem::Vector& elfun,
+                                     mfem::Vector& elvect ) override;
+
+    virtual void AssembleFaceGrad( const mfem::FiniteElement& el1,
+                                   const mfem::FiniteElement& el2,
+                                   mfem::FaceElementTransformations& Tr,
+                                   const mfem::Vector& elfun,
+                                   mfem::DenseMatrix& elmat ) override;
+
+protected:
+    mfem::Vector shape;
+    Eigen::MatrixXd mdxdX;
+    mfem::DenseMatrix mDShape, mGShape;
+    Eigen::MatrixXd mB;
+    mfem::Coefficient& Q;
 };
 } // namespace plugin
