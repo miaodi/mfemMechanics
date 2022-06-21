@@ -195,13 +195,14 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-10 );
+    newton_solver->SetRelTol( 1e-7 );
     newton_solver->SetAbsTol( 1e-11 );
     newton_solver->SetMaxIter( 6 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .001 );
+    newton_solver->SetMaxDelta( 10 );
     newton_solver->SetPhi( 1 );
-    newton_solver->SetMaxStep( 400 );
+    newton_solver->SetMaxStep( 4000 );
 
     PWConstCoefficient f;
     auto pressure = plugin::NonlinearPressureIntegrator( f );
@@ -219,7 +220,7 @@ int main( int argc, char* argv[] )
     }
     Vector push_force( mesh->bdr_attributes.Max() );
     push_force = .0;
-    push_force( 2 ) = -5e5;
+    push_force( 2 ) = -3e5;
     f2.Set( 0, new PWConstCoefficient( push_force ) );
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f2 ) );
 
