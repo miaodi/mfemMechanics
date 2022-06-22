@@ -1,0 +1,12 @@
+-ksp_type preonly 
+-pc_type redistribute 
+-redistribute_pc_type cholesky
+-redistribute_pc_factor_mat_solver_type mumps
+-mat_mumps_icntl_29 2
+-mat_mumps_icntl_12	1
+-redistribute_ksp_monitor
+
+-eps_monitor
+-eps_converged_reason
+-eps_view_values
+# Options for the spectral transform

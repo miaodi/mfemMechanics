@@ -73,6 +73,7 @@ int main( int argc, char* argv[] )
     bool static_cond = false;
     bool visualization = 1;
     int ser_ref_levels = -1, par_ref_levels = -1;
+    double f_temp = 100.;
     const char* petscrc_file = "";
 
     OptionsParser args( argc, argv );
@@ -87,6 +88,7 @@ int main( int argc, char* argv[] )
     args.AddOption( &par_ref_levels, "-rp", "--refine-parallel",
                     "Number of times to refine the mesh uniformly in parallel." );
     args.AddOption( &petscrc_file, "-petscopts", "--petscopts", "PetscOptions file to use." );
+    args.AddOption( &f_temp, "-ft", "--ftemp", "Final temperature." );
     args.Parse();
     if ( !args.Good() )
     {
@@ -210,7 +212,7 @@ int main( int argc, char* argv[] )
 
     IsotropicElasticThermalMaterial ietm( E_func, nu_func, CTE_func );
     ietm.setInitialTemp( 0 );
-    ietm.setFinalTemp( 3000 );
+    ietm.setFinalTemp( f_temp );
 
     plugin::Memorize mm( pmesh );
 
@@ -252,8 +254,8 @@ int main( int argc, char* argv[] )
     newton_solver->SetRelTol( 1e-6 );
     newton_solver->SetAbsTol( 1e-10 );
     newton_solver->SetMaxIter( 6 );
-    newton_solver->SetDelta( .01 );
-    newton_solver->SetMaxDelta( 15 );
+    newton_solver->SetDelta( .1 );
+    newton_solver->SetMaxDelta( 25 );
     newton_solver->SetMinDelta( 1e-5 );
     newton_solver->SetPhi( .0 );
     newton_solver->SetMaxStep( 10000 );
@@ -266,12 +268,11 @@ int main( int argc, char* argv[] )
     subtract( x_gf, x_ref, x_def );
 
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "buckling", pmesh );
+    ParaViewDataCollection paraview_dc( "buckling1", pmesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );
     paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
     paraview_dc.SetTime( 0.0 ); // set the time
     paraview_dc.RegisterField( "Displace", &x_def );
     paraview_dc.Save();
