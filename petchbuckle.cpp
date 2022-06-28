@@ -68,13 +68,13 @@ int main( int argc, char* argv[] )
     MPI_Comm_rank( MPI_COMM_WORLD, &myid );
 
     // 1. Parse command-line options.
-    const char* mesh_file = "/home/miaodi/repo/mfem_test/3DBeamBuckle.msh";
+    const char* mesh_file = "../../data/3DBeamBuckle.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
     int ser_ref_levels = -1, par_ref_levels = -1;
     double f_temp = 100.;
-    const char* petscrc_file = "";
+    const char* petscrc_file = "../../data/petscSetting";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -189,13 +189,9 @@ int main( int argc, char* argv[] )
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
     //    which satisfies the boundary conditions.
-    ParGridFunction x_gf( fespace );
     ParGridFunction x_ref( fespace );
-    ParGridFunction x_def( fespace );
-
     VectorFunctionCoefficient refconfig( dim, ReferenceConfiguration );
 
-    x_gf.ProjectCoefficient( refconfig );
     x_ref.ProjectCoefficient( refconfig );
 
     Vector Nu( pmesh->attributes.Max() );
@@ -222,6 +218,7 @@ int main( int argc, char* argv[] )
     nlf->AddDomainIntegrator( intg );
     nlf->SetEssentialTrueDofs( ess_tdof_list );
     nlf->SetGradientType( Operator::Type::PETSC_MATAIJ );
+    // nlf->SetAssemblyLevel( AssemblyLevel::NONE );
 
     GeneralResidualMonitor newton_monitor( fespace->GetComm(), "Newton", 1 );
     GeneralResidualMonitor j_monitor( fespace->GetComm(), "GMRES", 3 );
@@ -254,28 +251,31 @@ int main( int argc, char* argv[] )
     newton_solver->SetRelTol( 1e-6 );
     newton_solver->SetAbsTol( 1e-10 );
     newton_solver->SetMaxIter( 6 );
-    newton_solver->SetDelta( .1 );
+    newton_solver->SetDelta( 25 );
     newton_solver->SetMaxDelta( 25 );
     newton_solver->SetMinDelta( 1e-5 );
     newton_solver->SetPhi( .0 );
     newton_solver->SetMaxStep( 10000 );
 
-    Vector X( fespace->GetTrueVSize() );
-    x_gf.ParallelProject( X );
-    Vector zero;
-    newton_solver->Mult( zero, X );
-    x_gf.Distribute( X );
-    subtract( x_gf, x_ref, x_def );
-
     // 15. Save data in the ParaView format
+
+    Vector X( fespace->GetTrueVSize() );
+    X = 0.;
     ParaViewDataCollection paraview_dc( "buckling1", pmesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );
+    paraview_dc.SetFormat( 1 );
     paraview_dc.SetDataFormat( VTKFormat::BINARY );
     paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x_def );
+    ParGridFunction u( fespace );
+    u.Distribute( X );
+    paraview_dc.RegisterField( "Displace", &u );
+    newton_solver->SetDataCollection( &paraview_dc );
     paraview_dc.Save();
+
+    Vector zero;
+    newton_solver->Mult( zero, u );
     if ( fec )
     {
         delete fespace;
@@ -283,7 +283,6 @@ int main( int argc, char* argv[] )
     }
     delete newton_solver;
     delete pmesh;
-
 
     MFEMFinalizePetsc();
 

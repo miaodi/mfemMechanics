@@ -258,8 +258,8 @@ void getTerminalSize( int& lines, int& columns )
 #endif
 }
 
-ProgressBar::ProgressBar( double progress, const std::string& tail, int barWidth )
-    : progress( progress ), barWidth( barWidth ), tail( tail )
+ProgressBar::ProgressBar( double progress, bool success, const std::string& tail, int barWidth )
+    : progress( progress ), barWidth( barWidth ), tail( tail ), success( success )
 {
 }
 
@@ -268,7 +268,8 @@ std::ostream& ProgressBar::operator()( std::ostream& os ) const
     std::ios_base::fmtflags f( os.flags() );
     std::streamsize ss = os.precision();
     os << "[";
-    os << Color::GREEN;
+
+    os << ( success ? Color::GREEN : Color::RED );
     int pos = int( barWidth * progress );
     for ( int i = 0; i < barWidth; ++i )
     {

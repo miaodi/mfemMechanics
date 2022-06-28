@@ -10,7 +10,7 @@ namespace plugin
 class NewtonLineSearch : public mfem::NewtonSolver
 {
 protected:
-    mutable mfem::Vector x_cur;
+    mutable mfem::Vector u_cur;
     double max_eta{ 10. };
     double min_eta{ .1 };
     double eta_coef{ 1.5 };
@@ -118,8 +118,13 @@ public:
         min_delta = delta;
     }
 
+    void SetDataCollection( mfem::DataCollection* dc )
+    {
+        data = dc;
+    }
+
 protected:
-    mutable mfem::Vector r, Delta_u, delta_u, x_cur, q, delta_u_bar, delta_u_t, delta_u_t_p_Delta_x, Delta_u_prev;
+    mutable mfem::Vector r, Delta_u, delta_u, u_cur, q, delta_u_bar, delta_u_t, delta_u_t_p_Delta_x, Delta_u_prev;
     mutable mfem::Operator* grad;
 
     mutable double lambda, Delta_lambda, delta_lambda, Delta_lambda_prev, max_delta{ 1. }, min_delta{ 1. };
@@ -128,6 +133,7 @@ protected:
     double phi{ 1 };
 
     int max_steps{ 100 };
+    mutable mfem::DataCollection* data{ nullptr };
 };
 
 class MultiNewtonAdaptive : public mfem::NewtonSolver
@@ -159,7 +165,7 @@ protected:
     int max_steps{ 100 };
     mutable double delta_lambda{ 1. };
     mutable mfem::IterativeSolver* prec{ nullptr };
-    mutable mfem::Vector x_cur;
+    mutable mfem::Vector u_cur;
     const mfem::Operator* oper{ nullptr };
 };
 } // namespace plugin

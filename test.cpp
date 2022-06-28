@@ -175,6 +175,7 @@ int main()
             }
         }
 
+    MFEM_VERIFY( 1 == 2, "fuck." );
         std::cout << EigenC << std::endl;
     }
     return 0;

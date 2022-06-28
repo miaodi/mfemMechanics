@@ -1,13 +1,16 @@
 #include "Solvers.h"
 #include "FEMPlugin.h"
 #include "PrettyPrint.h"
+#include <deque>
+#include <slepc.h>
+#include <tuple>
 
 namespace plugin
 {
 void NewtonLineSearch::SetOperator( const mfem::Operator& op )
 {
     mfem::NewtonSolver::SetOperator( op );
-    x_cur.SetSize( op.Width() );
+    u_cur.SetSize( op.Width() );
 }
 
 double NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, const mfem::Vector& b ) const
@@ -20,8 +23,8 @@ double NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, const mfem
     double sL, sR, s;
     double etaL = 0., etaR = 1., eta = 1., ratio = 1.;
     auto CalcS = [&b, &x, have_b, this]( const double eta ) {
-        add( x, -eta, c, this->x_cur );
-        this->oper->Mult( this->x_cur, this->r );
+        add( x, -eta, c, this->u_cur );
+        this->oper->Mult( this->u_cur, this->r );
         if ( have_b )
         {
             this->r -= b;
@@ -81,7 +84,7 @@ void Crisfield::SetOperator( const mfem::Operator& op )
     r.SetSize( width );
     Delta_u.SetSize( width );
     delta_u.SetSize( width );
-    x_cur.SetSize( width );
+    u_cur.SetSize( width );
     q.SetSize( width );
     delta_u_bar.SetSize( width );
     delta_u_t.SetSize( width );
@@ -123,14 +126,33 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
     MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
 
+    std::deque<std::tuple<mfem::Vector, double, double>> prevSolutions;
+    const double goldenRatio = ( 1. + std::sqrt( 5 ) ) / 2;
+    mfem::Vector* u;
+    if ( auto& par_grid_x = dynamic_cast<mfem::ParGridFunction&>( x ) )
+    {
+        u = new mfem::Vector( par_grid_x.ParFESpace()->GetTrueVSize() );
+        par_grid_x.ParallelProject( *u );
+    }
+    else
+    {
+        u = &x;
+    }
+    mfem::PetscSolver* petscPrec = nullptr;
+    if ( dynamic_cast<mfem::PetscSolver*>( prec ) )
+    {
+        petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
+    }
     int step = 0;
     double norm0{ 0 }, norm{ 0 }, norm_goal{ 0 };
     const bool have_b = ( b.Size() == Height() );
     lambda = 0.;
 
+    int count = 1;
+
     if ( !iterative_mode )
     {
-        x = 0.0;
+        *u = 0.0;
     }
     Delta_u_prev = 0.;
     Delta_lambda_prev = 0.;
@@ -151,7 +173,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         // initialize
         if ( converged == false )
         {
-            L /= 2;
+            L /= goldenRatio;
         }
         else if ( step )
         {
@@ -159,7 +181,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             L = std::min( L, max_delta );
         }
 
-        MFEM_ASSERT( L > min_delta, "Required step size is smaller than the minimal bound." );
+        MFEM_VERIFY( L > min_delta, "Required step size is smaller than the minimal bound." );
         delta_u = 0.;
         Delta_u = 0.;
         delta_lambda = 0.;
@@ -177,16 +199,16 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             double delta_lambda1, delta_lambda2;
 
             // TODO: do not understand.
-            add( x, Delta_u, x_cur );
+            add( *u, Delta_u, u_cur );
 
             // compute q
             SetLambdaToIntegrators( oper, 1. + lambda + Delta_lambda );
 
-            oper->Mult( x_cur, q );
+            oper->Mult( u_cur, q );
 
             SetLambdaToIntegrators( oper, lambda + Delta_lambda );
 
-            oper->Mult( x_cur, r );
+            oper->Mult( u_cur, r );
             q -= r;
             q.Neg();
             if ( have_b )
@@ -194,19 +216,52 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 r -= b;
             }
             r.Neg();
-            grad = &oper->GetGradient( x_cur );
+            grad = &oper->GetGradient( u_cur );
             prec->SetOperator( *grad );
 
             prec->Mult( q, delta_u_t );
-            prec->Mult( r, delta_u_bar );
+            if ( petscPrec && !petscPrec->GetConverged() )
+            {
+                if ( prevSolutions.empty() )
+                {
+                    return;
+                }
+                *u = std::get<0>( prevSolutions.back() );
+                lambda = std::get<1>( prevSolutions.back() );
+                L = std::get<2>( prevSolutions.back() );
+                prevSolutions.pop_back();
+                converged = false;
+                break;
+            }
+            // mfem::OperatorHandle gradHandle( grad, false );
+            // PetscBool isSymmetric;
+            // MatIsSymmetric( ( mfem::petsc::Mat )( *gradHandle.As<mfem::PetscParMatrix>() ), 0., &isSymmetric );
 
+            prec->Mult( r, delta_u_bar );
+            if ( petscPrec && !petscPrec->GetConverged() )
+            {
+                if ( prevSolutions.empty() )
+                {
+                    return;
+                }
+                *u = std::get<0>( prevSolutions.back() );
+                lambda = std::get<1>( prevSolutions.back() );
+                L = std::get<2>( prevSolutions.back() );
+                prevSolutions.pop_back();
+                converged = false;
+                break;
+            }
             add( Delta_u, delta_u_bar, delta_u_t_p_Delta_x );
 
             const double a1 = Dot( delta_u_t, delta_u_t ) + phi * phi;
             const double a2 = 2 * Dot( delta_u_t_p_Delta_x, delta_u_t ) + 2 * phi * phi * Delta_lambda;
             const double a3 = Dot( delta_u_t_p_Delta_x, delta_u_t_p_Delta_x ) + phi * phi * Delta_lambda * Delta_lambda - L * L;
 
-            MFEM_ASSERT( a2 * a2 - 4 * a1 * a3 >= 0., "complex frequency need cut step size!\n" );
+            if ( a2 * a2 - 4 * a1 * a3 < 0. )
+            {
+                converged = false;
+                break;
+            }
 
             delta_lambda1 = ( -1. * a2 + std::sqrt( a2 * a2 - 4 * a1 * a3 ) ) / ( 2. * a1 );
             delta_lambda2 = ( -1. * a2 - std::sqrt( a2 * a2 - 4 * a1 * a3 ) ) / ( 2. * a1 );
@@ -276,7 +331,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                     mfem::out << '\n';
                 }
             }
-            Monitor( it, norm, r, x );
+            Monitor( it, norm, r, *u );
 
             if ( norm <= norm_goal )
             {
@@ -296,11 +351,41 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             {
                 mfem::out << "alert !!! buckled!!\n";
             }
+
+            prevSolutions.push_back( std::make_tuple( *u, lambda, L ) );
+            if ( prevSolutions.size() > 5 )
+                prevSolutions.pop_front();
             lambda += Delta_lambda;
-            x += Delta_u;
+            *u += Delta_u;
             Delta_lambda_prev = Delta_lambda;
             Delta_u_prev = Delta_u;
             step++;
+
+            final_iter = it;
+            final_norm = norm;
+            if ( print_options.summary || ( !converged && print_options.warnings ) || print_options.first_and_last )
+            {
+                mfem::out << "Newton: Number of iterations: " << final_iter << '\n'
+                          << "   ||r|| = " << final_norm << '\n';
+            }
+            if ( !converged && ( print_options.summary || print_options.warnings ) )
+            {
+                mfem::out << "Newton: No convergence!\n";
+            }
+
+            if ( data )
+            {
+                if ( step % 5 == 0 )
+                {
+                    if ( auto& par_grid_x = dynamic_cast<mfem::ParGridFunction&>( x ) )
+                    {
+                        par_grid_x.Distribute( *u );
+                    }
+                    data->SetCycle( count );
+                    data->SetTime( count++ );
+                    data->Save();
+                }
+            }
         }
 
 #ifdef MFEM_USE_MPI
@@ -309,23 +394,16 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             MPI_Comm_rank( this->GetComm(), &rank );
         if ( rank == 0 )
         {
-            mfem::out << util::ProgressBar( lambda ) << '\n';
+            mfem::out << util::ProgressBar( lambda, converged ) << '\n';
         }
 #else
-        mfem::out << util::ProgressBar( lambda ) << '\n';
+        mfem::out << util::ProgressBar( lambda, converged ) << '\n';
 
 #endif
-
-        final_iter = it;
-        final_norm = norm;
-        if ( print_options.summary || ( !converged && print_options.warnings ) || print_options.first_and_last )
-        {
-            mfem::out << "Newton: Number of iterations: " << final_iter << '\n' << "   ||r|| = " << final_norm << '\n';
-        }
-        if ( !converged && ( print_options.summary || print_options.warnings ) )
-        {
-            mfem::out << "Newton: No convergence!\n";
-        }
+    }
+    if ( auto& par_grid_x = dynamic_cast<mfem::ParGridFunction&>( x ) )
+    {
+        delete u;
     }
 }
 
@@ -341,14 +419,14 @@ void MultiNewtonAdaptive::SetOperator( const mfem::Operator& op )
     width = op.Width();
     MFEM_ASSERT( height == width, "square Operator is required." );
 
-    x_cur.SetSize( width );
+    u_cur.SetSize( width );
 }
 
 void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 {
     double cur_lambda = 0.;
     int step = 0;
-    x_cur = x;
+    u_cur = x;
     for ( ; true; step++ )
     {
         if ( step == max_steps )
@@ -373,11 +451,11 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         if ( GetConverged() )
         {
             cur_lambda += delta_lambda;
-            x_cur = x;
+            u_cur = x;
         }
         else
         {
-            x = x_cur;
+            x = u_cur;
         }
 
 #ifdef MFEM_USE_MPI

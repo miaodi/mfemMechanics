@@ -122,6 +122,7 @@ int main( int argc, char* argv[] )
     }
     cout << "Number of finite element unknowns: " << fespace->GetTrueVSize() << endl << "Assembling: " << flush;
 
+    
     // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
     //    In this example, the boundary conditions are defined by marking only
     //    boundary attribute 1 from the mesh as essential and converting it to a
@@ -221,43 +222,6 @@ int main( int argc, char* argv[] )
 
     // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
     subtract( x_gf, x_ref, x_def );
-
-    // {
-    //     intg->setNonlinear( false );
-    //     plugin::SetLambdaToIntegrators( nlf, 1 );
-    //     Vector r, r1, r2, sol;
-    //     r.SetSize( nlf->Width() );
-    //     r1.SetSize( nlf->Width() );
-    //     r2.SetSize( nlf->Width() );
-    //     sol.SetSize( nlf->Width() );
-
-    //     GridFunction x( fespace );
-
-    //     x.ProjectCoefficient( refconfig );
-    //     nlf->Mult( x, r );
-    //     Operator* grad = &nlf->GetGradient( x );
-
-    //     ofstream myfile;
-    //     myfile.open( "K.dat" );
-    //     grad->PrintMatlab( myfile );
-    //     myfile.close();
-    //     j_gmres->SetOperator( *grad );
-    //     j_gmres->Mult( r, sol );
-    //     x -= sol;
-
-    //     nlf->Mult( x, r1 );
-    //     r1.Print();
-
-    //     ess_tdof_list.DeleteAll();
-    //     nlf->SetEssentialTrueDofs( ess_tdof_list );
-    //     intg->setGeomStiff( true );
-    //     grad = &nlf->GetGradient( x );
-
-    //     myfile.open( "Kg.dat" );
-    //     grad->PrintMatlab( myfile );
-    //     myfile.close();
-    // }
-    // residual.Print();
 
     // 15. Save data in the ParaView format
     ParaViewDataCollection paraview_dc( "beamBuckle", mesh );

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.0)
 project(test1)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 
 set(CMAKE_CXX_FLAGS "-Wall")
 set(CMAKE_CXX_FLAGS_DEBUG "-g")
@@ -11,11 +11,10 @@ SET(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 find_package(MPI REQUIRED)
 
-
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(MFEM_FOLDER "debug")
+    set(MFEM_FOLDER "build-debug")
 else()
-    set(MFEM_FOLDER "release")
+    set(MFEM_FOLDER "build-release")
 endif()
 
 find_package(mfem REQUIRED NAMES MFEM  HINTS ${CMAKE_SOURCE_DIR}/../mfem/${MFEM_FOLDER})
@@ -30,10 +29,8 @@ add_subdirectory(util)
 add_subdirectory(material)
 add_subdirectory(fem)
 
-
-
-set (INCLUDE_DIRS ${MFEM_INCLUDE_DIRS} ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS} ${TACO_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR})
-set (LIBS ${MFEM_LIBRARIES} ${MFEM_LIBRARIES} matlib femplugin ${TACO_LIB})
+set (INCLUDE_DIRS ${MFEM_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS} ${TACO_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR})
+set (LIBS ${MFEM_LIBRARIES} matlib femplugin ${TACO_LIB} MPI::MPI_CXX)
 
 add_subdirectory(examples)
 
@@ -58,21 +55,21 @@ add_executable(petchbuckle petchbuckle.cpp)
 target_include_directories(petchbuckle PUBLIC ${INCLUDE_DIRS})
 target_link_libraries(petchbuckle PRIVATE ${LIBS})
 
-# add_executable(pexec pmain.cpp)
-# target_include_directories(pexec PUBLIC ${INCLUDE_DIRS})
-# target_link_libraries(pexec PRIVATE ${LIBS})
+# # add_executable(pexec pmain.cpp)
+# # target_include_directories(pexec PUBLIC ${INCLUDE_DIRS})
+# # target_link_libraries(pexec PRIVATE ${LIBS})
 
-add_executable(ex19 ex19.cpp)
-target_include_directories(ex19 PUBLIC ${INCLUDE_DIRS})
-target_link_libraries(ex19 PRIVATE ${LIBS})
+# add_executable(ex19 ex19.cpp)
+# target_include_directories(ex19 PUBLIC ${INCLUDE_DIRS})
+# target_link_libraries(ex19 PRIVATE ${LIBS})
 
-add_executable(ex16 ex16.cpp)
-target_include_directories(ex16 PUBLIC ${INCLUDE_DIRS})
-target_link_libraries(ex16 PRIVATE ${LIBS})
+# add_executable(ex16 ex16.cpp)
+# target_include_directories(ex16 PUBLIC ${INCLUDE_DIRS})
+# target_link_libraries(ex16 PRIVATE ${LIBS})
 
-add_executable(ex2 ex2.cpp)
-target_include_directories(ex2 PUBLIC ${INCLUDE_DIRS})
-target_link_libraries(ex2 PRIVATE ${LIBS})
+# add_executable(ex2 ex2.cpp)
+# target_include_directories(ex2 PUBLIC ${INCLUDE_DIRS})
+# target_link_libraries(ex2 PRIVATE ${LIBS})
 
 # add_executable(ex2p ex2p.cpp)
 # target_include_directories(ex2p PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})
@@ -88,8 +85,8 @@ target_link_libraries(block PRIVATE ${LIBS})
 
 add_executable(pblock pblock.cpp)
 target_include_directories(pblock PUBLIC ${INCLUDE_DIRS})
-target_link_libraries(pblock PRIVATE ${MFEM_LIBRARIES} matlib femplugin)
+target_link_libraries(pblock PRIVATE ${LIBS})
 
 add_executable(pbeam pbeam.cpp)
-target_include_directories(pbeam PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})
-target_link_libraries(pbeam PRIVATE ${MFEM_LIBRARIES} matlib femplugin)
+target_include_directories(pbeam PUBLIC ${INCLUDE_DIRS})
+target_link_libraries(pbeam PRIVATE ${LIBS})

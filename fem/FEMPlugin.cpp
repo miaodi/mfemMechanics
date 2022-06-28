@@ -157,11 +157,13 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
 
     mGeomStiff.resize( dof, dof );
 
-    Eigen::Map<const Eigen::MatrixXd> curCoords( elfun.GetData(), dof, dim );
+    Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, dim );
     elmat.SetSize( dof * dim );
     elmat = 0.0;
 
     Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * dim, dof * dim );
+
+    const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
 
     const mfem::IntegrationRule* ir = IntRule;
     if ( !ir )
@@ -175,12 +177,8 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
         Ttr.SetIntPoint( &ip );
         const Eigen::MatrixXd& gShape = mMemo.GetdNdX( i );
         mdxdX.setZero();
-        mdxdX.block( 0, 0, dim, dim ) = curCoords.transpose() * gShape;
-        if ( dim == 2 )
-        {
-            mdxdX( 2, 2 ) = 1;
-        }
-
+        mdxdX.block( 0, 0, dim, dim ) = u.transpose() * gShape;
+        mdxdX += identity;
         matrixB( dof, dim, gShape );
 
         mMaterialModel->at( Ttr, ip );
@@ -210,7 +208,7 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
     double w;
     int dof = el.GetDof(), dim = el.GetDim();
 
-    Eigen::Map<const Eigen::MatrixXd> curCoords( elfun.GetData(), dof, dim );
+    Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, dim );
 
     elvect.SetSize( dof * dim );
     elvect = 0.0;
@@ -222,6 +220,7 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
         ir = &( mfem::IntRules.Get( el.GetGeomType(), 2 * el.GetOrder() + 1 ) ); // <---
     }
 
+    const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
     mMemo.InitializeElement( el, Ttr, *ir );
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
@@ -230,12 +229,8 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
         const Eigen::MatrixXd& gShape = mMemo.GetdNdX( i );
 
         mdxdX.setZero();
-        mdxdX.block( 0, 0, dim, dim ) = curCoords.transpose() * gShape;
-        if ( dim == 2 )
-        {
-            mdxdX( 2, 2 ) = 1;
-        }
-
+        mdxdX.block( 0, 0, dim, dim ) = u.transpose() * gShape;
+        mdxdX += identity;
         matrixB( dof, dim, gShape );
 
         mMaterialModel->at( Ttr, ip );
@@ -391,7 +386,7 @@ void NonlinearPressureIntegrator::AssembleFaceVector( const mfem::FiniteElement&
     elvect.SetSize( dof * vdim );
     elvect = 0.0;
     Eigen::Map<Eigen::VectorXd> eigenVec( elvect.GetData(), elvect.Size() );
-    Eigen::Map<const Eigen::MatrixXd> curCoords( elfun.GetData(), dof, vdim );
+    Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, vdim );
 
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
@@ -401,6 +396,8 @@ void NonlinearPressureIntegrator::AssembleFaceVector( const mfem::FiniteElement&
     }
 
     Eigen::Rotation2Dd r( EIGEN_PI / 2 );
+
+    const Eigen::MatrixXd identity = Eigen::MatrixXd::Identity( vdim, vdim );
 
     auto& Ttr = Tr.GetElement1Transformation();
 
@@ -420,7 +417,7 @@ void NonlinearPressureIntegrator::AssembleFaceVector( const mfem::FiniteElement&
         el1.CalcShape( eip, shape );
         el1.CalcDShape( eip, mDShape );
         Mult( mDShape, Ttr.InverseJacobian(), mGShape );
-        mdxdX = curCoords.transpose() * Eigen::Map<const Eigen::MatrixXd>( mGShape.Data(), dof, vdim );
+        mdxdX = u.transpose() * Eigen::Map<const Eigen::MatrixXd>( mGShape.Data(), dof, vdim ) + identity;
 
         Eigen::Map<const Eigen::MatrixXd> vec( shape.GetData(), 1, dof );
 
@@ -428,8 +425,8 @@ void NonlinearPressureIntegrator::AssembleFaceVector( const mfem::FiniteElement&
 
         Eigen::VectorXd dxdxi = mdxdX * Jac;
 
-        eigenVec -= Eigen::kroneckerProduct( Eigen::MatrixXd::Identity( vdim, vdim ), vec ).transpose() *
-                    r.toRotationMatrix() * dxdxi.normalized() * dxdxi.norm() * ip.weight * val;
+        eigenVec -= Eigen::kroneckerProduct( identity, vec ).transpose() * r.toRotationMatrix() * dxdxi.normalized() *
+                    dxdxi.norm() * ip.weight * val;
     }
 }
 
@@ -451,7 +448,7 @@ void NonlinearPressureIntegrator::AssembleFaceGrad( const mfem::FiniteElement& e
     elmat.SetSize( dof * vdim );
     elmat = 0.0;
     Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * vdim, dof * vdim );
-    Eigen::Map<const Eigen::MatrixXd> curCoords( elfun.GetData(), dof, vdim );
+    Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, vdim );
 
     Eigen::VectorXd dxdxi;
     Eigen::MatrixXd deltau;
@@ -466,6 +463,8 @@ void NonlinearPressureIntegrator::AssembleFaceGrad( const mfem::FiniteElement& e
     Eigen::Rotation2Dd r( EIGEN_PI / 2 );
 
     auto& Ttr = Tr.GetElement1Transformation();
+
+    const Eigen::MatrixXd identity = Eigen::MatrixXd::Identity( vdim, vdim );
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
@@ -484,18 +483,17 @@ void NonlinearPressureIntegrator::AssembleFaceGrad( const mfem::FiniteElement& e
         el1.CalcDShape( eip, mDShape );
         Mult( mDShape, Ttr.InverseJacobian(), mGShape );
         Eigen::Map<const Eigen::MatrixXd> eigenGShape( mGShape.Data(), dof, vdim );
-        mdxdX = curCoords.transpose() * eigenGShape;
+        mdxdX = u.transpose() * eigenGShape + identity;
 
         Eigen::Map<const Eigen::MatrixXd> vec( shape.GetData(), 1, dof );
 
         Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
 
         dxdxi = mdxdX * Jac;
-        deltau = Eigen::kroneckerProduct( Eigen::MatrixXd::Identity( vdim, vdim ), eigenGShape * Jac ).transpose();
+        deltau = Eigen::kroneckerProduct( identity, eigenGShape * Jac ).transpose();
         mB = deltau / std::pow( dxdxi.dot( dxdxi ), .5 ) -
              dxdxi * ( dxdxi.transpose() * deltau ) / std::pow( dxdxi.dot( dxdxi ), 1.5 );
-        eigenMat -= ip.weight * val * Eigen::kroneckerProduct( Eigen::MatrixXd::Identity( vdim, vdim ), vec ).transpose() *
-                    r.toRotationMatrix() *
+        eigenMat -= ip.weight * val * Eigen::kroneckerProduct( identity, vec ).transpose() * r.toRotationMatrix() *
                     ( mB * dxdxi.norm() + dxdxi.normalized() * ( dxdxi.transpose() * deltau ) / dxdxi.norm() );
     }
 }
