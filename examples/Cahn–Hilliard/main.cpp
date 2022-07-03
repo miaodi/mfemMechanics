@@ -73,8 +73,9 @@ int main( int argc, char* argv[] )
     bool static_cond = false;
     bool visualization = 1;
     int ser_ref_levels = -1, par_ref_levels = -1;
-    double f_temp = 100.;
-    const char* petscrc_file = "../../data/petscSetting";
+    double f_temp = 1.;
+    int nev = 5;
+    const char* slepcrc_file = "../../data/slepcSetting";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -87,8 +88,9 @@ int main( int argc, char* argv[] )
                     "Number of times to refine the mesh uniformly in serial." );
     args.AddOption( &par_ref_levels, "-rp", "--refine-parallel",
                     "Number of times to refine the mesh uniformly in parallel." );
-    args.AddOption( &petscrc_file, "-petscopts", "--petscopts", "PetscOptions file to use." );
+    args.AddOption( &slepcrc_file, "-slepcopts", "--slepcopts", "SlepcOptions file to use." );
     args.AddOption( &f_temp, "-ft", "--ftemp", "Final temperature." );
+    args.AddOption( &nev, "-n", "--num-eigs", "Number of desired eigenmodes." );
     args.Parse();
     if ( !args.Good() )
     {
@@ -104,7 +106,7 @@ int main( int argc, char* argv[] )
         args.PrintOptions( cout );
     }
 
-    MFEMInitializePetsc( NULL, NULL, petscrc_file, NULL );
+    MFEMInitializeSlepc( NULL, NULL, slepcrc_file, NULL );
 
     // 2. Read the mesh from the given mesh file. We can handle triangular,
     //    quadrilateral, tetrahedral or hexahedral elements with the same code.
@@ -189,9 +191,13 @@ int main( int argc, char* argv[] )
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
     //    which satisfies the boundary conditions.
+    ParGridFunction x_gf( fespace );
     ParGridFunction x_ref( fespace );
+    ParGridFunction x_def( fespace );
+
     VectorFunctionCoefficient refconfig( dim, ReferenceConfiguration );
 
+    x_gf.ProjectCoefficient( refconfig );
     x_ref.ProjectCoefficient( refconfig );
 
     Vector Nu( pmesh->attributes.Max() );
@@ -213,78 +219,81 @@ int main( int argc, char* argv[] )
     plugin::Memorize mm( pmesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( ietm, mm );
-    intg->setNonlinear( true );
+    intg->setNonlinear( false );
     auto* nlf = new ParNonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
     nlf->SetEssentialTrueDofs( ess_tdof_list );
     nlf->SetGradientType( Operator::Type::PETSC_MATAIJ );
-    // nlf->SetAssemblyLevel( AssemblyLevel::NONE );
-
-    GeneralResidualMonitor newton_monitor( fespace->GetComm(), "Newton", 1 );
-    GeneralResidualMonitor j_monitor( fespace->GetComm(), "GMRES", 3 );
-
-    // {
-    // Vector r( fespace->GetTrueVSize() );
-    // Vector q( fespace->GetTrueVSize() );
-    // Vector X( fespace->GetTrueVSize() );
-    // plugin::SetLambdaToIntegrators( nlf, 1. + 0 );
-    // x_gf.ParallelProject( X );
-    // nlf->Mult( X, q );
-    // plugin::SetLambdaToIntegrators( nlf, 0 );
-    // nlf->Mult( X, r );
-    // // q.Print();
-    // mfem::out << "x: " << InnerProduct( fespace->GetComm(), X, X ) << " q: " << InnerProduct( fespace->GetComm(), q, q )
-    //           << " r: " << InnerProduct( fespace->GetComm(), r, r ) << "\n";
-    // }
-
-    // Set up the Jacobian solver
+    plugin::SetLambdaToIntegrators( nlf, 1 );
+    Vector X( fespace->GetTrueVSize() );
+    x_gf.ParallelProject( X );
+    PetscParMatrix K( fespace->GetComm(), &nlf->GetGradient( X ), mfem::Operator::PETSC_MATAIJ );
+    ofstream myfile;
     PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
 
-    auto newton_solver = new plugin::Crisfield( fespace->GetComm() );
+    auto newton_solver = new plugin::MultiNewtonAdaptive( fespace->GetComm() );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
     newton_solver->SetSolver( *petsc );
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
+    GeneralResidualMonitor newton_monitor( fespace->GetComm(), "Newton", 1 );
+    GeneralResidualMonitor j_monitor( fespace->GetComm(), "GMRES", 3 );
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-6 );
     newton_solver->SetAbsTol( 1e-10 );
-    newton_solver->SetMaxIter( 6 );
+    newton_solver->SetMaxIter( 2 );
     newton_solver->SetDelta( 1 );
-    newton_solver->SetMaxDelta( 15 );
-    newton_solver->SetMinDelta( 1e-5 );
-    newton_solver->SetPhi( .0 );
-    newton_solver->SetMaxStep( 10000 );
-
-    // 15. Save data in the ParaView format
-
-    Vector X( fespace->GetTrueVSize() );
-    X = 0.;
-    ParaViewDataCollection paraview_dc( "buckling1", pmesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetFormat( 1 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    ParGridFunction u( fespace );
-    u.Distribute( X );
-    paraview_dc.RegisterField( "Displace", &u );
-    newton_solver->SetDataCollection( &paraview_dc );
-    paraview_dc.Save();
+    newton_solver->SetMaxStep( 1 );
 
     Vector zero;
-    newton_solver->Mult( zero, u );
+    newton_solver->Mult( zero, X );
+
+    auto* nlf2 = new ParNonlinearForm( fespace );
+    nlf2->AddDomainIntegrator( intg );
+    intg->setGeomStiff( true );
+    nlf2->SetGradientType( Operator::Type::PETSC_MATAIJ );
+    plugin::SetLambdaToIntegrators( nlf2, 0 );
+    PetscParMatrix Kg( fespace->GetComm(), &nlf2->GetGradient( X ), mfem::Operator::PETSC_MATAIJ );
+
+    PetscParVector tmp( MPI_COMM_WORLD, fespace->GetTrueVSize() );
+    K.EliminateRowsCols( ess_tdof_list, tmp, tmp, 1e20 );
+    myfile.open( "K.dat" );
+    K.PrintMatlab( myfile );
+    myfile.close();
+    myfile.open( "Kg.dat" );
+    Kg.PrintMatlab( myfile );
+    myfile.close(); 
+    auto slepc = new SlepcEigenSolver( MPI_COMM_WORLD );
+    slepc->SetNumModes( nev );
+    slepc->SetWhichEigenpairs( SlepcEigenSolver::LARGEST_MAGNITUDE );
+    slepc->SetOperators( Kg, K );
+
+    slepc->Solve();
+    Array<double> eigenvalues;
+    eigenvalues.SetSize( nev );
+    for ( int i = 0; i < nev; i++ )
+    {
+        slepc->GetEigenvalue( i, eigenvalues[i] );
+    }
+    // // 15. Save data in the ParaView format
+    // ParaViewDataCollection paraview_dc( "buckling1", pmesh );
+    // paraview_dc.SetPrefixPath( "ParaView" );
+    // paraview_dc.SetLevelsOfDetail( order );
+    // paraview_dc.SetCycle( 0 );
+    // paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    // paraview_dc.SetTime( 0.0 ); // set the time
+    // paraview_dc.RegisterField( "Displace", &x_def );
+    // paraview_dc.Save();
     if ( fec )
     {
         delete fespace;
         delete fec;
     }
-    delete newton_solver;
     delete pmesh;
 
-    MFEMFinalizePetsc();
+    MFEMFinalizeSlepc();
 
     MPI_Finalize();
     return 0;

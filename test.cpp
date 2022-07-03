@@ -1,7 +1,7 @@
 #include "FEMPlugin.h"
 #include "Material.h"
 #include "mfem.hpp"
-#include "taco.h"
+#include <Fastor/Fastor.h>
 #include <fstream>
 #include <iostream>
 #include <unsupported/Eigen/KroneckerProduct>
@@ -128,55 +128,91 @@ int main()
     }
     Rotation2Dd r( EIGEN_PI / 2 );
     cout << r.toRotationMatrix() << endl;
+    // {
+    //     // Create formats
+    //     taco::Format sv4( { taco::Dense, taco::Dense, taco::Dense, taco::Dense } );
+    //     taco::Format sv2( { taco::Sparse, taco::Sparse } );
+
+    //     // Create tensors
+    //     taco::Tensor<double> I2( { 3, 3 }, sv2 );
+    //     taco::Tensor<double> I4( { 3, 3, 3, 3 }, sv4 );
+    //     taco::Tensor<double> C( { 3, 3, 3, 3 }, sv4 );
+
+    //     // Insert data into B and c
+    //     I2.insert( { 0, 0 }, 1. );
+    //     I2.insert( { 1, 1 }, 1. );
+    //     I2.insert( { 2, 2 }, 1. );
+
+    //     // Pack inserted data as described by the formats
+    //     I2.pack();
+
+    //     MatrixXd rand = MatrixXd::Random( 3, 3 );
+
+    //     taco::Array A2( taco::Float64, rand.data(), 9, taco::Array::UserOwns );
+
+    //     std::cout << A2 << std::endl;
+
+    //     // Lame
+
+    //     const double lambda = 1.;
+    //     const double mu = .5;
+
+    //     // Form a tensor-vector multiplication expression
+    //     taco::IndexVar i, j, k, l;
+    //     I4( i, j, k, l ) = .5 * ( I2( i, k ) * I2( j, l ) + I2( i, l ) * I2( j, k ) );
+
+    //     C( i, j, k, l ) = lambda * I2( i, j ) * I2( k, l ) + 2 * mu * I4( i, j, k, l );
+    //     C.evaluate();
+
+    //     Matrix6d EigenC;
+
+    //     for ( int i = 0; i < 6; i++ )
+    //     {
+    //         for ( int j = 0; j < 6; j++ )
+    //         {
+    //             EigenC( i, j ) = C.at( { (int)util::Voigt( i, 0 ), (int)util::Voigt( i, 1 ), (int)util::Voigt( j, 2 ),
+    //                                      (int)util::Voigt( j, 3 ) } );
+    //         }
+    //     }
+
+    // MFEM_VERIFY( 1 == 2, "fuck." );
+    //     std::cout << EigenC << std::endl;
+    // }
     {
-        // Create formats
-        taco::Format sv4( { taco::Dense, taco::Dense, taco::Dense, taco::Dense } );
-        taco::Format sv2( { taco::Sparse, taco::Sparse } );
+        enum
+        {
+            i,
+            j,
+            k,
+            l
+        };
 
-        // Create tensors
-        taco::Tensor<double> I2( { 3, 3 }, sv2 );
-        taco::Tensor<double> I4( { 3, 3, 3, 3 }, sv4 );
-        taco::Tensor<double> C( { 3, 3, 3, 3 }, sv4 );
+        // An example of Einstein summation
 
-        // Insert data into B and c
-        I2.insert( { 0, 0 }, 1. );
-        I2.insert( { 1, 1 }, 1. );
-        I2.insert( { 2, 2 }, 1. );
-
-        // Pack inserted data as described by the formats
-        I2.pack();
-
-        MatrixXd rand = MatrixXd::Random( 3, 3 );
-
-        taco::Array A2( taco::Float64, rand.data(), 9, taco::Array::UserOwns );
-
-        std::cout << A2 << std::endl;
-
-        // Lame
-
+        Fastor::Tensor<double, 3, 3> I2;
+        I2.eye();
+        Fastor::Tensor<double, 3, 3, 3, 3> I4 = .5 * ( Fastor::permute<Fastor::Index<i, k, j, l>>( Fastor::outer( I2, I2 ) ) +
+                                                       Fastor::permute<Fastor::Index<i, l, j, k>>( Fastor::outer( I2, I2 ) ) );
         const double lambda = 1.;
         const double mu = .5;
-
-        // Form a tensor-vector multiplication expression
-        taco::IndexVar i, j, k, l;
-        I4( i, j, k, l ) = .5 * ( I2( i, k ) * I2( j, l ) + I2( i, l ) * I2( j, k ) );
-
-        C( i, j, k, l ) = lambda * I2( i, j ) * I2( k, l ) + 2 * mu * I4( i, j, k, l );
-        C.evaluate();
-
+        Fastor::Tensor<double, 3, 3, 3, 3> C = lambda * Fastor::outer( I2, I2 ) + 2 * mu * I4;
         Matrix6d EigenC;
-
         for ( int i = 0; i < 6; i++ )
         {
             for ( int j = 0; j < 6; j++ )
             {
-                EigenC( i, j ) = C.at( { (int)util::Voigt( i, 0 ), (int)util::Voigt( i, 1 ), (int)util::Voigt( j, 2 ),
-                                         (int)util::Voigt( j, 3 ) } );
+                EigenC( i, j ) = C( (int)util::Voigt( i, 0 ), (int)util::Voigt( i, 1 ), (int)util::Voigt( j, 2 ),
+                                    (int)util::Voigt( j, 3 ) );
             }
         }
-
-    MFEM_VERIFY( 1 == 2, "fuck." );
         std::cout << EigenC << std::endl;
+
+        // std::cout << Fastor::permute<Fastor::Index<i, k, j, l>>( Fastor::outer( I2, I2 ) ) << std::endl;
+        // std::cout << Fastor::permute<Fastor::Index<i, l, j, k>>( Fastor::outer( I2, I2 ) ) << std::endl;
+        // std::cout << Fastor::permute<Fastor::Index<i, j, k, l>>(
+        //                  Fastor::einsum<Fastor::Index<i, k>, Fastor::Index<j, l>>( I2, I2 ) +
+        //                  Fastor::einsum<Fastor::Index<i, l>, Fastor::Index<j, k>>( I2, I2 ) )
+        //           << std::endl;
     }
     return 0;
 }
