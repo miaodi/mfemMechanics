@@ -1,8 +1,4 @@
-
-#include "FEMPlugin.h"
-#include "Material.h"
-#include "NeoHookeanMaterial.h"
-#include "PostProc.h"
+#include "Plugin.h"
 #include "mfem.hpp"
 #include <fstream>
 #include <iostream>
@@ -52,7 +48,7 @@ void ReferenceConfiguration( const Vector& x, Vector& y )
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "../gmshBeam.msh";
+    const char* mesh_file = "../data/gmshBeam.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -145,18 +141,6 @@ int main( int argc, char* argv[] )
     ess_bdr[0] = 1;
     fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
 
-    // 8. Define the solution vector x as a finite element grid function
-    //    corresponding to fespace. Initialize x with initial guess of zero,
-    //    which satisfies the boundary conditions.
-    GridFunction x_gf( fespace );
-    GridFunction x_ref( fespace );
-    GridFunction x_def( fespace );
-
-    VectorFunctionCoefficient refconfig( dim, ReferenceConfiguration );
-
-    x_gf.ProjectCoefficient( refconfig );
-    x_ref.ProjectCoefficient( refconfig );
-
     VectorArrayCoefficient f( dim );
     for ( int i = 0; i < dim; i++ )
     {
@@ -224,6 +208,9 @@ int main( int argc, char* argv[] )
 
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
 
+    GridFunction u( fespace );
+    u = 0.;
+
     // 15. Save data in the ParaView format
     ParaViewDataCollection paraview_dc( "Beam", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
@@ -232,19 +219,19 @@ int main( int argc, char* argv[] )
     paraview_dc.SetDataFormat( VTKFormat::BINARY );
     paraview_dc.SetHighOrderOutput( true );
     paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x_def );
+    paraview_dc.RegisterField( "Displace", &u );
 
     paraview_dc.Save();
+
+    Vector pull_force( mesh->bdr_attributes.Max() );
+    pull_force = 0.0;
+    pull_force( 1 ) = 40;
+    f.Set( 2, new PWConstCoefficient( pull_force ) );
     for ( int i = 1; i <= 10; i++ )
     {
-        Vector pull_force( mesh->bdr_attributes.Max() );
-        pull_force = 0.0;
-        pull_force( 1 ) = 4 * i;
-        f.Set( 2, new PWConstCoefficient( pull_force ) );
         Vector zero;
-        newton_solver->Mult( zero, x_gf );
-        // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
-        subtract( x_gf, x_ref, x_def );
+        plugin::SetLambdaToIntegrators( nlf, .1 * i );
+        newton_solver->Mult( zero, u );
         paraview_dc.SetTime( i ); // set the time
         paraview_dc.SetCycle( i );
         paraview_dc.Save();

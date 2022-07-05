@@ -191,24 +191,29 @@ int main()
 
         Fastor::Tensor<double, 3, 3> I2;
         I2.eye();
-        Fastor::Tensor<double, 3, 3, 3, 3> I4 = .5 * ( Fastor::permute<Fastor::Index<i, k, j, l>>( Fastor::outer( I2, I2 ) ) +
-                                                       Fastor::permute<Fastor::Index<i, l, j, k>>( Fastor::outer( I2, I2 ) ) );
+        Fastor::Tensor<double, 3, 3, 3, 3> I4 =
+            .5 * ( Fastor::permutation<Fastor::Index<i, k, j, l>>( Fastor::outer( I2, I2 ) ) +
+                   Fastor::permutation<Fastor::Index<i, l, j, k>>( Fastor::outer( I2, I2 ) ) );
         const double lambda = 1.;
         const double mu = .5;
         Fastor::Tensor<double, 3, 3, 3, 3> C = lambda * Fastor::outer( I2, I2 ) + 2 * mu * I4;
         Matrix6d EigenC;
-        for ( int i = 0; i < 6; i++ )
-        {
-            for ( int j = 0; j < 6; j++ )
-            {
-                EigenC( i, j ) = C( (int)util::Voigt( i, 0 ), (int)util::Voigt( i, 1 ), (int)util::Voigt( j, 2 ),
-                                    (int)util::Voigt( j, 3 ) );
-            }
-        }
+        // for ( int i = 0; i < 6; i++ )
+        // {
+        //     for ( int j = 0; j < 6; j++ )
+        //     {
+        //         EigenC( i, j ) = C( (int)util::Voigt( i, 0 ), (int)util::Voigt( i, 1 ), (int)util::Voigt( j, 2 ),
+        //                             (int)util::Voigt( j, 3 ) );
+        //     }
+        // }
+
         std::cout << EigenC << std::endl;
 
-        // std::cout << Fastor::permute<Fastor::Index<i, k, j, l>>( Fastor::outer( I2, I2 ) ) << std::endl;
-        // std::cout << Fastor::permute<Fastor::Index<i, l, j, k>>( Fastor::outer( I2, I2 ) ) << std::endl;
+        Fastor::_voigt<double, 3, 3, 3, 3>( C.data(), EigenC.data() );
+
+        std::cout << EigenC << std::endl;
+        // std::cout << Fastor::permutation<Fastor::Index<i, k, j, l>>( Fastor::outer( I2, I2 ) ) << std::endl;
+        // std::cout << Fastor::permutation<Fastor::Index<i, l, j, k>>( Fastor::outer( I2, I2 ) ) << std::endl;
         // std::cout << Fastor::permute<Fastor::Index<i, j, k, l>>(
         //                  Fastor::einsum<Fastor::Index<i, k>, Fastor::Index<j, l>>( I2, I2 ) +
         //                  Fastor::einsum<Fastor::Index<i, l>, Fastor::Index<j, k>>( I2, I2 ) )

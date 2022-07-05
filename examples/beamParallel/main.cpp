@@ -1,7 +1,6 @@
 
-#include "FEMPlugin.h"
-#include "Material.h"
-#include "PostProc.h"
+
+#include "Plugin.h"
 #include "mfem.hpp"
 #include <fstream>
 #include <iostream>
@@ -70,12 +69,12 @@ int main( int argc, char* argv[] )
     MPI_Comm_rank( MPI_COMM_WORLD, &myid );
 
     // 1. Parse command-line options.
-    const char* mesh_file = "../gmshBeam.msh";
+    const char* mesh_file = "../data/gmshBeam.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
     int ser_ref_levels = -1, par_ref_levels = -1;
-    const char* petscrc_file = "";
+    const char* petscrc_file = "../data/petscSetting";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -165,24 +164,6 @@ int main( int argc, char* argv[] )
     ess_bdr[0] = 1;
     fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
 
-    // 8. Define the solution vector x as a finite element grid function
-    //    corresponding to fespace. Initialize x with initial guess of zero,
-    //    which satisfies the boundary conditions.
-    ParGridFunction x_gf( fespace );
-    ParGridFunction x_ref( fespace );
-    ParGridFunction x_def( fespace );
-
-    VectorFunctionCoefficient refconfig( dim, ReferenceConfiguration );
-
-    x_gf.ProjectCoefficient( refconfig );
-    x_ref.ProjectCoefficient( refconfig );
-
-    VectorArrayCoefficient f( dim );
-    for ( int i = 0; i < dim; i++ )
-    {
-        f.Set( i, new ConstantCoefficient( 0.0 ) );
-    }
-
     Vector Nu( pmesh->attributes.Max() );
     Nu = .0;
     PWConstCoefficient nu_func( Nu );
@@ -209,7 +190,7 @@ int main( int argc, char* argv[] )
     // Set up the Jacobian solver
     PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
 
-    auto newton_solver = new NewtonSolver( fespace->GetComm() );
+    auto newton_solver = new plugin::MultiNewtonAdaptive( fespace->GetComm() );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -219,54 +200,35 @@ int main( int argc, char* argv[] )
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-7 );
     newton_solver->SetAbsTol( 1e-8 );
-    newton_solver->SetMaxIter( 20 );
+    newton_solver->SetMaxIter( 6 );
+    newton_solver->SetDelta( .1 );
+
+    VectorArrayCoefficient f( dim );
+    for ( int i = 0; i < dim; i++ )
+    {
+        f.Set( i, new ConstantCoefficient( 0.0 ) );
+    }
 
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
-    Vector X( fespace->GetTrueVSize() );
-    x_gf.ParallelProject( X );
-    for ( int i = 1; i <= 10; i++ )
-    {
-        // PetscParMatrix petscMat( fespace->GetComm(), &nlf->GetGradient( X ), mfem::Operator::PETSC_MATAIJ );
+    Vector pull_force( pmesh->bdr_attributes.Max() );
+    pull_force = 0.0;
+    pull_force( 1 ) = 40;
+    f.Set( 2, new PWConstCoefficient( pull_force ) );
 
-        // petscMat.Print( "petscMat.bin", true );
-        // break;
-        // ofstream myfile;
-        // myfile.open( "example.dat" );
-        // mfem::Operator* A = &nlf->GetGradient( X );
-        // mfem::OperatorHandle ah( A, false );
-
-        // auto& ar = nlf->GetEssentialTrueDofs();
-        // PetscParVector dummy(fespace->GetComm(),0);
-        // ah.As<PetscParMatrix>()->EliminateRowsCols(ess_tdof_list, dummy, dummy, 1e6);
-        // ah.As<PetscParMatrix>()->Print( "petscMat.bin", true );
-        // if ( myid == 0 )
-        // {
-        //     cout << ah.As<PetscParMatrix>()->Height() << " : " << ah.As<PetscParMatrix>()->Width() << endl;
-        //     cout << ar.Size() << endl;
-        // }
-        // myfile.close();
-        // break;
-
-        Vector pull_force( pmesh->bdr_attributes.Max() );
-        pull_force = 0.0;
-        pull_force( 1 ) = 4 * i;
-        f.Set( 2, new PWConstCoefficient( pull_force ) );
-        Vector zero;
-        newton_solver->Mult( zero, X );
-    }
-    x_gf.Distribute( X );
-    // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
-    subtract( x_gf, x_ref, x_def );
+    ParGridFunction u( fespace );
+    u = 0.;
+    Vector zero;
+    newton_solver->Mult( zero, u );
 
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "test", pmesh );
+    ParaViewDataCollection paraview_dc( "beamParallel", pmesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );
     paraview_dc.SetDataFormat( VTKFormat::BINARY );
     paraview_dc.SetHighOrderOutput( true );
     paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x_def );
+    paraview_dc.RegisterField( "Displace", &u );
     paraview_dc.Save();
     if ( fec )
     {

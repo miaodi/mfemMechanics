@@ -403,6 +403,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     }
     if ( auto& par_grid_x = dynamic_cast<mfem::ParGridFunction&>( x ) )
     {
+        par_grid_x.Distribute( *u );
         delete u;
     }
 }
@@ -426,7 +427,19 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 {
     double cur_lambda = 0.;
     int step = 0;
-    u_cur = x;
+
+    mfem::Vector* u;
+    if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
+    {
+        u = new mfem::Vector( par_grid_x->ParFESpace()->GetTrueVSize() );
+        par_grid_x->ParallelProject( *u );
+    }
+    else
+    {
+        u = &x;
+    }
+
+    u_cur = *u;
     for ( ; true; step++ )
     {
         if ( step == max_steps )
@@ -447,19 +460,19 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         delta_lambda = std::min( delta_lambda, 1. - cur_lambda );
         SetLambdaToIntegrators( oper, delta_lambda + cur_lambda );
 
-        mfem::NewtonSolver::Mult( b, x );
+        mfem::NewtonSolver::Mult( b, *u );
         if ( GetConverged() )
         {
             cur_lambda += delta_lambda;
-            u_cur = x;
+            u_cur = *u;
         }
         else
         {
-            x = u_cur;
+            *u = u_cur;
         }
 
 #ifdef MFEM_USE_MPI
-        int rank;
+        int rank = 0;
         if ( this->GetComm() != MPI_COMM_NULL )
             MPI_Comm_rank( this->GetComm(), &rank );
         if ( rank == 0 )
@@ -468,8 +481,12 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         }
 #else
         mfem::out << util::ProgressBar( cur_lambda ) << '\n';
-
 #endif
+    }
+    if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
+    {
+        par_grid_x->Distribute( *u );
+        delete u;
     }
 }
 } // namespace plugin
