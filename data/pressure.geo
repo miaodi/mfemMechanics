@@ -26,8 +26,5 @@ Physical Curve("left") = {4};
 Physical Curve("right") = {2};
 Physical Curve("bottom") = {1};
 
-Physical Point("lowerleft") = {1};
-Physical Point("lowerright") = {2};
-
 Mesh.MshFileVersion = 2.2;
 Mesh 2;

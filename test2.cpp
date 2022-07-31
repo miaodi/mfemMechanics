@@ -60,7 +60,7 @@ void InitialDeformation( const Vector& x, Vector& y )
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "/home/miaodi/repo/mfem_test/pressure.msh";
+    const char* mesh_file = "../../data/pressure.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -143,15 +143,6 @@ int main( int argc, char* argv[] )
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
     //    which satisfies the boundary conditions.
-    GridFunction x_gf( fespace );
-    GridFunction x_ref( fespace );
-    GridFunction x_def( fespace );
-
-    VectorFunctionCoefficient deform( dim, InitialDeformation );
-    VectorFunctionCoefficient refconfig( dim, ReferenceConfiguration );
-
-    x_gf.ProjectCoefficient( refconfig );
-    x_ref.ProjectCoefficient( refconfig );
 
     Vector Mu( mesh->attributes.Max() );
     Mu = 1.61148e6;
@@ -204,14 +195,24 @@ int main( int argc, char* argv[] )
     newton_solver->SetPhi( 1 );
     newton_solver->SetMaxStep( 4000 );
 
-    PWConstCoefficient f;
-    auto pressure = plugin::NonlinearPressureIntegrator( f );
-    nlf->AddBdrFaceIntegrator( &pressure );
-    Vector pressure_force( mesh->bdr_attributes.Max() );
-    pressure_force = 0.0;
-    pressure_force( 3 ) =  10;
-    f.UpdateConstants( pressure_force );
-    nlf->AddBdrFaceIntegrator( new plugin::NonlinearPressureIntegrator( f ) );
+    // PWConstCoefficient f;
+    // auto pressure = plugin::NonlinearPressureIntegrator( f );
+    // nlf->AddBdrFaceIntegrator( &pressure );
+    // Vector pressure_force( mesh->bdr_attributes.Max() );
+    // pressure_force = 0.0;
+    // pressure_force( 3 ) =  10;
+    // f.UpdateConstants( pressure_force );
+    // nlf->AddBdrFaceIntegrator( new plugin::NonlinearPressureIntegrator( f ) );
+    VectorArrayCoefficient f1( dim );
+    for ( int i = 0; i < dim; i++ )
+    {
+        f1.Set( i, new ConstantCoefficient( 0.0 ) );
+    }
+    Vector bottom_force( mesh->bdr_attributes.Max() );
+    bottom_force = .0;
+    bottom_force( 3 ) = 10;
+    f1.Set( 1, new PWConstCoefficient( bottom_force ) );
+    nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f1 ) );
 
     VectorArrayCoefficient f2( dim );
     for ( int i = 0; i < dim; i++ )
@@ -220,15 +221,13 @@ int main( int argc, char* argv[] )
     }
     Vector push_force( mesh->bdr_attributes.Max() );
     push_force = .0;
-    push_force( 2 ) = -3e5;
+    push_force( 2 ) = -1e5;
     f2.Set( 0, new PWConstCoefficient( push_force ) );
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f2 ) );
 
     Vector zero;
-    newton_solver->Mult( zero, x_gf );
-
-    // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
-    subtract( x_gf, x_ref, x_def );
+    GridFunction u( fespace );
+    newton_solver->Mult( zero, u );
 
     // 15. Save data in the ParaView format
     ParaViewDataCollection paraview_dc( "test2", mesh );
@@ -238,7 +237,7 @@ int main( int argc, char* argv[] )
     paraview_dc.SetDataFormat( VTKFormat::BINARY );
     paraview_dc.SetHighOrderOutput( true );
     paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x_def );
+    paraview_dc.RegisterField( "Displace", &u );
     paraview_dc.Save();
     if ( fec )
     {

@@ -60,7 +60,7 @@ void InitialDeformation( const Vector& x, Vector& y )
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/3DBeamBuckle.msh";
+    const char* mesh_file = "../../data/pressure.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -122,69 +122,47 @@ int main( int argc, char* argv[] )
     }
     cout << "Number of finite element unknowns: " << fespace->GetTrueVSize() << endl << "Assembling: " << flush;
 
-    
     // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
     //    In this example, the boundary conditions are defined by marking only
     //    boundary attribute 1 from the mesh as essential and converting it to a
     //    list of true dofs.
     Array<int> ess_tdof_list, ess_bdr( mesh->bdr_attributes.Max() ), temp_list;
     ess_bdr = 0;
-    ess_bdr[28] = 1; // left
-    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 0 );
-    ess_tdof_list.Append( temp_list );
+    ess_bdr[1] = 1;
 
+    fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
     ess_bdr = 0;
-    ess_bdr[29] = 1; // right
-    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 0 );
-    ess_tdof_list.Append( temp_list );
-
-    ess_bdr = 0;
-    ess_bdr[27] = 1; // bottom
+    ess_bdr[2] = 1;
     fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 1 );
-    ess_tdof_list.Append( temp_list );
-    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 2 );
     ess_tdof_list.Append( temp_list );
 
     printf( "Mesh is %i dimensional.\n", dim );
     printf( "Number of mesh attributes: %i\n", mesh->attributes.Size() );
     printf( "Number of boundary attributes: %i\n", mesh->bdr_attributes.Size() );
-    printf( "Max of mesh attributes: %i\n", mesh->attributes.Max() );
-    printf( "Max of boundary attributes: %i\n", mesh->bdr_attributes.Max() );
 
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
     //    which satisfies the boundary conditions.
-    GridFunction x_gf( fespace );
-    GridFunction x_ref( fespace );
-    GridFunction x_def( fespace );
 
-    VectorFunctionCoefficient deform( dim, InitialDeformation );
-    VectorFunctionCoefficient refconfig( dim, ReferenceConfiguration );
+    Vector Mu( mesh->attributes.Max() );
+    Mu = 1.61148e6;
+    // Mu = 80.194e6;
 
-    x_gf.ProjectCoefficient( refconfig );
-    x_ref.ProjectCoefficient( refconfig );
+    PWConstCoefficient mu_func( Mu );
 
-    Vector Nu( mesh->attributes.Max() );
-    Nu = .3;
-    PWConstCoefficient nu_func( Nu );
+    Vector Lambda( mesh->attributes.Max() );
+    Lambda = 499.92568e6;
+    // Lambda = 400889.806e6;
 
-    Vector E( mesh->attributes.Max() );
-    E = 12.8e9;
-    PWConstCoefficient E_func( E );
+    PWConstCoefficient lambda_func( Lambda );
 
-    Vector CTE( mesh->attributes.Max() );
-    CTE = 23.1e-6;
-    PWConstCoefficient CTE_func( CTE );
-
-    IsotropicElasticThermalMaterial ietm( E_func, nu_func, CTE_func );
-    ietm.setInitialTemp( 0 );
-    ietm.setFinalTemp( 2000 );
+    NeoHookeanMaterial nh( mu_func, lambda_func, NeoHookeanType::Poly1 );
 
     plugin::Memorize mm( mesh );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( ietm, mm );
+    auto intg = new plugin::NonlinearElasticityIntegrator( nh, mm );
+
     NonlinearForm* nlf = new NonlinearForm( fespace );
-    intg->setNonlinear( true );
     // {
     //     nlf->AddDomainIntegrator( new HyperelasticNLFIntegrator( new NeoHookeanModel( 1.5e6, 10e9 ) ) );
     // }
@@ -198,7 +176,7 @@ int main( int argc, char* argv[] )
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
 
     // Set up the Jacobian solver
-    auto j_gmres = new KLUSolver();
+    auto j_gmres = new UMFPackSolver();
 
     auto newton_solver = new plugin::Crisfield();
 
@@ -208,31 +186,61 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-6 );
-    newton_solver->SetAbsTol( 1e-10 );
+    newton_solver->SetRelTol( 1e-7 );
+    newton_solver->SetAbsTol( 1e-11 );
     newton_solver->SetMaxIter( 6 );
-    newton_solver->SetDelta( .01 );
+    newton_solver->SetPrintLevel( 0 );
+    newton_solver->SetDelta( .001 );
     newton_solver->SetMaxDelta( 10 );
-    newton_solver->SetMinDelta( 1e-5 );
-    newton_solver->SetPhi( .0 );
-    newton_solver->SetMaxStep( 10000 );
+    newton_solver->SetPhi( 1 );
+    newton_solver->SetMaxStep( 4000 );
 
-    Vector zero;
-    newton_solver->Mult( zero, x_gf );
+    // PWConstCoefficient f;
+    // auto pressure = plugin::NonlinearPressureIntegrator( f );
+    // nlf->AddBdrFaceIntegrator( &pressure );
+    // Vector pressure_force( mesh->bdr_attributes.Max() );
+    // pressure_force = 0.0;
+    // pressure_force( 3 ) =  10;
+    // f.UpdateConstants( pressure_force );
+    // nlf->AddBdrFaceIntegrator( new plugin::NonlinearPressureIntegrator( f ) );
 
-    // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
-    subtract( x_gf, x_ref, x_def );
+    VectorArrayCoefficient f1( dim );
+    for ( int i = 0; i < dim; i++ )
+    {
+        f1.Set( i, new ConstantCoefficient( 0.0 ) );
+    }
+    Vector bottom_force( mesh->bdr_attributes.Max() );
+    bottom_force = .0;
+    bottom_force( 3 ) = 10;
+    f1.Set( 1, new PWConstCoefficient( bottom_force ) );
+    nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f1 ) );
+
+    VectorArrayCoefficient f2( dim );
+    for ( int i = 0; i < dim; i++ )
+    {
+        f2.Set( i, new ConstantCoefficient( 0.0 ) );
+    }
+    Vector push_force( mesh->bdr_attributes.Max() );
+    push_force = .0;
+    push_force( 2 ) = -2e5;
+    f2.Set( 0, new PWConstCoefficient( push_force ) );
+    nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f2 ) );
+
+    GridFunction u( fespace );
 
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "beamBuckle", mesh );
+    ParaViewDataCollection paraview_dc( "postBuckling2D", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );
     paraview_dc.SetDataFormat( VTKFormat::BINARY );
     paraview_dc.SetHighOrderOutput( true );
     paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x_def );
+    paraview_dc.RegisterField( "Displace", &u );
+    newton_solver->SetDataCollection( &paraview_dc );
     paraview_dc.Save();
+    Vector zero;
+    newton_solver->Mult( zero, u );
     if ( fec )
     {
         delete fespace;

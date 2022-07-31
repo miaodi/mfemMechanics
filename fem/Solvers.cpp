@@ -1,6 +1,7 @@
 #include "Solvers.h"
 #include "FEMPlugin.h"
 #include "PrettyPrint.h"
+#include "util.h"
 #include <deque>
 #include <slepc.h>
 #include <tuple>
@@ -88,7 +89,7 @@ void Crisfield::SetOperator( const mfem::Operator& op )
     q.SetSize( width );
     delta_u_bar.SetSize( width );
     delta_u_t.SetSize( width );
-    delta_u_t_p_Delta_x.SetSize( width );
+    delta_u_t_p_Delta_u.SetSize( width );
     Delta_u_prev.SetSize( width );
 }
 
@@ -125,14 +126,12 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 {
     MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
     MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
-
-    std::deque<std::tuple<mfem::Vector, double, double>> prevSolutions;
     const double goldenRatio = ( 1. + std::sqrt( 5 ) ) / 2;
     mfem::Vector* u;
-    if ( auto& par_grid_x = dynamic_cast<mfem::ParGridFunction&>( x ) )
+    if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
     {
-        u = new mfem::Vector( par_grid_x.ParFESpace()->GetTrueVSize() );
-        par_grid_x.ParallelProject( *u );
+        u = new mfem::Vector( par_grid_x->ParFESpace()->GetTrueVSize() );
+        par_grid_x->ParallelProject( *u );
     }
     else
     {
@@ -220,51 +219,54 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             prec->SetOperator( *grad );
 
             prec->Mult( q, delta_u_t );
-            if ( petscPrec && !petscPrec->GetConverged() )
-            {
-                if ( prevSolutions.empty() )
-                {
-                    return;
-                }
-                *u = std::get<0>( prevSolutions.back() );
-                lambda = std::get<1>( prevSolutions.back() );
-                L = std::get<2>( prevSolutions.back() );
-                prevSolutions.pop_back();
-                converged = false;
-                break;
-            }
             // mfem::OperatorHandle gradHandle( grad, false );
             // PetscBool isSymmetric;
             // MatIsSymmetric( ( mfem::petsc::Mat )( *gradHandle.As<mfem::PetscParMatrix>() ), 0., &isSymmetric );
 
             prec->Mult( r, delta_u_bar );
-            if ( petscPrec && !petscPrec->GetConverged() )
+
+            add( Delta_u, delta_u_bar, delta_u_t_p_Delta_u );
+
+            const double a0 = Dot( delta_u_t, delta_u_t ) + phi * phi;
+            const double b0 = 2 * Dot( Delta_u, delta_u_t ) + 2 * phi * phi * Delta_lambda;
+            const double b1 = 2 * Dot( delta_u_bar, delta_u_t );
+            const double c0 = Dot( Delta_u, Delta_u ) + phi * phi * Delta_lambda * Delta_lambda - L * L;
+            const double c1 = 2 * Dot( Delta_u, delta_u_bar );
+            const double c2 = Dot( delta_u_bar, delta_u_bar );
+
+            const double as = b1 * b1 - 4 * a0 * c2;
+            const double bs = 2 * b0 * b1 - 4 * a0 * c1;
+            const double cs = b0 * b0 - 4 * a0 * c0;
+
+            double ds = 1.;
+            auto func = [as, bs, cs]( const double ds ) { return as * ds * ds + bs * ds + cs; };
+            if ( func( ds ) <= 0 )
             {
-                if ( prevSolutions.empty() )
+                util::mfemOut( util::Color::YELLOW, "Complex root detected, adaptive step size (ds) is activated!\n",
+                               util::Color::RESET );
+                const double beta1 = ( -bs - std::sqrt( bs * bs - 4 * as * cs ) ) / ( 2 * as );
+                const double beta2 = ( -bs + std::sqrt( bs * bs - 4 * as * cs ) ) / ( 2 * as );
+                util::mfemOut( util::Color::YELLOW, "beta1: ", beta1, ", beta2: ", beta2, '\n', util::Color::RESET );
+                ds = std::min( beta1 - .001, ds );
+                util::mfemOut( util::Color::YELLOW, "ds=: ", ds, util::Color::RESET );
+                if ( ds < .2 )
                 {
-                    return;
+                    util::mfemOut( util::Color::YELLOW, ", which is smaller than ds_min, restart!\n ", util::Color::RESET );
+                    converged = false;
+                    break;
                 }
-                *u = std::get<0>( prevSolutions.back() );
-                lambda = std::get<1>( prevSolutions.back() );
-                L = std::get<2>( prevSolutions.back() );
-                prevSolutions.pop_back();
-                converged = false;
-                break;
-            }
-            add( Delta_u, delta_u_bar, delta_u_t_p_Delta_x );
-
-            const double a1 = Dot( delta_u_t, delta_u_t ) + phi * phi;
-            const double a2 = 2 * Dot( delta_u_t_p_Delta_x, delta_u_t ) + 2 * phi * phi * Delta_lambda;
-            const double a3 = Dot( delta_u_t_p_Delta_x, delta_u_t_p_Delta_x ) + phi * phi * Delta_lambda * Delta_lambda - L * L;
-
-            if ( a2 * a2 - 4 * a1 * a3 < 0. )
-            {
-                converged = false;
-                break;
+                util::mfemOut( "func(ds)= ", func( ds ), '\n' );
             }
 
-            delta_lambda1 = ( -1. * a2 + std::sqrt( a2 * a2 - 4 * a1 * a3 ) ) / ( 2. * a1 );
-            delta_lambda2 = ( -1. * a2 - std::sqrt( a2 * a2 - 4 * a1 * a3 ) ) / ( 2. * a1 );
+            const double a = a0;
+            const double b = b0 + b1 * ds;
+            const double c = c0 + c1 * ds + c2 * ds * ds;
+
+            delta_lambda1 = ( -1. * b + std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
+            delta_lambda2 = ( -1. * b - std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
+
+            util::mfemOut( "delta_lambda1: ", delta_lambda1, ", delta_lambda2: ", delta_lambda2, "\n", util::Color::RESET );
+
             if ( it == 0 )
             {
                 if ( step == 0 )
@@ -297,7 +299,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
             // mfem::out << "delta_lambda: " << delta_lambda << '\n';
 
-            add( delta_u_bar, delta_lambda, delta_u_t, delta_u );
+            add( ds, delta_u_bar, delta_lambda, delta_u_t, delta_u );
 
             if ( it == 0 )
             {
@@ -349,12 +351,8 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         {
             if ( Delta_lambda < 0 )
             {
-                mfem::out << "alert !!! buckled!!\n";
+                util::mfemOut( "alert !!! buckled!!\n" );
             }
-
-            prevSolutions.push_back( std::make_tuple( *u, lambda, L ) );
-            if ( prevSolutions.size() > 5 )
-                prevSolutions.pop_front();
             lambda += Delta_lambda;
             *u += Delta_u;
             Delta_lambda_prev = Delta_lambda;
@@ -377,9 +375,9 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             {
                 if ( step % 5 == 0 )
                 {
-                    if ( auto& par_grid_x = dynamic_cast<mfem::ParGridFunction&>( x ) )
+                    if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
                     {
-                        par_grid_x.Distribute( *u );
+                        par_grid_x->Distribute( *u );
                     }
                     data->SetCycle( count );
                     data->SetTime( count++ );
@@ -387,23 +385,11 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 }
             }
         }
-
-#ifdef MFEM_USE_MPI
-        int rank = 0;
-        if ( this->GetComm() != MPI_COMM_NULL )
-            MPI_Comm_rank( this->GetComm(), &rank );
-        if ( rank == 0 )
-        {
-            mfem::out << util::ProgressBar( lambda, converged ) << '\n';
-        }
-#else
-        mfem::out << util::ProgressBar( lambda, converged ) << '\n';
-
-#endif
+        util::mfemOut( util::ProgressBar( lambda, converged ), '\n' );
     }
-    if ( auto& par_grid_x = dynamic_cast<mfem::ParGridFunction&>( x ) )
+    if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
     {
-        par_grid_x.Distribute( *u );
+        par_grid_x->Distribute( *u );
         delete u;
     }
 }
