@@ -131,9 +131,6 @@ int main( int argc, char* argv[] )
     ess_bdr[1] = 1;
 
     fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
-    ess_bdr = 0;
-    ess_bdr[2] = 1;
-    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 1 );
     ess_tdof_list.Append( temp_list );
 
     printf( "Mesh is %i dimensional.\n", dim );
@@ -144,33 +141,22 @@ int main( int argc, char* argv[] )
     //    corresponding to fespace. Initialize x with initial guess of zero,
     //    which satisfies the boundary conditions.
 
-    Vector Mu( mesh->attributes.Max() );
-    Mu = 1.61148e6;
-    // Mu = 80.194e6;
+    Vector Nu( mesh->attributes.Max() );
+    Nu = .3;
+    PWConstCoefficient nu_func( Nu );
 
-    PWConstCoefficient mu_func( Mu );
+    Vector E( mesh->attributes.Max() );
+    E = 1e7;
+    PWConstCoefficient E_func( E );
 
-    Vector Lambda( mesh->attributes.Max() );
-    Lambda = 499.92568e6;
-    // Lambda = 400889.806e6;
-
-    PWConstCoefficient lambda_func( Lambda );
-
-    NeoHookeanMaterial nh( mu_func, lambda_func, NeoHookeanType::Poly1 );
-
+    IsotropicElasticMaterial iem( E_func, nu_func );
     plugin::Memorize mm( mesh );
-
-    auto intg = new plugin::NonlinearElasticityIntegrator( nh, mm );
-
-    NonlinearForm* nlf = new NonlinearForm( fespace );
-    // {
-    //     nlf->AddDomainIntegrator( new HyperelasticNLFIntegrator( new NeoHookeanModel( 1.5e6, 10e9 ) ) );
-    // }
+    auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
+    intg->setNonlinear( true );
+    auto* nlf = new NonlinearForm( fespace );
+    
     nlf->AddDomainIntegrator( intg );
     nlf->SetEssentialTrueDofs( ess_tdof_list );
-    // Vector r;
-    // r.SetSize(nlf->Height());
-    // nlf->Mult(x_gf, r);
 
     GeneralResidualMonitor newton_monitor( "Newton", 1 );
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
@@ -191,7 +177,7 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxIter( 6 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .001 );
-    newton_solver->SetMaxDelta( 10 );
+    newton_solver->SetMaxDelta( .1 );
     newton_solver->SetPhi( 1 );
     newton_solver->SetMaxStep( 4000 );
 
@@ -222,7 +208,7 @@ int main( int argc, char* argv[] )
     }
     Vector push_force( mesh->bdr_attributes.Max() );
     push_force = .0;
-    push_force( 2 ) = -2e5;
+    push_force( 2 ) = -1e5;
     f2.Set( 0, new PWConstCoefficient( push_force ) );
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f2 ) );
 
