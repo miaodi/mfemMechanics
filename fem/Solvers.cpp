@@ -137,11 +137,11 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     {
         u = &x;
     }
-    mfem::PetscSolver* petscPrec = nullptr;
-    if ( dynamic_cast<mfem::PetscSolver*>( prec ) )
-    {
-        petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
-    }
+    // mfem::PetscSolver* petscPrec = nullptr;
+    // if ( dynamic_cast<mfem::PetscSolver*>( prec ) )
+    // {
+    //     petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
+    // }
     int step = 0;
     double norm0{ 0 }, norm{ 0 }, norm_goal{ 0 };
     const bool have_b = ( b.Size() == Height() );
@@ -451,6 +451,20 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         {
             cur_lambda += delta_lambda;
             u_cur = *u;
+
+            // if ( data )
+            // {
+            //     if ( step % 5 == 0 )
+            //     {
+            //         if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
+            //         {
+            //             par_grid_x->Distribute( *u );
+            //         }
+            //         data->SetCycle( count );
+            //         data->SetTime( count++ );
+            //         data->Save();
+            //     }
+            // }
         }
         else
         {

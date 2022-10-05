@@ -240,6 +240,7 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
         w = ip.weight * mMemo.GetDetdXdXi( i );
         eigenVec += w * ( mB.transpose() * mMaterialModel->getPK2StressVector() );
     }
+    // std::cout<<eigenVec.transpose()<<std::endl;
 }
 
 void NonlinearElasticityIntegrator::matrixB( const int dof, const int dim, const Eigen::MatrixXd& gshape )

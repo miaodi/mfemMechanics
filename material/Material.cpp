@@ -152,6 +152,16 @@ void ElasticMaterial::updateCurModuli()
     }
 }
 
+Eigen::Vector6d ElasticMaterial::getIntrinsicPK2StressVector() const
+{
+    Eigen::Vector6d stressVector;
+    stressVector.setZero();
+    mfem::Vector vec( stressVector.data(), stressVector.size() );
+    if ( mIntrinsicStress )
+        mIntrinsicStress->Eval( vec, *mEleTrans, *mIntgP );
+    return stressVector * mLambda;
+}
+
 void IsotropicElasticMaterial::updateRefModuli()
 {
     const double Nu = this->Nu();
@@ -181,7 +191,10 @@ void IsotropicElasticMaterial::updateRefModuli()
 
 Eigen::Vector6d IsotropicElasticMaterial::getPK2StressVector() const
 {
-    return getRefModuli() * getGreenLagrangeStrainVector();
+    if ( mIntrinsicStress )
+        return getRefModuli() * getGreenLagrangeStrainVector() + getIntrinsicPK2StressVector();
+    else
+        return getRefModuli() * getGreenLagrangeStrainVector();
 }
 
 Eigen::Matrix3d IsotropicElasticThermalMaterial::getGreenLagrangeStrainTensor() const

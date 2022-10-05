@@ -73,6 +73,13 @@ public:
         mLambda = l;
     }
 
+    Eigen::Vector6d getIntrinsicPK2StressVector() const;
+
+    void setIntrinsicStress( mfem::VectorCoefficient* intrinsicStress )
+    {
+        mIntrinsicStress = intrinsicStress;
+    }
+
 protected:
     // moduli in reference configuration
     Eigen::Matrix6d mRefModuli;
@@ -85,6 +92,8 @@ protected:
     mfem::ElementTransformation* mEleTrans{ nullptr };
     const mfem::IntegrationPoint* mIntgP{ nullptr };
     double mLambda{ 0 };
+    // intrinsic stress
+    mfem::VectorCoefficient* mIntrinsicStress{ nullptr };
 };
 
 class IsotropicElasticMaterial : public ElasticMaterial
