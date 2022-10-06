@@ -1,4 +1,5 @@
 #include "NeoHookeanMaterial.h"
+#include "util.h"
 
 Eigen::Matrix3d NeoHookeanMaterial::getPK2StressTensor() const
 {

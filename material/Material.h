@@ -3,19 +3,6 @@
 #include "typeDef.h"
 #include <Eigen/Dense>
 
-namespace util
-{
-Eigen::Vector6d Voigt( const Eigen::Matrix3d& tensor, const bool isStrain );
-
-Eigen::Matrix3d InverseVoigt( const Eigen::Vector6d& vector, const bool isStrain );
-
-short Voigt( const short i, const short pos );
-
-void symmetricIdentityTensor( const Eigen::Matrix3d& C, Eigen::Matrix6d& CC );
-
-void tensorProduct( const Eigen::Matrix3d& A, const Eigen::Matrix3d& B, Eigen::Matrix6d& CC );
-} // namespace util
-
 class ElasticMaterial
 {
 public:

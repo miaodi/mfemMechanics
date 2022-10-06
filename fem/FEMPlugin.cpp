@@ -498,4 +498,79 @@ void NonlinearPressureIntegrator::AssembleFaceGrad( const mfem::FiniteElement& e
                     ( mB * dxdxi.norm() + dxdxi.normalized() * ( dxdxi.transpose() * deltau ) / dxdxi.norm() );
     }
 }
+
+void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::FiniteElement& el,
+                                                                  mfem::ElementTransformation& Ttr,
+                                                                  const mfem::Vector& elfun,
+                                                                  mfem::DenseMatrix& elmat )
+{
+    // double w;
+    // int dof = el.GetDof(), dim = el.GetDim();
+
+    // MFEM_ASSERT( dim == 3 && dof == 8, "NonlinearCompositeSolidShellIntegrator only support linearHex elements" );
+
+    // mGeomStiff.resize( dof, dof );
+
+    // Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, dim );
+    // elmat.SetSize( dof * dim );
+    // elmat = 0.0;
+
+    // Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * dim, dof * dim );
+
+    // const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
+
+    // // prepare collocation points
+    // {
+    //     mfem::DenseMatrix mat;
+    //     mfem::IntegrationPoint ip;
+    //     Ttr.SetIntPoint( &ip );
+    //     // point A
+    //     ip.set3( -1, 0, 0 );
+    //     mDShapeA.resize( dof, dim );
+    //     mat.UseExternalData( mDShapeA.data(), dof, dim );
+    //     el.CalcDShape( ip, mat );
+    //     mJA = Ttr.Jacobian() + ;
+    // }
+
+    // const mfem::IntegrationRule* ir = IntRule;
+    // if ( !ir )
+    // {
+    //     ir = &( mfem::IntRules.Get( el.GetGeomType(), 2 * el.GetOrder() + 1 ) ); // <---
+    // }
+
+    // for ( int i = 0; i < ir->GetNPoints(); i++ )
+    // {
+    //     const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+    //     Ttr.SetIntPoint( &ip );
+
+    //     el.CalcDShape( ip, mDShape );
+    //     Mult( mDShape, Ttr.InverseJacobian(), mGShape );
+
+    //     Eigen::Map<const Eigen::MatrixXd> mGShapeEig( mGShape.Data(), dof, dim );
+
+    //     mdxdX.setZero();
+    //     mdxdX.block( 0, 0, dim, dim ) = curCoords.transpose() * mGShapeEig;
+    //     if ( dim == 2 )
+    //     {
+    //         mdxdX( 2, 2 ) = 1;
+    //     }
+
+    //     // matrixB( dof, dim, mGShape );
+
+    //     mMaterialModel->at( Ttr, ip );
+    //     mMaterialModel->setDeformationGradient( mdxdX );
+    //     mMaterialModel->updateRefModuli();
+
+    //     w = ip.weight * Ttr.Weight();
+
+    //     mGeomStiff =
+    //         ( w * mGShapeEig * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) * mGShapeEig.transpose() ).eval();
+    //     eigenMat += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
+    //     for ( int j = 0; j < dim; j++ )
+    //     {
+    //         eigenMat.block( j * dof, j * dof, dof, dof ) += mGeomStiff;
+    //     }
+    // }
+}
+
 } // namespace plugin

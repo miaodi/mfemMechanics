@@ -1,9 +1,9 @@
 
 #pragma once
 #include "Material.h"
-#include <mfem.hpp>
 #include <Eigen/Dense>
 #include <memory>
+#include <mfem.hpp>
 #include <vector>
 
 namespace plugin
@@ -73,11 +73,39 @@ protected:
     mutable double mLambda;
 };
 
-class NonlinearElasticityIntegrator : public NonlinearFormIntegratorLambda
+class NonlinearFormMaterialIntegratorLambda : public NonlinearFormIntegratorLambda
+{
+public:
+    NonlinearFormMaterialIntegratorLambda( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{ &m }
+    {
+    }
+
+    virtual void SetLambda( const double lambda ) const
+    {
+        NonlinearFormIntegratorLambda::SetLambda( lambda );
+        mMaterialModel->setLambda( lambda );
+    }
+    void setNonlinear( const bool flg )
+    {
+        mNonlinear = flg;
+        mMaterialModel->setLargeDeformation( flg );
+    }
+
+    bool isNonlinear() const
+    {
+        return mNonlinear;
+    }
+
+protected:
+    ElasticMaterial* mMaterialModel{ nullptr };
+    bool mNonlinear{ true };
+};
+
+class NonlinearElasticityIntegrator : public NonlinearFormMaterialIntegratorLambda
 {
 public:
     NonlinearElasticityIntegrator( ElasticMaterial& m, Memorize& memo )
-        : NonlinearFormIntegratorLambda(), mMaterialModel{ &m }, mMemo{ memo }
+        : NonlinearFormMaterialIntegratorLambda( m ), mMemo{ memo }
     {
     }
 
@@ -100,19 +128,7 @@ public:
                                       const mfem::Vector& elfun,
                                       mfem::DenseMatrix& elmat );
 
-    virtual void SetLambda( const double lambda ) const
-    {
-        NonlinearFormIntegratorLambda::SetLambda( lambda );
-        mMaterialModel->setLambda( lambda );
-    }
-
     void matrixB( const int dof, const int dim, const Eigen::MatrixXd& gshape );
-
-    void setNonlinear( const bool flg )
-    {
-        mNonlinear = flg;
-        mMaterialModel->setLargeDeformation( flg );
-    }
 
     void setGeomStiff( const bool flg )
     {
@@ -124,19 +140,11 @@ public:
         return mOnlyGeomStiff;
     }
 
-    bool isNonlinear() const
-    {
-        return mNonlinear;
-    }
-
 protected:
     Eigen::Matrix<double, 3, 3> mdxdX;
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
     Eigen::MatrixXd mGeomStiff;
-    ElasticMaterial* mMaterialModel{ nullptr };
     Memorize& mMemo;
-
-    bool mNonlinear{ true };
     bool mOnlyGeomStiff{ false };
 };
 
@@ -189,5 +197,29 @@ protected:
     mfem::DenseMatrix mDShape, mGShape;
     Eigen::MatrixXd mB;
     mfem::Coefficient& Q;
+};
+
+class NonlinearCompositeSolidShellIntegrator : public NonlinearFormMaterialIntegratorLambda
+{
+public:
+    NonlinearCompositeSolidShellIntegrator( ElasticMaterial& m ) : NonlinearFormMaterialIntegratorLambda( m )
+    {
+    }
+
+    virtual void AssembleElementVector( const mfem::FiniteElement& el,
+                                        mfem::ElementTransformation& Ttr,
+                                        const mfem::Vector& elfun,
+                                        mfem::Vector& elvect );
+
+    virtual void AssembleElementGrad( const mfem::FiniteElement& el,
+                                      mfem::ElementTransformation& Ttr,
+                                      const mfem::Vector& elfun,
+                                      mfem::DenseMatrix& elmat );
+
+protected:
+    Eigen::Matrix<double, 3, 3> mdxdX, mJA, mJB, mJC, mJD, mJA1, mJA2, mJA3, mJA4;
+    Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
+    Eigen::MatrixXd mGeomStiff;
+    Eigen::MatrixXd mDShapeA, mDShapeB, mDShapeC, mDShapeD, mDShapeA1, mDShapeA2, mDShapeA3, mDShapeA4;
 };
 } // namespace plugin
