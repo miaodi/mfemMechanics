@@ -32,7 +32,7 @@ public:
 private:
     std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mStorage;
     mfem::DenseMatrix mDShape, mGShape;
-    int mElementNo{ 0 };
+    int mElementNo{0};
 };
 
 class ElasticityIntegrator : public mfem::BilinearFormIntegrator
@@ -49,13 +49,13 @@ public:
 protected:
     mfem::DenseMatrix mDShape, mGShape;
 
-    ElasticMaterial* mMaterialModel{ nullptr };
+    ElasticMaterial* mMaterialModel{nullptr};
 };
 
 class NonlinearFormIntegratorLambda : public mfem::NonlinearFormIntegrator
 {
 public:
-    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator(), mLambda{ 1. }
+    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator(), mLambda{1.}
     {
     }
 
@@ -69,6 +69,10 @@ public:
         return mLambda;
     }
 
+    virtual ~NonlinearFormIntegratorLambda()
+    {
+    }
+
 protected:
     mutable double mLambda;
 };
@@ -76,7 +80,7 @@ protected:
 class NonlinearFormMaterialIntegratorLambda : public NonlinearFormIntegratorLambda
 {
 public:
-    NonlinearFormMaterialIntegratorLambda( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{ &m }
+    NonlinearFormMaterialIntegratorLambda( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{&m}
     {
     }
 
@@ -96,16 +100,20 @@ public:
         return mNonlinear;
     }
 
+    virtual ~NonlinearFormMaterialIntegratorLambda()
+    {
+    }
+
 protected:
-    ElasticMaterial* mMaterialModel{ nullptr };
-    bool mNonlinear{ true };
+    ElasticMaterial* mMaterialModel{nullptr};
+    bool mNonlinear{true};
 };
 
 class NonlinearElasticityIntegrator : public NonlinearFormMaterialIntegratorLambda
 {
 public:
     NonlinearElasticityIntegrator( ElasticMaterial& m, Memorize& memo )
-        : NonlinearFormMaterialIntegratorLambda( m ), mMemo{ memo }
+        : NonlinearFormMaterialIntegratorLambda( m ), mMemo{memo}
     {
     }
 
@@ -145,7 +153,7 @@ protected:
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
     Eigen::MatrixXd mGeomStiff;
     Memorize& mMemo;
-    bool mOnlyGeomStiff{ false };
+    bool mOnlyGeomStiff{false};
 };
 
 class NonlinearVectorBoundaryLFIntegrator : public NonlinearFormIntegratorLambda
@@ -206,20 +214,31 @@ public:
     {
     }
 
-    virtual void AssembleElementVector( const mfem::FiniteElement& el,
-                                        mfem::ElementTransformation& Ttr,
-                                        const mfem::Vector& elfun,
-                                        mfem::Vector& elvect );
+    // virtual void AssembleElementVector( const mfem::FiniteElement& el,
+    //                                     mfem::ElementTransformation& Ttr,
+    //                                     const mfem::Vector& elfun,
+    //                                     mfem::Vector& elvect );
 
     virtual void AssembleElementGrad( const mfem::FiniteElement& el,
                                       mfem::ElementTransformation& Ttr,
                                       const mfem::Vector& elfun,
                                       mfem::DenseMatrix& elmat );
 
+    void matrixB( const int dof, const int dim, const Eigen::MatrixXd& dshape, const mfem::IntegrationPoint& ip );
+
+    /** @brief Computes the integral of W(Jacobian(Trt)) over a target zone
+        @param[in] el     Type of FiniteElement.
+        @param[in] Ttr    Represents ref->target coordinates transformation.
+        @param[in] elfun  Physical coordinates of the zone. */
+    virtual double GetElementEnergy( const mfem::FiniteElement& el, mfem::ElementTransformation& Ttr, const mfem::Vector& elfun )
+    {
+        return 0;
+    }
+
 protected:
-    Eigen::Matrix<double, 3, 3> mdxdX, mJA, mJB, mJC, mJD, mJA1, mJA2, mJA3, mJA4;
+    Eigen::Matrix<double, 3, 3> mg, mgA, mgB, mgC, mgD, mgA1, mgA2, mgA3, mgA4;
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
     Eigen::MatrixXd mGeomStiff;
-    Eigen::MatrixXd mDShapeA, mDShapeB, mDShapeC, mDShapeD, mDShapeA1, mDShapeA2, mDShapeA3, mDShapeA4;
+    Eigen::Matrix<double, 8, 3> mDShapeA, mDShapeB, mDShapeC, mDShapeD, mDShapeA1, mDShapeA2, mDShapeA3, mDShapeA4;
 };
 } // namespace plugin

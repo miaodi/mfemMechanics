@@ -98,7 +98,7 @@ void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el,
 {
     int dof = el.GetDof();
     int dim = el.GetDim();
-    double w{ 0 };
+    double w{0};
 
     MFEM_ASSERT( dim == Trans.GetSpaceDim(), "" );
 
@@ -504,39 +504,89 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
                                                                   const mfem::Vector& elfun,
                                                                   mfem::DenseMatrix& elmat )
 {
-    // double w;
-    // int dof = el.GetDof(), dim = el.GetDim();
+    double w;
+    int dof = el.GetDof(), dim = el.GetDim();
 
-    // MFEM_ASSERT( dim == 3 && dof == 8, "NonlinearCompositeSolidShellIntegrator only support linearHex elements" );
+    MFEM_ASSERT( dim == 3 && dof == 8, "NonlinearCompositeSolidShellIntegrator only support linearHex elements" );
 
-    // mGeomStiff.resize( dof, dof );
+    mGeomStiff.resize( dof, dof );
 
-    // Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, dim );
-    // elmat.SetSize( dof * dim );
-    // elmat = 0.0;
+    Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, dim );
+    elmat.SetSize( dof * dim );
+    elmat = 0.0;
 
-    // Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * dim, dof * dim );
+    Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * dim, dof * dim );
 
-    // const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
+    const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
 
-    // // prepare collocation points
-    // {
-    //     mfem::DenseMatrix mat;
-    //     mfem::IntegrationPoint ip;
-    //     Ttr.SetIntPoint( &ip );
-    //     // point A
-    //     ip.set3( -1, 0, 0 );
-    //     mDShapeA.resize( dof, dim );
-    //     mat.UseExternalData( mDShapeA.data(), dof, dim );
-    //     el.CalcDShape( ip, mat );
-    //     mJA = Ttr.Jacobian() + ;
-    // }
+    // prepare collocation points
+    {
+        mfem::DenseMatrix mat;
+        mfem::IntegrationPoint ip;
+        Ttr.SetIntPoint( &ip );
 
-    // const mfem::IntegrationRule* ir = IntRule;
-    // if ( !ir )
-    // {
-    //     ir = &( mfem::IntRules.Get( el.GetGeomType(), 2 * el.GetOrder() + 1 ) ); // <---
-    // }
+        auto preprocessColl = [&]( double x, double y, double z, Eigen::Matrix<double, 3, 3>& g, Eigen::Matrix<double, 8, 3>& DShape ) {
+            ip.Set3( x, y, z );
+            mat.UseExternalData( g.data(), g.rows(), g.cols() );
+            mat = Ttr.Jacobian();
+            mat.UseExternalData( DShape.data(), DShape.rows(), DShape.cols() );
+            el.CalcDShape( ip, mat );
+            g += u.transpose() * DShape;
+        };
+        // point A
+        preprocessColl( -1, 0, 0, mgA, mDShapeA );
+        // point B
+        preprocessColl( 0, -1, 0, mgB, mDShapeB );
+        // point C
+        preprocessColl( 1, 0, 0, mgC, mDShapeC );
+        // point D
+        preprocessColl( 0, 1, 0, mgD, mDShapeD );
+
+        // point A1
+        preprocessColl( -1, -1, 0, mgA1, mDShapeA1 );
+        // point A2
+        preprocessColl( 1, -1, 0, mgA2, mDShapeA2 );
+        // point A3
+        preprocessColl( 1, 1, 0, mgA3, mDShapeA3 );
+        // point A4
+        preprocessColl( -1, 1, 0, mgA4, mDShapeA4 );
+
+        std::cout << mDShapeB << std::endl << std::endl;
+        std::cout << mDShapeA4 << std::endl;
+
+        mfem::Vector v;
+        v.SetSize( 8 );
+        ip.Set3( 0, 0, 0 );
+        el.CalcShape( ip, v );
+        v.Print();
+        ip.Set3( 1, 0, 0 );
+        el.CalcShape( ip, v );
+        v.Print();
+        ip.Set3( 1, 1, 0 );
+        el.CalcShape( ip, v );
+        v.Print();
+        ip.Set3( 0, 1, 0 );
+        el.CalcShape( ip, v );
+        v.Print();
+        ip.Set3( 0, 0, 1 );
+        el.CalcShape( ip, v );
+        v.Print();
+        ip.Set3( 1, 0, 1 );
+        el.CalcShape( ip, v );
+        v.Print();
+        ip.Set3( 1, 1, 1 );
+        el.CalcShape( ip, v );
+        v.Print();
+        ip.Set3( 0, 1, 1 );
+        el.CalcShape( ip, v );
+        v.Print();
+    }
+
+    const mfem::IntegrationRule* ir = IntRule;
+    if ( !ir )
+    {
+        ir = &( mfem::IntRules.Get( el.GetGeomType(), 2 * el.GetOrder() + 1 ) ); // <---
+    }
 
     // for ( int i = 0; i < ir->GetNPoints(); i++ )
     // {
@@ -571,6 +621,50 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
     //         eigenMat.block( j * dof, j * dof, dof, dof ) += mGeomStiff;
     //     }
     // }
+}
+
+void NonlinearCompositeSolidShellIntegrator::matrixB( const int dof, const int dim, const Eigen::MatrixXd& dshape, const mfem::IntegrationPoint& ip )
+{
+    double pt[3];
+    ip.Get( pt, 3 );
+    for ( int i = 0; i < dof; i++ )
+    {
+        mB( 0, i + 0 * dof ) = dshape( i, 0 ) * mg( 0, 0 );
+        mB( 0, i + 1 * dof ) = dshape( i, 0 ) * mg( 1, 0 );
+        mB( 0, i + 2 * dof ) = dshape( i, 0 ) * mg( 2, 0 );
+
+        mB( 1, i + 0 * dof ) = dshape( i, 1 ) * mg( 0, 1 );
+        mB( 1, i + 1 * dof ) = dshape( i, 1 ) * mg( 1, 1 );
+        mB( 1, i + 2 * dof ) = dshape( i, 1 ) * mg( 2, 1 );
+
+        mB( 2, i + 0 * dof ) = 1. / 4 *
+                               ( ( 1 - 1 * pt[0] ) * ( 1 - 1 * pt[1] ) * mgA1( 0, 2 ) * mDShapeA1( i, 2 ) +
+                                 ( 1 + 1 * pt[0] ) * ( 1 - 1 * pt[1] ) * mgA2( 0, 2 ) * mDShapeA2( i, 2 ) +
+                                 ( 1 + 1 * pt[0] ) * ( 1 + 1 * pt[1] ) * mgA3( 0, 2 ) * mDShapeA3( i, 2 ) +
+                                 ( 1 - 1 * pt[0] ) * ( 1 + 1 * pt[1] ) * mgA4( 0, 2 ) * mDShapeA4( i, 2 ) );
+        mB( 2, i + 1 * dof ) = 1. / 4 *
+                               ( ( 1 - 1 * pt[0] ) * ( 1 - 1 * pt[1] ) * mgA1( 1, 2 ) * mDShapeA1( i, 2 ) +
+                                 ( 1 + 1 * pt[0] ) * ( 1 - 1 * pt[1] ) * mgA2( 1, 2 ) * mDShapeA2( i, 2 ) +
+                                 ( 1 + 1 * pt[0] ) * ( 1 + 1 * pt[1] ) * mgA3( 1, 2 ) * mDShapeA3( i, 2 ) +
+                                 ( 1 - 1 * pt[0] ) * ( 1 + 1 * pt[1] ) * mgA4( 1, 2 ) * mDShapeA4( i, 2 ) );
+        mB( 2, i + 2 * dof ) = 1. / 4 *
+                               ( ( 1 - 1 * pt[0] ) * ( 1 - 1 * pt[1] ) * mgA1( 2, 2 ) * mDShapeA1( i, 2 ) +
+                                 ( 1 + 1 * pt[0] ) * ( 1 - 1 * pt[1] ) * mgA2( 2, 2 ) * mDShapeA2( i, 2 ) +
+                                 ( 1 + 1 * pt[0] ) * ( 1 + 1 * pt[1] ) * mgA3( 2, 2 ) * mDShapeA3( i, 2 ) +
+                                 ( 1 - 1 * pt[0] ) * ( 1 + 1 * pt[1] ) * mgA4( 2, 2 ) * mDShapeA4( i, 2 ) );
+
+        mB( 3, i + 0 * dof ) = dshape( i, 1 ) * mg( 0, 0 ) + dshape( i, 0 ) * mg( 0, 1 );
+        mB( 3, i + 1 * dof ) = dshape( i, 1 ) * mg( 1, 0 ) + dshape( i, 0 ) * mg( 1, 1 );
+        mB( 3, i + 2 * dof ) = dshape( i, 1 ) * mg( 2, 0 ) + dshape( i, 0 ) * mg( 2, 1 );
+
+        // mB( 4, i + 0 * dof ) = gshape( i, 2 ) * mdxdX( 0, 1 ) + gshape( i, 1 ) * mdxdX( 0, 2 );
+        // mB( 4, i + 1 * dof ) = gshape( i, 2 ) * mdxdX( 1, 1 ) + gshape( i, 1 ) * mdxdX( 1, 2 );
+        // mB( 4, i + 2 * dof ) = gshape( i, 2 ) * mdxdX( 2, 1 ) + gshape( i, 1 ) * mdxdX( 2, 2 );
+
+        // mB( 5, i + 0 * dof ) = gshape( i, 0 ) * mdxdX( 0, 2 ) + gshape( i, 2 ) * mdxdX( 0, 0 );
+        // mB( 5, i + 1 * dof ) = gshape( i, 0 ) * mdxdX( 1, 2 ) + gshape( i, 2 ) * mdxdX( 1, 0 );
+        // mB( 5, i + 2 * dof ) = gshape( i, 0 ) * mdxdX( 2, 2 ) + gshape( i, 2 ) * mdxdX( 2, 0 );
+    }
 }
 
 } // namespace plugin

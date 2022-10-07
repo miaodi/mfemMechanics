@@ -60,7 +60,7 @@ void InitialDeformation( const Vector& x, Vector& y )
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/3DBeamBuckle.msh";
+    const char* mesh_file = "../../data/cube.mesh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -120,49 +120,7 @@ int main( int argc, char* argv[] )
         fec = new H1_FECollection( order, dim );
         fespace = new FiniteElementSpace( mesh, fec, dim );
     }
-    cout << "Number of finite element unknowns: " << fespace->GetTrueVSize() << endl << "Assembling: " << flush;
 
-    
-    // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
-    //    In this example, the boundary conditions are defined by marking only
-    //    boundary attribute 1 from the mesh as essential and converting it to a
-    //    list of true dofs.
-    Array<int> ess_tdof_list, ess_bdr( mesh->bdr_attributes.Max() ), temp_list;
-    ess_bdr = 0;
-    ess_bdr[28] = 1; // left
-    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 0 );
-    ess_tdof_list.Append( temp_list );
-
-    ess_bdr = 0;
-    ess_bdr[29] = 1; // right
-    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 0 );
-    ess_tdof_list.Append( temp_list );
-
-    ess_bdr = 0;
-    ess_bdr[27] = 1; // bottom
-    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 1 );
-    ess_tdof_list.Append( temp_list );
-    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 2 );
-    ess_tdof_list.Append( temp_list );
-
-    printf( "Mesh is %i dimensional.\n", dim );
-    printf( "Number of mesh attributes: %i\n", mesh->attributes.Size() );
-    printf( "Number of boundary attributes: %i\n", mesh->bdr_attributes.Size() );
-    printf( "Max of mesh attributes: %i\n", mesh->attributes.Max() );
-    printf( "Max of boundary attributes: %i\n", mesh->bdr_attributes.Max() );
-
-    // 8. Define the solution vector x as a finite element grid function
-    //    corresponding to fespace. Initialize x with initial guess of zero,
-    //    which satisfies the boundary conditions.
-    GridFunction x_gf( fespace );
-    GridFunction x_ref( fespace );
-    GridFunction x_def( fespace );
-
-    VectorFunctionCoefficient deform( dim, InitialDeformation );
-    VectorFunctionCoefficient refconfig( dim, ReferenceConfiguration );
-
-    x_gf.ProjectCoefficient( refconfig );
-    x_ref.ProjectCoefficient( refconfig );
 
     Vector Nu( mesh->attributes.Max() );
     Nu = .3;
@@ -172,74 +130,16 @@ int main( int argc, char* argv[] )
     E = 12.8e9;
     PWConstCoefficient E_func( E );
 
-    Vector CTE( mesh->attributes.Max() );
-    CTE = 23.1e-6;
-    PWConstCoefficient CTE_func( CTE );
+    IsotropicElasticMaterial iem( E_func, nu_func );
 
-    IsotropicElasticThermalMaterial ietm( E_func, nu_func, CTE_func );
-    ietm.setInitialTemp( 0 );
-    ietm.setFinalTemp( 2000 );
-
+    
     plugin::Memorize mm( mesh );
-
-    auto intg = new plugin::NonlinearElasticityIntegrator( ietm, mm );
+    auto intg = new plugin::NonlinearCompositeSolidShellIntegrator( iem );
     NonlinearForm* nlf = new NonlinearForm( fespace );
-    intg->setNonlinear( true );
-    // {
-    //     nlf->AddDomainIntegrator( new HyperelasticNLFIntegrator( new NeoHookeanModel( 1.5e6, 10e9 ) ) );
-    // }
     nlf->AddDomainIntegrator( intg );
-    nlf->SetEssentialTrueDofs( ess_tdof_list );
-    // Vector r;
-    // r.SetSize(nlf->Height());
-    // nlf->Mult(x_gf, r);
-
-    GeneralResidualMonitor newton_monitor( "Newton", 1 );
-    GeneralResidualMonitor j_monitor( "GMRES", 3 );
-
-    // Set up the Jacobian solver
-    auto j_gmres = new KLUSolver();
-
-    auto newton_solver = new plugin::Crisfield();
-
-    // Set the newton solve parameters
-    newton_solver->iterative_mode = true;
-    newton_solver->SetSolver( *j_gmres );
-    newton_solver->SetOperator( *nlf );
-    newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-6 );
-    newton_solver->SetAbsTol( 1e-10 );
-    newton_solver->SetMaxIter( 6 );
-    newton_solver->SetDelta( .01 );
-    newton_solver->SetMaxDelta( 10 );
-    newton_solver->SetMinDelta( 1e-5 );
-    newton_solver->SetPhi( .0 );
-    newton_solver->SetMaxStep( 10000 );
-
-    Vector zero;
-    newton_solver->Mult( zero, x_gf );
-
-    // MFEM_VERIFY( newton_solver->GetConverged(), "Newton Solver did not converge." );
-    subtract( x_gf, x_ref, x_def );
-
-    // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "beamBuckle", mesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x_def );
-    paraview_dc.Save();
-    if ( fec )
-    {
-        delete fespace;
-        delete fec;
-    }
-    delete newton_solver;
-    delete mesh;
-
+    Vector X( fespace->GetTrueVSize() );
+    X = 0.;
+    X(1) = 1;
+    nlf->GetGradient( X );
     return 0;
 }
