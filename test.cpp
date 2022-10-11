@@ -1,5 +1,4 @@
-#include "FEMPlugin.h"
-#include "Material.h"
+#include "Plugin.h"
 #include "mfem.hpp"
 #include <Fastor/Fastor.h>
 #include <fstream>
@@ -198,14 +197,14 @@ int main()
         const double mu = .5;
         Fastor::Tensor<double, 3, 3, 3, 3> C = lambda * Fastor::outer( I2, I2 ) + 2 * mu * I4;
         Matrix6d EigenC;
-        // for ( int i = 0; i < 6; i++ )
-        // {
-        //     for ( int j = 0; j < 6; j++ )
-        //     {
-        //         EigenC( i, j ) = C( (int)util::Voigt( i, 0 ), (int)util::Voigt( i, 1 ), (int)util::Voigt( j, 2 ),
-        //                             (int)util::Voigt( j, 3 ) );
-        //     }
-        // }
+        for ( int i = 0; i < 6; i++ )
+        {
+            for ( int j = 0; j < 6; j++ )
+            {
+                EigenC( i, j ) = C( (int)util::Voigt( i, 0 ), (int)util::Voigt( i, 1 ), (int)util::Voigt( j, 2 ),
+                                    (int)util::Voigt( j, 3 ) );
+            }
+        }
 
         std::cout << EigenC << std::endl;
 

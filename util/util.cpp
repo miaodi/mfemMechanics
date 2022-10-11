@@ -75,4 +75,20 @@ void tensorProduct( const Eigen::Matrix3d& A, const Eigen::Matrix3d& B, Eigen::M
         for ( short j = 0; j < 6; ++j )
             CC( i, j ) = A( Voigt( i, 0 ), Voigt( i, 1 ) ) * B( Voigt( j, 2 ), Voigt( j, 3 ) );
 }
+
+Eigen::Matrix6d TransformationVoigtForm( const Eigen::Matrix3d& t )
+{
+    Eigen::Matrix6d T;
+    T( 0, 0 ) = t( 0, 0 ) * t( 0, 0 ), T( 0, 1 ) = t( 0, 1 ) * t( 0, 1 ), T( 0, 2 ) = t( 0, 2 ) * t( 0, 2 ),
+            T( 0, 3 ) = t( 0, 0 ) * t( 0, 1 ), T( 0, 4 ) = t( 0, 1 ) * t( 0, 2 ), T( 0, 5 ) = t( 0, 0 ) * t( 0, 2 );
+    T( 1, 0 ) = t( 1, 0 ) * t( 1, 0 ), T( 1, 1 ) = t( 1, 1 ) * t( 1, 1 ), T( 1, 2 ) = t( 1, 2 ) * t( 1, 2 ),
+            T( 1, 3 ) = t( 1, 0 ) * t( 1, 1 ), T( 1, 4 ) = t( 1, 1 ) * t( 1, 2 ), T( 1, 5 ) = t( 1, 0 ) * t( 1, 2 );
+    T( 2, 0 ) = t( 2, 0 ) * t( 2, 0 ), T( 2, 1 ) = t( 2, 1 ) * t( 2, 1 ), T( 2, 2 ) = t( 2, 2 ) * t( 2, 2 ),
+            T( 2, 3 ) = t( 2, 0 ) * t( 2, 1 ), T( 2, 4 ) = t( 2, 1 ) * t( 2, 2 ), T( 2, 5 ) = t( 2, 0 ) * t( 2, 2 );
+
+    T( 3, 0 ) = 2 * t( 0, 0 ) * t( 1, 0 ), T( 3, 1 ) = 2 * t( 0, 1 ) * t( 1, 1 ), T( 3, 2 ) = 2 * t( 0, 2 ) * t( 1, 2 ),
+            T( 3, 3 ) = t( 0, 0 ) * t( 1, 1 ) + t( 0, 1 ) * t( 1, 0 ),
+            T( 3, 4 ) = t( 0, 1 ) * t( 1, 2 ) + t( 0, 2 ) * t( 1, 1 ),
+            T( 3, 5 ) = t( 0, 0 ) * t( 1, 2 ) + t( 0, 2 ) * t( 1, 0 );
+}
 } // namespace util

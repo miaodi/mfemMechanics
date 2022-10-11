@@ -1,9 +1,9 @@
 #pragma once
 
+#include "typeDef.h"
+#include <Eigen/Dense>
 #include <iostream>
 #include <mfem.hpp>
-#include <Eigen/Dense>
-#include "typeDef.h"
 
 namespace util
 {
@@ -41,4 +41,6 @@ short Voigt( const short i, const short pos );
 void symmetricIdentityTensor( const Eigen::Matrix3d& C, Eigen::Matrix6d& CC );
 
 void tensorProduct( const Eigen::Matrix3d& A, const Eigen::Matrix3d& B, Eigen::Matrix6d& CC );
+
+Eigen::Matrix6d TransformationVoigtForm( const Eigen::Matrix3d& transformation );
 } // namespace util

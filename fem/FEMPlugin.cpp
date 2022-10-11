@@ -98,7 +98,7 @@ void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el,
 {
     int dof = el.GetDof();
     int dim = el.GetDim();
-    double w{0};
+    double w{ 0 };
 
     MFEM_ASSERT( dim == Trans.GetSpaceDim(), "" );
 
@@ -504,7 +504,7 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
                                                                   const mfem::Vector& elfun,
                                                                   mfem::DenseMatrix& elmat )
 {
-    double w;
+    double w = 0;
     int dof = el.GetDof(), dim = el.GetDim();
 
     MFEM_ASSERT( dim == 3 && dof == 8, "NonlinearCompositeSolidShellIntegrator only support linearHex elements" );
@@ -518,38 +518,65 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
     Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * dim, dof * dim );
 
     const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
+    mfem::DenseMatrix mat;
+    mfem::IntegrationPoint ip;
+
+    // from [-1, 1] to [0, 1]
+    auto convert = []( double& x ) { x = ( x + 1 ) / 2.; };
+    double pt[3];
+
+    Ttr.SetIntPoint( &ip );
+    auto preprocessColl = [&]( Eigen::Matrix<double, 3, 3>& g, Eigen::Matrix<double, 8, 3>& DShape ) {
+        mat.UseExternalData( g.data(), g.rows(), g.cols() );
+        mat = Ttr.Jacobian();
+        mat.UseExternalData( DShape.data(), DShape.rows(), DShape.cols() );
+        el.CalcDShape( ip, mat );
+        g += u.transpose() * DShape;
+    };
 
     // prepare collocation points
     {
-        mfem::DenseMatrix mat;
-        mfem::IntegrationPoint ip;
-        Ttr.SetIntPoint( &ip );
-
-        auto preprocessColl = [&]( double x, double y, double z, Eigen::Matrix<double, 3, 3>& g, Eigen::Matrix<double, 8, 3>& DShape ) {
-            ip.Set3( x, y, z );
-            mat.UseExternalData( g.data(), g.rows(), g.cols() );
-            mat = Ttr.Jacobian();
-            mat.UseExternalData( DShape.data(), DShape.rows(), DShape.cols() );
-            el.CalcDShape( ip, mat );
-            g += u.transpose() * DShape;
-        };
         // point A
-        preprocessColl( -1, 0, 0, mgA, mDShapeA );
+        pt[0] = -1, pt[1] = 0, pt[2] = 0;
+        convert( pt[0] ), convert( pt[1] ), convert( pt[2] );
+        ip.Set3( pt[0], pt[1], pt[2] );
+        preprocessColl( mgA, mDShapeA );
         // point B
-        preprocessColl( 0, -1, 0, mgB, mDShapeB );
+        pt[0] = 0, pt[1] = -1, pt[2] = 0;
+        convert( pt[0] ), convert( pt[1] ), convert( pt[2] );
+        ip.Set3( pt[0], pt[1], pt[2] );
+        preprocessColl( mgB, mDShapeB );
         // point C
-        preprocessColl( 1, 0, 0, mgC, mDShapeC );
+        pt[0] = 1, pt[1] = 0, pt[2] = 0;
+        convert( pt[0] ), convert( pt[1] ), convert( pt[2] );
+        ip.Set3( pt[0], pt[1], pt[2] );
+        preprocessColl( mgC, mDShapeC );
         // point D
-        preprocessColl( 0, 1, 0, mgD, mDShapeD );
+        pt[0] = 0, pt[1] = 1, pt[2] = 0;
+        convert( pt[0] ), convert( pt[1] ), convert( pt[2] );
+        ip.Set3( pt[0], pt[1], pt[2] );
+        preprocessColl( mgD, mDShapeD );
 
         // point A1
-        preprocessColl( -1, -1, 0, mgA1, mDShapeA1 );
+        pt[0] = -1, pt[1] = -1, pt[2] = 0;
+        convert( pt[0] ), convert( pt[1] ), convert( pt[2] );
+        ip.Set3( pt[0], pt[1], pt[2] );
+        preprocessColl( mgA1, mDShapeA1 );
         // point A2
-        preprocessColl( 1, -1, 0, mgA2, mDShapeA2 );
+        pt[0] = 1, pt[1] = -1, pt[2] = 0;
+        convert( pt[0] ), convert( pt[1] ), convert( pt[2] );
+        ip.Set3( pt[0], pt[1], pt[2] );
+        preprocessColl( mgA2, mDShapeA2 );
         // point A3
-        preprocessColl( 1, 1, 0, mgA3, mDShapeA3 );
+        pt[0] = 1, pt[1] = 1, pt[2] = 0;
+        convert( pt[0] ), convert( pt[1] ), convert( pt[2] );
+        ip.Set3( pt[0], pt[1], pt[2] );
+        preprocessColl( mgA3, mDShapeA3 );
         // point A4
-        preprocessColl( -1, 1, 0, mgA4, mDShapeA4 );
+        pt[0] = -1, pt[1] = 1, pt[2] = 0;
+        convert( pt[0] ), convert( pt[1] ), convert( pt[2] );
+        ip.Set3( pt[0], pt[1], pt[2] );
+        preprocessColl( mgA4, mDShapeA4 );
 
         std::cout << mDShapeB << std::endl << std::endl;
         std::cout << mDShapeA4 << std::endl;
@@ -588,54 +615,47 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
         ir = &( mfem::IntRules.Get( el.GetGeomType(), 2 * el.GetOrder() + 1 ) ); // <---
     }
 
-    // for ( int i = 0; i < ir->GetNPoints(); i++ )
-    // {
-    //     const mfem::IntegrationPoint& ip = ir->IntPoint( i );
-    //     Ttr.SetIntPoint( &ip );
+    for ( int i = 0; i < ir->GetNPoints(); i++ )
+    {
+        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+        Ttr.SetIntPoint( &ip );
 
-    //     el.CalcDShape( ip, mDShape );
-    //     Mult( mDShape, Ttr.InverseJacobian(), mGShape );
+        preprocessColl( mg, mDShape );
+        matrixB( dof, dim, ip );
 
-    //     Eigen::Map<const Eigen::MatrixXd> mGShapeEig( mGShape.Data(), dof, dim );
+        mMaterialModel->at( Ttr, ip );
+        mMaterialModel->updateRefModuli();
 
-    //     mdxdX.setZero();
-    //     mdxdX.block( 0, 0, dim, dim ) = curCoords.transpose() * mGShapeEig;
-    //     if ( dim == 2 )
-    //     {
-    //         mdxdX( 2, 2 ) = 1;
-    //     }
+        w = ip.weight * Ttr.Weight();
 
-    //     // matrixB( dof, dim, mGShape );
-
-    //     mMaterialModel->at( Ttr, ip );
-    //     mMaterialModel->setDeformationGradient( mdxdX );
-    //     mMaterialModel->updateRefModuli();
-
-    //     w = ip.weight * Ttr.Weight();
-
-    //     mGeomStiff =
-    //         ( w * mGShapeEig * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) * mGShapeEig.transpose() ).eval();
-    //     eigenMat += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
-    //     for ( int j = 0; j < dim; j++ )
-    //     {
-    //         eigenMat.block( j * dof, j * dof, dof, dof ) += mGeomStiff;
-    //     }
-    // }
+        // mGeomStiff =
+        //     ( w * mGShapeEig * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) * mGShapeEig.transpose() ).eval();
+        eigenMat += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
+        // for ( int j = 0; j < dim; j++ )
+        // {
+        //     eigenMat.block( j * dof, j * dof, dof, dof ) += mGeomStiff;
+        // }
+    }
 }
 
-void NonlinearCompositeSolidShellIntegrator::matrixB( const int dof, const int dim, const Eigen::MatrixXd& dshape, const mfem::IntegrationPoint& ip )
+void NonlinearCompositeSolidShellIntegrator::matrixB( const int dof, const int dim, const mfem::IntegrationPoint& ip )
 {
+    // from [0, 1] to [-1, 1]
+    auto convert = []( double& x ) { x = 2 * x - 1; };
     double pt[3];
     ip.Get( pt, 3 );
+    convert( pt[0] );
+    convert( pt[1] );
+    convert( pt[2] );
     for ( int i = 0; i < dof; i++ )
     {
-        mB( 0, i + 0 * dof ) = dshape( i, 0 ) * mg( 0, 0 );
-        mB( 0, i + 1 * dof ) = dshape( i, 0 ) * mg( 1, 0 );
-        mB( 0, i + 2 * dof ) = dshape( i, 0 ) * mg( 2, 0 );
+        mB( 0, i + 0 * dof ) = mDShape( i, 0 ) * mg( 0, 0 );
+        mB( 0, i + 1 * dof ) = mDShape( i, 0 ) * mg( 1, 0 );
+        mB( 0, i + 2 * dof ) = mDShape( i, 0 ) * mg( 2, 0 );
 
-        mB( 1, i + 0 * dof ) = dshape( i, 1 ) * mg( 0, 1 );
-        mB( 1, i + 1 * dof ) = dshape( i, 1 ) * mg( 1, 1 );
-        mB( 1, i + 2 * dof ) = dshape( i, 1 ) * mg( 2, 1 );
+        mB( 1, i + 0 * dof ) = mDShape( i, 1 ) * mg( 0, 1 );
+        mB( 1, i + 1 * dof ) = mDShape( i, 1 ) * mg( 1, 1 );
+        mB( 1, i + 2 * dof ) = mDShape( i, 1 ) * mg( 2, 1 );
 
         mB( 2, i + 0 * dof ) = 1. / 4 *
                                ( ( 1 - 1 * pt[0] ) * ( 1 - 1 * pt[1] ) * mgA1( 0, 2 ) * mDShapeA1( i, 2 ) +
@@ -653,17 +673,29 @@ void NonlinearCompositeSolidShellIntegrator::matrixB( const int dof, const int d
                                  ( 1 + 1 * pt[0] ) * ( 1 + 1 * pt[1] ) * mgA3( 2, 2 ) * mDShapeA3( i, 2 ) +
                                  ( 1 - 1 * pt[0] ) * ( 1 + 1 * pt[1] ) * mgA4( 2, 2 ) * mDShapeA4( i, 2 ) );
 
-        mB( 3, i + 0 * dof ) = dshape( i, 1 ) * mg( 0, 0 ) + dshape( i, 0 ) * mg( 0, 1 );
-        mB( 3, i + 1 * dof ) = dshape( i, 1 ) * mg( 1, 0 ) + dshape( i, 0 ) * mg( 1, 1 );
-        mB( 3, i + 2 * dof ) = dshape( i, 1 ) * mg( 2, 0 ) + dshape( i, 0 ) * mg( 2, 1 );
+        mB( 3, i + 0 * dof ) = mDShape( i, 1 ) * mg( 0, 0 ) + mDShape( i, 0 ) * mg( 0, 1 );
+        mB( 3, i + 1 * dof ) = mDShape( i, 1 ) * mg( 1, 0 ) + mDShape( i, 0 ) * mg( 1, 1 );
+        mB( 3, i + 2 * dof ) = mDShape( i, 1 ) * mg( 2, 0 ) + mDShape( i, 0 ) * mg( 2, 1 );
 
-        // mB( 4, i + 0 * dof ) = gshape( i, 2 ) * mdxdX( 0, 1 ) + gshape( i, 1 ) * mdxdX( 0, 2 );
-        // mB( 4, i + 1 * dof ) = gshape( i, 2 ) * mdxdX( 1, 1 ) + gshape( i, 1 ) * mdxdX( 1, 2 );
-        // mB( 4, i + 2 * dof ) = gshape( i, 2 ) * mdxdX( 2, 1 ) + gshape( i, 1 ) * mdxdX( 2, 2 );
+        mB( 4, i + 0 * dof ) = 1. / 2 *
+                               ( ( 1 - pt[0] ) * ( mgB( 0, 1 ) * mDShapeB( i, 2 ) + mgB( 0, 2 ) * mDShapeB( i, 1 ) ) +
+                                 ( 1 + pt[0] ) * ( mgD( 0, 1 ) * mDShapeD( i, 2 ) + mgD( 0, 2 ) * mDShapeD( i, 1 ) ) );
+        mB( 4, i + 1 * dof ) = 1. / 2 *
+                               ( ( 1 - pt[0] ) * ( mgB( 1, 1 ) * mDShapeB( i, 2 ) + mgB( 1, 2 ) * mDShapeB( i, 1 ) ) +
+                                 ( 1 + pt[0] ) * ( mgD( 1, 1 ) * mDShapeD( i, 2 ) + mgD( 1, 2 ) * mDShapeD( i, 1 ) ) );
+        mB( 4, i + 2 * dof ) = 1. / 2 *
+                               ( ( 1 - pt[0] ) * ( mgB( 2, 1 ) * mDShapeB( i, 2 ) + mgB( 2, 2 ) * mDShapeB( i, 1 ) ) +
+                                 ( 1 + pt[0] ) * ( mgD( 2, 1 ) * mDShapeD( i, 2 ) + mgD( 2, 2 ) * mDShapeD( i, 1 ) ) );
 
-        // mB( 5, i + 0 * dof ) = gshape( i, 0 ) * mdxdX( 0, 2 ) + gshape( i, 2 ) * mdxdX( 0, 0 );
-        // mB( 5, i + 1 * dof ) = gshape( i, 0 ) * mdxdX( 1, 2 ) + gshape( i, 2 ) * mdxdX( 1, 0 );
-        // mB( 5, i + 2 * dof ) = gshape( i, 0 ) * mdxdX( 2, 2 ) + gshape( i, 2 ) * mdxdX( 2, 0 );
+        mB( 5, i + 0 * dof ) = 1. / 2 *
+                               ( ( 1 - pt[1] ) * ( mgA( 0, 0 ) * mDShapeA( i, 2 ) + mgA( 0, 2 ) * mDShapeA( i, 0 ) ) +
+                                 ( 1 + pt[1] ) * ( mgC( 0, 0 ) * mDShapeC( i, 2 ) + mgC( 0, 2 ) * mDShapeC( i, 0 ) ) );
+        mB( 5, i + 1 * dof ) = 1. / 2 *
+                               ( ( 1 - pt[1] ) * ( mgA( 1, 0 ) * mDShapeA( i, 2 ) + mgA( 1, 2 ) * mDShapeA( i, 0 ) ) +
+                                 ( 1 + pt[1] ) * ( mgC( 1, 0 ) * mDShapeC( i, 2 ) + mgC( 1, 2 ) * mDShapeC( i, 0 ) ) );
+        mB( 5, i + 2 * dof ) = 1. / 2 *
+                               ( ( 1 - pt[1] ) * ( mgA( 2, 0 ) * mDShapeA( i, 2 ) + mgA( 2, 2 ) * mDShapeA( i, 0 ) ) +
+                                 ( 1 + pt[1] ) * ( mgC( 2, 0 ) * mDShapeC( i, 2 ) + mgC( 2, 2 ) * mDShapeC( i, 0 ) ) );
     }
 }
 
