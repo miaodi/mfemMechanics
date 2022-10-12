@@ -27,6 +27,14 @@ set(EIGEN_BUILD_PKGCONFIG OFF)
 
 FetchContent_MakeAvailable(Fastor Eigen)
 
+FetchContent_Declare(
+  taco
+  GIT_REPOSITORY https://github.com/tensor-compiler/taco.git
+  GIT_TAG master
+)
+FetchContent_MakeAvailable(taco)
+target_include_directories(taco PUBLIC ${taco_BINARY_DIR}/include)
+
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(MFEM_FOLDER "build-debug")
 else()
@@ -34,9 +42,9 @@ else()
 endif()
 find_package(mfem REQUIRED NAMES MFEM  HINTS ${CMAKE_SOURCE_DIR}/../mfem/${MFEM_FOLDER})
 
-# find_path(TACO_INCLUDE_DIRS REQUIRED NAMES taco.h HINTS ${CMAKE_SOURCE_DIR}/../taco/include)
+find_path(TACO_INCLUDE_DIR REQUIRED NAMES taco.h HINTS ${CMAKE_BINARY_DIR}/_deps/taco-src/include)
 
-# find_library(TACO_LIB REQUIRED NAMES taco libtaco HINTS ${CMAKE_SOURCE_DIR}/../taco/build/lib)
+find_library(TACO_LIB REQUIRED NAMES taco libtaco HINTS ${CMAKE_BINARY_DIR}/lib)
 
 add_subdirectory(util)
 add_subdirectory(material)
@@ -48,8 +56,8 @@ set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX)
 add_subdirectory(examples)
 
 add_executable(test test.cpp)
-target_include_directories(test PUBLIC ${INCLUDE_DIRS} ${fastor_SOURCE_DIR})
-target_link_libraries(test PRIVATE ${LIBS})
+target_include_directories(test PUBLIC ${INCLUDE_DIRS} ${fastor_SOURCE_DIR} ${TACO_INCLUDE_DIR})
+target_link_libraries(test PRIVATE ${LIBS} ${TACO_LIB})
 
 add_executable(test2 test2.cpp)
 target_include_directories(test2 PUBLIC ${INCLUDE_DIRS})
