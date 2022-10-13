@@ -32,7 +32,7 @@ public:
 private:
     std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mStorage;
     mfem::DenseMatrix mDShape, mGShape;
-    int mElementNo{ 0 };
+    int mElementNo{0};
 };
 
 class ElasticityIntegrator : public mfem::BilinearFormIntegrator
@@ -49,13 +49,13 @@ public:
 protected:
     mfem::DenseMatrix mDShape, mGShape;
 
-    ElasticMaterial* mMaterialModel{ nullptr };
+    ElasticMaterial* mMaterialModel{nullptr};
 };
 
 class NonlinearFormIntegratorLambda : public mfem::NonlinearFormIntegrator
 {
 public:
-    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator(), mLambda{ 1. }
+    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator(), mLambda{1.}
     {
     }
 
@@ -80,7 +80,7 @@ protected:
 class NonlinearFormMaterialIntegratorLambda : public NonlinearFormIntegratorLambda
 {
 public:
-    NonlinearFormMaterialIntegratorLambda( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{ &m }
+    NonlinearFormMaterialIntegratorLambda( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{&m}
     {
     }
 
@@ -105,15 +105,15 @@ public:
     }
 
 protected:
-    ElasticMaterial* mMaterialModel{ nullptr };
-    bool mNonlinear{ true };
+    ElasticMaterial* mMaterialModel{nullptr};
+    bool mNonlinear{true};
 };
 
 class NonlinearElasticityIntegrator : public NonlinearFormMaterialIntegratorLambda
 {
 public:
     NonlinearElasticityIntegrator( ElasticMaterial& m, Memorize& memo )
-        : NonlinearFormMaterialIntegratorLambda( m ), mMemo{ memo }
+        : NonlinearFormMaterialIntegratorLambda( m ), mMemo{memo}
     {
     }
 
@@ -153,7 +153,7 @@ protected:
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
     Eigen::MatrixXd mGeomStiff;
     Memorize& mMemo;
-    bool mOnlyGeomStiff{ false };
+    bool mOnlyGeomStiff{false};
 };
 
 class NonlinearVectorBoundaryLFIntegrator : public NonlinearFormIntegratorLambda
@@ -212,6 +212,10 @@ class NonlinearCompositeSolidShellIntegrator : public NonlinearFormMaterialInteg
 public:
     NonlinearCompositeSolidShellIntegrator( ElasticMaterial& m ) : NonlinearFormMaterialIntegratorLambda( m )
     {
+        mL.resize( 5, 24 );
+        mH.resize( 5, 5 );
+        mAlpha.resize( 5 );
+        mGeomStiff.resize( 24, 24 );
     }
 
     // virtual void AssembleElementVector( const mfem::FiniteElement& el,
@@ -236,9 +240,12 @@ public:
     }
 
 protected:
-    Eigen::Matrix<double, 3, 3> mg, mgA, mgB, mgC, mgD, mgA1, mgA2, mgA3, mgA4;
+    Eigen::Matrix<double, 3, 3> mg, mGCovariant, mGContravariant, mgA, mgB, mgC, mgD, mgA1, mgA2, mgA3, mgA4;
     Eigen::Matrix<double, 6, 24> mB;
     Eigen::MatrixXd mGeomStiff;
     Eigen::Matrix<double, 8, 3> mDShape, mDShapeA, mDShapeB, mDShapeC, mDShapeD, mDShapeA1, mDShapeA2, mDShapeA3, mDShapeA4;
+    Eigen::Matrix6d mStiffModuli, mTransform;
+    Eigen::MatrixXd mL, mH;
+    Eigen::VectorXd mAlpha;
 };
 } // namespace plugin

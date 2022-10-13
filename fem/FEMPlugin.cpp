@@ -2,6 +2,7 @@
 #include <Eigen/Dense>
 #include <iostream>
 #include <unsupported/Eigen/KroneckerProduct>
+#include "util.h"
 
 namespace plugin
 {
@@ -98,7 +99,7 @@ void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el,
 {
     int dof = el.GetDof();
     int dim = el.GetDim();
-    double w{ 0 };
+    double w{0};
 
     MFEM_ASSERT( dim == Trans.GetSpaceDim(), "" );
 
@@ -509,29 +510,31 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
 
     MFEM_ASSERT( dim == 3 && dof == 8, "NonlinearCompositeSolidShellIntegrator only support linearHex elements" );
 
-    mGeomStiff.resize( dof, dof );
-
     Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, dim );
     elmat.SetSize( dof * dim );
     elmat = 0.0;
 
     Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * dim, dof * dim );
 
-    const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
     mfem::DenseMatrix mat;
     mfem::IntegrationPoint ip;
 
     // from [-1, 1] to [0, 1]
     auto convert = []( double& x ) { x = ( x + 1 ) / 2.; };
     double pt[3];
-
+    pt[0] = .5, pt[1] = .5, pt[2] = .5;
     Ttr.SetIntPoint( &ip );
+    mMaterialModel->at( Ttr, ip );
+    mMaterialModel->updateRefModuli();
+    mStiffModuli = mMaterialModel->getRefModuli();
+    const Eigen::Matrix3d orthonormalBasis = Eigen::Matrix3d::Identity();
+
     auto preprocessColl = [&]( Eigen::Matrix<double, 3, 3>& g, Eigen::Matrix<double, 8, 3>& DShape ) {
-        mat.UseExternalData( g.data(), g.rows(), g.cols() );
+        mat.UseExternalData( mGCovariant.data(), mGCovariant.rows(), mGCovariant.cols() );
         mat = Ttr.Jacobian();
         mat.UseExternalData( DShape.data(), DShape.rows(), DShape.cols() );
         el.CalcDShape( ip, mat );
-        g += u.transpose() * DShape;
+        g = mGCovariant + u.transpose() * DShape;
     };
 
     // prepare collocation points
@@ -627,10 +630,13 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
         mMaterialModel->updateRefModuli();
 
         w = ip.weight * Ttr.Weight();
-
+        mGContravariant = mGCovariant.inverse();
+        Eigen::Matrix3d T = orthonormalBasis.transpose() * mGContravariant;
+        mTransform = util::TransformationVoigtForm( T );
+        matrixB( dof, dim, ip );
         // mGeomStiff =
         //     ( w * mGShapeEig * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) * mGShapeEig.transpose() ).eval();
-        eigenMat += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
+        eigenMat += w * mB.transpose() * ( mTransform.transpose() * mStiffModuli * mTransform ) * mB;
         // for ( int j = 0; j < dim; j++ )
         // {
         //     eigenMat.block( j * dof, j * dof, dof, dof ) += mGeomStiff;
