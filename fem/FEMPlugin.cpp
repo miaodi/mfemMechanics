@@ -1,8 +1,8 @@
 #include "FEMPlugin.h"
+#include "util.h"
 #include <Eigen/Dense>
 #include <iostream>
 #include <unsupported/Eigen/KroneckerProduct>
-#include "util.h"
 
 namespace plugin
 {
@@ -99,7 +99,7 @@ void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el,
 {
     int dof = el.GetDof();
     int dim = el.GetDim();
-    double w{0};
+    double w{ 0 };
 
     MFEM_ASSERT( dim == Trans.GetSpaceDim(), "" );
 
