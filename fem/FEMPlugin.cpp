@@ -513,22 +513,18 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
     Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, dim );
     elmat.SetSize( dof * dim );
     elmat = 0.0;
+    mH.setZero();
+    mL.setZero();
 
     Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * dim, dof * dim );
 
     mfem::DenseMatrix mat;
     mfem::IntegrationPoint ip;
+    Eigen::Matrix3d T;
 
     // from [-1, 1] to [0, 1]
     auto convert = []( double& x ) { x = ( x + 1 ) / 2.; };
     double pt[3];
-    pt[0] = .5, pt[1] = .5, pt[2] = .5;
-    Ttr.SetIntPoint( &ip );
-    mMaterialModel->at( Ttr, ip );
-    mMaterialModel->updateRefModuli();
-    mStiffModuli = mMaterialModel->getRefModuli();
-    const Eigen::Matrix3d orthonormalBasis = Eigen::Matrix3d::Identity();
-
     auto preprocessColl = [&]( Eigen::Matrix<double, 3, 3>& g, Eigen::Matrix<double, 8, 3>& DShape ) {
         mat.UseExternalData( mGCovariant.data(), mGCovariant.rows(), mGCovariant.cols() );
         mat = Ttr.Jacobian();
@@ -536,6 +532,17 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
         el.CalcDShape( ip, mat );
         g = mGCovariant + u.transpose() * DShape;
     };
+
+    // eval at mid point
+    pt[0] = .5, pt[1] = .5, pt[2] = .5;
+    Ttr.SetIntPoint( &ip );
+    mMaterialModel->at( Ttr, ip );
+    mMaterialModel->updateRefModuli();
+    mStiffModuli = mMaterialModel->getRefModuli();
+    const double J_0 = Ttr.Weight();
+    const Eigen::Matrix3d orthonormalBasis = Eigen::Matrix3d::Identity();
+    preprocessColl( mg, mDShape );
+    mGContravariant0 = mGCovariant.inverse();
 
     // prepare collocation points
     {
@@ -631,17 +638,20 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
 
         w = ip.weight * Ttr.Weight();
         mGContravariant = mGCovariant.inverse();
-        Eigen::Matrix3d T = orthonormalBasis.transpose() * mGContravariant;
+        T = orthonormalBasis.transpose() * mGContravariant;
         mTransform = util::TransformationVoigtForm( T );
+        mStiffModuli = ( mTransform.transpose() * mStiffModuli * mTransform ).eval();
         matrixB( dof, dim, ip );
-        // mGeomStiff =
-        //     ( w * mGShapeEig * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) * mGShapeEig.transpose() ).eval();
-        eigenMat += w * mB.transpose() * ( mTransform.transpose() * mStiffModuli * mTransform ) * mB;
-        // for ( int j = 0; j < dim; j++ )
-        // {
-        //     eigenMat.block( j * dof, j * dof, dof, dof ) += mGeomStiff;
-        // }
+        eigenMat += w * mB.transpose() * mStiffModuli * mB;
+
+        T = mGContravariant.transpose() * mGContravariant0;
+        mTransform = util::TransformationVoigtForm( T );
+        matrixM( ip );
+        mM = J_0 / Ttr.Weight() * T * mM;
+        mL += w * mM.transpose() * mStiffModuli * mB;
+        mH += w * mM.transpose() * mStiffModuli * mM;
     }
+    eigenMat -= mL.transpose() * mH.inverse() * mL;
 }
 
 void NonlinearCompositeSolidShellIntegrator::matrixB( const int dof, const int dim, const mfem::IntegrationPoint& ip )
@@ -703,6 +713,24 @@ void NonlinearCompositeSolidShellIntegrator::matrixB( const int dof, const int d
                                ( ( 1 - pt[1] ) * ( mgA( 2, 0 ) * mDShapeA( i, 2 ) + mgA( 2, 2 ) * mDShapeA( i, 0 ) ) +
                                  ( 1 + pt[1] ) * ( mgC( 2, 0 ) * mDShapeC( i, 2 ) + mgC( 2, 2 ) * mDShapeC( i, 0 ) ) );
     }
+}
+
+void NonlinearCompositeSolidShellIntegrator::matrixM( const mfem::IntegrationPoint& ip )
+{
+    mM.setZero();
+    // from [0, 1] to [-1, 1]
+    auto convert = []( double& x ) { x = 2 * x - 1; };
+    double pt[3];
+    ip.Get( pt, 3 );
+    convert( pt[0] );
+    convert( pt[1] );
+    convert( pt[2] );
+    mB( 0, 0 ) = pt[0];
+    mB( 1, 1 ) = pt[1];
+    mB( 2, 2 ) = pt[2];
+
+    mB( 3, 3 ) = pt[0];
+    mB( 3, 4 ) = pt[1];
 }
 
 } // namespace plugin

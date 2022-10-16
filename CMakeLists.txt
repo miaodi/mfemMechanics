@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.15)
 project(mfemMechanics)
 include(FetchContent)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
@@ -24,6 +24,7 @@ FetchContent_Declare(
 set(BUILD_TESTING OFF)
 set(EIGEN_BUILD_DOC OFF)
 set(EIGEN_BUILD_PKGCONFIG OFF)
+set(EIGEN_TEST_NOQT OFF)
 
 FetchContent_MakeAvailable(Fastor Eigen)
 
@@ -42,9 +43,9 @@ else()
 endif()
 find_package(mfem REQUIRED NAMES MFEM  HINTS ${CMAKE_SOURCE_DIR}/../mfem/${MFEM_FOLDER})
 
-find_path(TACO_INCLUDE_DIR REQUIRED NAMES taco.h HINTS ${CMAKE_BINARY_DIR}/_deps/taco-src/include)
+set(TACO_INCLUDE_DIR ${CMAKE_BINARY_DIR}/_deps/taco-src/include)
 
-find_library(TACO_LIB REQUIRED NAMES taco libtaco HINTS ${CMAKE_BINARY_DIR}/lib)
+set(TACO_LIB ${CMAKE_BINARY_DIR}/lib/libtaco.so)
 
 add_subdirectory(util)
 add_subdirectory(material)
