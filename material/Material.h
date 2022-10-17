@@ -104,7 +104,7 @@ public:
 
     virtual void updateRefModuli() override;
 
-    virtual Eigen::Vector6d getPK2StressVector() const;
+    virtual Eigen::Vector6d getPK2StressVector() const override;
 
 protected:
     mfem::Coefficient* mE{ nullptr };

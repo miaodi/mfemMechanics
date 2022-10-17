@@ -23,7 +23,8 @@ double NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, const mfem
     const bool have_b = ( b.Size() == Height() );
     double sL, sR, s;
     double etaL = 0., etaR = 1., eta = 1., ratio = 1.;
-    auto CalcS = [&b, &x, have_b, this]( const double eta ) {
+    auto CalcS = [&b, &x, have_b, this]( const double eta )
+    {
         add( x, -eta, c, this->u_cur );
         this->oper->Mult( this->u_cur, this->r );
         if ( have_b )
@@ -425,6 +426,7 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         u = &x;
     }
 
+    int count = 1;
     u_cur = *u;
     for ( ; true; step++ )
     {
@@ -447,24 +449,20 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         SetLambdaToIntegrators( oper, delta_lambda + cur_lambda );
 
         mfem::NewtonSolver::Mult( b, *u );
+        if ( data )
+        {
+            if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
+            {
+                par_grid_x->Distribute( *u );
+            }
+            data->SetCycle( count );
+            data->SetTime( count++ );
+            data->Save();
+        }
         if ( GetConverged() )
         {
             cur_lambda += delta_lambda;
             u_cur = *u;
-
-            // if ( data )
-            // {
-            //     if ( step % 5 == 0 )
-            //     {
-            //         if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
-            //         {
-            //             par_grid_x->Distribute( *u );
-            //         }
-            //         data->SetCycle( count );
-            //         data->SetTime( count++ );
-            //         data->Save();
-            //     }
-            // }
         }
         else
         {

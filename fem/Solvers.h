@@ -161,11 +161,17 @@ public:
     virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;
     virtual void SetOperator( const mfem::Operator& op );
 
+    void SetDataCollection( mfem::DataCollection* dc )
+    {
+        data = dc;
+    }
+
 protected:
     int max_steps{ 100 };
     mutable double delta_lambda{ 1. };
     mutable mfem::IterativeSolver* prec{ nullptr };
     mutable mfem::Vector u_cur;
     const mfem::Operator* oper{ nullptr };
+    mutable mfem::DataCollection* data{ nullptr };
 };
 } // namespace plugin

@@ -525,7 +525,10 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
     // from [-1, 1] to [0, 1]
     auto convert = []( double& x ) { x = ( x + 1 ) / 2.; };
     double pt[3];
-    auto preprocessColl = [&]( Eigen::Matrix<double, 3, 3>& g, Eigen::Matrix<double, 8, 3>& DShape ) {
+    auto preprocessColl = [&]( Eigen::Matrix<double, 3, 3>& g, Eigen::Matrix<double, 8, 3>& DShape )
+    {
+        // g.setZero();
+        // DShape.setZero();
         mat.UseExternalData( mGCovariant.data(), mGCovariant.rows(), mGCovariant.cols() );
         mat = Ttr.Jacobian();
         mat.UseExternalData( DShape.data(), DShape.rows(), DShape.cols() );
@@ -535,6 +538,7 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
 
     // eval at mid point
     pt[0] = .5, pt[1] = .5, pt[2] = .5;
+    ip.Set3( pt[0], pt[1], pt[2] );
     Ttr.SetIntPoint( &ip );
     mMaterialModel->at( Ttr, ip );
     mMaterialModel->updateRefModuli();
@@ -588,35 +592,35 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
         ip.Set3( pt[0], pt[1], pt[2] );
         preprocessColl( mgA4, mDShapeA4 );
 
-        std::cout << mDShapeB << std::endl << std::endl;
-        std::cout << mDShapeA4 << std::endl;
+        // std::cout << mDShapeB << std::endl << std::endl;
+        // std::cout << mDShapeA4 << std::endl;
 
         mfem::Vector v;
         v.SetSize( 8 );
         ip.Set3( 0, 0, 0 );
         el.CalcShape( ip, v );
-        v.Print();
+        // v.Print();
         ip.Set3( 1, 0, 0 );
         el.CalcShape( ip, v );
-        v.Print();
+        // v.Print();
         ip.Set3( 1, 1, 0 );
         el.CalcShape( ip, v );
-        v.Print();
+        // v.Print();
         ip.Set3( 0, 1, 0 );
         el.CalcShape( ip, v );
-        v.Print();
+        // v.Print();
         ip.Set3( 0, 0, 1 );
         el.CalcShape( ip, v );
-        v.Print();
+        // v.Print();
         ip.Set3( 1, 0, 1 );
         el.CalcShape( ip, v );
-        v.Print();
+        // v.Print();
         ip.Set3( 1, 1, 1 );
         el.CalcShape( ip, v );
-        v.Print();
+        // v.Print();
         ip.Set3( 0, 1, 1 );
         el.CalcShape( ip, v );
-        v.Print();
+        // v.Print();
     }
 
     const mfem::IntegrationRule* ir = IntRule;
@@ -644,14 +648,25 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
         matrixB( dof, dim, ip );
         eigenMat += w * mB.transpose() * mStiffModuli * mB;
 
-        T = mGContravariant.transpose() * mGContravariant0;
-        mTransform = util::TransformationVoigtForm( T );
-        matrixM( ip );
-        mM = J_0 / Ttr.Weight() * T * mM;
-        mL += w * mM.transpose() * mStiffModuli * mB;
-        mH += w * mM.transpose() * mStiffModuli * mM;
+        // T = mGContravariant.transpose() * mGContravariant0;
+        // mTransform = util::TransformationVoigtForm( T );
+        // matrixM( ip );
+        // mM = ( J_0 / Ttr.Weight() * mTransform * mM ).eval();
+        // mL += w * mM.transpose() * mStiffModuli * mB;
+        // mH += w * mM.transpose() * mStiffModuli * mM;
     }
-    eigenMat -= mL.transpose() * mH.inverse() * mL;
+    // eigenMat -= mL.transpose() * mH.inverse() * mL;
+}
+
+void NonlinearCompositeSolidShellIntegrator::AssembleElementVector( const mfem::FiniteElement& el,
+                                                                    mfem::ElementTransformation& Ttr,
+                                                                    const mfem::Vector& elfun,
+                                                                    mfem::Vector& elvect )
+{
+    int dof = el.GetDof(), dim = el.GetDim();
+
+    elvect.SetSize( dof * dim );
+    elvect = 0.0;
 }
 
 void NonlinearCompositeSolidShellIntegrator::matrixB( const int dof, const int dim, const mfem::IntegrationPoint& ip )
@@ -694,24 +709,24 @@ void NonlinearCompositeSolidShellIntegrator::matrixB( const int dof, const int d
         mB( 3, i + 2 * dof ) = mDShape( i, 1 ) * mg( 2, 0 ) + mDShape( i, 0 ) * mg( 2, 1 );
 
         mB( 4, i + 0 * dof ) = 1. / 2 *
-                               ( ( 1 - pt[0] ) * ( mgB( 0, 1 ) * mDShapeB( i, 2 ) + mgB( 0, 2 ) * mDShapeB( i, 1 ) ) +
-                                 ( 1 + pt[0] ) * ( mgD( 0, 1 ) * mDShapeD( i, 2 ) + mgD( 0, 2 ) * mDShapeD( i, 1 ) ) );
+                               ( ( 1 - pt[0] ) * ( mgA( 0, 1 ) * mDShapeA( i, 2 ) + mgA( 0, 2 ) * mDShapeA( i, 1 ) ) +
+                                 ( 1 + pt[0] ) * ( mgC( 0, 1 ) * mDShapeC( i, 2 ) + mgC( 0, 2 ) * mDShapeC( i, 1 ) ) );
         mB( 4, i + 1 * dof ) = 1. / 2 *
-                               ( ( 1 - pt[0] ) * ( mgB( 1, 1 ) * mDShapeB( i, 2 ) + mgB( 1, 2 ) * mDShapeB( i, 1 ) ) +
-                                 ( 1 + pt[0] ) * ( mgD( 1, 1 ) * mDShapeD( i, 2 ) + mgD( 1, 2 ) * mDShapeD( i, 1 ) ) );
+                               ( ( 1 - pt[0] ) * ( mgA( 1, 1 ) * mDShapeA( i, 2 ) + mgA( 1, 2 ) * mDShapeA( i, 1 ) ) +
+                                 ( 1 + pt[0] ) * ( mgC( 1, 1 ) * mDShapeC( i, 2 ) + mgC( 1, 2 ) * mDShapeC( i, 1 ) ) );
         mB( 4, i + 2 * dof ) = 1. / 2 *
-                               ( ( 1 - pt[0] ) * ( mgB( 2, 1 ) * mDShapeB( i, 2 ) + mgB( 2, 2 ) * mDShapeB( i, 1 ) ) +
-                                 ( 1 + pt[0] ) * ( mgD( 2, 1 ) * mDShapeD( i, 2 ) + mgD( 2, 2 ) * mDShapeD( i, 1 ) ) );
+                               ( ( 1 - pt[0] ) * ( mgA( 2, 1 ) * mDShapeA( i, 2 ) + mgA( 2, 2 ) * mDShapeA( i, 1 ) ) +
+                                 ( 1 + pt[0] ) * ( mgC( 2, 1 ) * mDShapeC( i, 2 ) + mgC( 2, 2 ) * mDShapeC( i, 1 ) ) );
 
         mB( 5, i + 0 * dof ) = 1. / 2 *
-                               ( ( 1 - pt[1] ) * ( mgA( 0, 0 ) * mDShapeA( i, 2 ) + mgA( 0, 2 ) * mDShapeA( i, 0 ) ) +
-                                 ( 1 + pt[1] ) * ( mgC( 0, 0 ) * mDShapeC( i, 2 ) + mgC( 0, 2 ) * mDShapeC( i, 0 ) ) );
+                               ( ( 1 - pt[1] ) * ( mgB( 0, 0 ) * mDShapeB( i, 2 ) + mgB( 0, 2 ) * mDShapeB( i, 0 ) ) +
+                                 ( 1 + pt[1] ) * ( mgD( 0, 0 ) * mDShapeD( i, 2 ) + mgD( 0, 2 ) * mDShapeD( i, 0 ) ) );
         mB( 5, i + 1 * dof ) = 1. / 2 *
-                               ( ( 1 - pt[1] ) * ( mgA( 1, 0 ) * mDShapeA( i, 2 ) + mgA( 1, 2 ) * mDShapeA( i, 0 ) ) +
-                                 ( 1 + pt[1] ) * ( mgC( 1, 0 ) * mDShapeC( i, 2 ) + mgC( 1, 2 ) * mDShapeC( i, 0 ) ) );
+                               ( ( 1 - pt[1] ) * ( mgB( 1, 0 ) * mDShapeB( i, 2 ) + mgB( 1, 2 ) * mDShapeB( i, 0 ) ) +
+                                 ( 1 + pt[1] ) * ( mgD( 1, 0 ) * mDShapeD( i, 2 ) + mgD( 1, 2 ) * mDShapeD( i, 0 ) ) );
         mB( 5, i + 2 * dof ) = 1. / 2 *
-                               ( ( 1 - pt[1] ) * ( mgA( 2, 0 ) * mDShapeA( i, 2 ) + mgA( 2, 2 ) * mDShapeA( i, 0 ) ) +
-                                 ( 1 + pt[1] ) * ( mgC( 2, 0 ) * mDShapeC( i, 2 ) + mgC( 2, 2 ) * mDShapeC( i, 0 ) ) );
+                               ( ( 1 - pt[1] ) * ( mgB( 2, 0 ) * mDShapeB( i, 2 ) + mgB( 2, 2 ) * mDShapeB( i, 0 ) ) +
+                                 ( 1 + pt[1] ) * ( mgD( 2, 0 ) * mDShapeD( i, 2 ) + mgD( 2, 2 ) * mDShapeD( i, 0 ) ) );
     }
 }
 
@@ -725,12 +740,12 @@ void NonlinearCompositeSolidShellIntegrator::matrixM( const mfem::IntegrationPoi
     convert( pt[0] );
     convert( pt[1] );
     convert( pt[2] );
-    mB( 0, 0 ) = pt[0];
-    mB( 1, 1 ) = pt[1];
-    mB( 2, 2 ) = pt[2];
+    mM( 0, 0 ) = pt[0];
+    mM( 1, 1 ) = pt[1];
+    mM( 2, 2 ) = pt[2];
 
-    mB( 3, 3 ) = pt[0];
-    mB( 3, 4 ) = pt[1];
+    mM( 3, 3 ) = pt[0];
+    mM( 3, 4 ) = pt[1];
 }
 
 } // namespace plugin
