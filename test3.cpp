@@ -165,7 +165,9 @@ int main( int argc, char* argv[] )
     IsotropicElasticMaterial iem( E_func, nu_func );
 
     plugin::Memorize mm( mesh );
-    auto intg = new plugin::NonlinearCompositeSolidShellIntegrator( iem );
+    // auto intg = new plugin::NonlinearCompositeSolidShellIntegrator( iem );
+    
+    auto intg = new plugin::NonlinearElasticityIntegrator( iem,mm );
     NonlinearForm* nlf = new NonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
     nlf->SetEssentialTrueDofs( ess_tdof_list );
