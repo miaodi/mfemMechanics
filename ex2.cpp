@@ -50,7 +50,7 @@ using namespace mfem;
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "/Users/dimiao/repo/mfem_test/tensile.mesh";
+    const char* mesh_file = "../../data/tensile.mesh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;

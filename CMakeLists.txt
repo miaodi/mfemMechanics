@@ -88,9 +88,9 @@ target_link_libraries(petchbuckle PRIVATE ${LIBS})
 # target_include_directories(ex16 PUBLIC ${INCLUDE_DIRS})
 # target_link_libraries(ex16 PRIVATE ${LIBS})
 
-# add_executable(ex2 ex2.cpp)
-# target_include_directories(ex2 PUBLIC ${INCLUDE_DIRS})
-# target_link_libraries(ex2 PRIVATE ${LIBS})
+add_executable(ex2 ex2.cpp)
+target_include_directories(ex2 PUBLIC ${INCLUDE_DIRS})
+target_link_libraries(ex2 PRIVATE ${LIBS})
 
 # add_executable(ex2p ex2p.cpp)
 # target_include_directories(ex2p PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})

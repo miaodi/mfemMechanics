@@ -32,7 +32,7 @@ public:
 private:
     std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mStorage;
     mfem::DenseMatrix mDShape, mGShape;
-    int mElementNo{0};
+    int mElementNo{ 0 };
 };
 
 class ElasticityIntegrator : public mfem::BilinearFormIntegrator
@@ -49,13 +49,13 @@ public:
 protected:
     mfem::DenseMatrix mDShape, mGShape;
 
-    ElasticMaterial* mMaterialModel{nullptr};
+    ElasticMaterial* mMaterialModel{ nullptr };
 };
 
 class NonlinearFormIntegratorLambda : public mfem::NonlinearFormIntegrator
 {
 public:
-    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator(), mLambda{1.}
+    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator(), mLambda{ 1. }
     {
     }
 
@@ -80,7 +80,7 @@ protected:
 class NonlinearFormMaterialIntegratorLambda : public NonlinearFormIntegratorLambda
 {
 public:
-    NonlinearFormMaterialIntegratorLambda( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{&m}
+    NonlinearFormMaterialIntegratorLambda( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{ &m }
     {
     }
 
@@ -105,15 +105,15 @@ public:
     }
 
 protected:
-    ElasticMaterial* mMaterialModel{nullptr};
-    bool mNonlinear{true};
+    ElasticMaterial* mMaterialModel{ nullptr };
+    bool mNonlinear{ true };
 };
 
 class NonlinearElasticityIntegrator : public NonlinearFormMaterialIntegratorLambda
 {
 public:
     NonlinearElasticityIntegrator( ElasticMaterial& m, Memorize& memo )
-        : NonlinearFormMaterialIntegratorLambda( m ), mMemo{memo}
+        : NonlinearFormMaterialIntegratorLambda( m ), mMemo{ memo }
     {
     }
 
@@ -153,7 +153,7 @@ protected:
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
     Eigen::MatrixXd mGeomStiff;
     Memorize& mMemo;
-    bool mOnlyGeomStiff{false};
+    bool mOnlyGeomStiff{ false };
 };
 
 class NonlinearVectorBoundaryLFIntegrator : public NonlinearFormIntegratorLambda
@@ -247,5 +247,70 @@ protected:
     Eigen::Matrix6d mStiffModuli, mTransform;
     Eigen::MatrixXd mL, mH;
     Eigen::VectorXd mAlpha;
+};
+
+class CZMIntegrator : public mfem::NonlinearFormIntegrator
+{
+public:
+    CZMIntegrator() : mfem::NonlinearFormIntegrator()
+    {
+    }
+
+    CZMIntegrator( const double sigmaMax,
+                   const double tauMax,
+                   const double phiN,
+                   const double phiT,
+                   const double deltaN,
+                   const double deltaT,
+                   const double deltaNStar = 0 )
+        : mfem::NonlinearFormIntegrator(), mSigmaMax{ sigmaMax }, mTauMax{ tauMax }, mPhiN{ phiN }, mPhiT{ phiT }, mDeltaN{ deltaN }, mDeltaT{ deltaT }, mDeltaNStar{ deltaNStar }
+    {
+    }
+
+    virtual void AssembleFaceVector( const mfem::FiniteElement& el1,
+                                     const mfem::FiniteElement& el2,
+                                     mfem::FaceElementTransformations& Tr,
+                                     const mfem::Vector& elfun,
+                                     mfem::Vector& elvect ) override;
+
+    virtual void AssembleFaceGrad( const mfem::FiniteElement& el1,
+                                   const mfem::FiniteElement& el2,
+                                   mfem::FaceElementTransformations& Tr,
+                                   const mfem::Vector& elfun,
+                                   mfem::DenseMatrix& elmat ) override;
+
+    void matrixB( const int dof1, const int dof2, const int dim )
+    {
+        mB.resize( dim, dim * ( dof1 + dof2 ) );
+        mB.setZero();
+
+        for ( int i = 0; i < dof1; i++ )
+        {
+            for ( int j = 0; j < dim; j++ )
+            {
+                mB( j, i + j * dof1 ) = shape1( i );
+            }
+        }
+        for ( int i = 0; i < dof2; i++ )
+        {
+            for ( int j = 0; j < dim; j++ )
+            {
+                mB( j, i + j * dof2 + dim * dof1 ) = -shape2( i );
+            }
+        }
+    }
+
+protected:
+    double mSigmaMax{ 0. };
+    double mTauMax{ 0. };
+    double mPhiN{ 0. };
+    double mPhiT{ 0. };
+    double mDeltaN{ 0. };
+    double mDeltaT{ 0. };
+    double mDeltaNStar{ 0. };
+    mfem::Vector shape1, shape2;
+
+    Eigen::MatrixXd mB;
+    Eigen::VectorXd u;
 };
 } // namespace plugin

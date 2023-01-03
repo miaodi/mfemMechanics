@@ -1,8 +1,8 @@
 #include "FEMPlugin.h"
+#include "util.h"
 #include <Eigen/Dense>
 #include <iostream>
 #include <unsupported/Eigen/KroneckerProduct>
-#include "util.h"
 
 namespace plugin
 {
@@ -99,7 +99,7 @@ void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el,
 {
     int dof = el.GetDof();
     int dim = el.GetDim();
-    double w{0};
+    double w{ 0 };
 
     MFEM_ASSERT( dim == Trans.GetSpaceDim(), "" );
 
@@ -529,7 +529,8 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
     mStiffModuli = mMaterialModel->getRefModuli();
     const Eigen::Matrix3d orthonormalBasis = Eigen::Matrix3d::Identity();
 
-    auto preprocessColl = [&]( Eigen::Matrix<double, 3, 3>& g, Eigen::Matrix<double, 8, 3>& DShape ) {
+    auto preprocessColl = [&]( Eigen::Matrix<double, 3, 3>& g, Eigen::Matrix<double, 8, 3>& DShape )
+    {
         mat.UseExternalData( mGCovariant.data(), mGCovariant.rows(), mGCovariant.cols() );
         mat = Ttr.Jacobian();
         mat.UseExternalData( DShape.data(), DShape.rows(), DShape.cols() );
@@ -705,4 +706,94 @@ void NonlinearCompositeSolidShellIntegrator::matrixB( const int dof, const int d
     }
 }
 
+void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
+                                        const mfem::FiniteElement& el2,
+                                        mfem::FaceElementTransformations& Tr,
+                                        const mfem::Vector& elfun,
+                                        mfem::Vector& elvect )
+{
+    int vdim = Tr.GetSpaceDim();
+    int dof1 = el1.GetDof();
+    int dof2 = el2.GetDof();
+    int dof = dof1 + dof2;
+    MFEM_ASSERT( vdim == 2, "CZMIntegrator only support 2D elements" );
+    MFEM_ASSERT( Tr.Elem2No >= 0, "CZMIntegrator is an internal bdr integrator" );
+
+    double q = mPhiT / mPhiN;
+    double r = mDeltaNStar / mDeltaT;
+    shape1.SetSize( dof1 );
+    shape2.SetSize( dof2 );
+
+    elvect.SetSize( dof * vdim );
+    elvect = 0.0;
+    // Eigen::Map<Eigen::VectorXd> eigenVec( elvect.GetData(), elvect.Size() );
+    // Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, vdim );
+
+    // const mfem::IntegrationRule* ir = IntRule;
+    // if ( ir == NULL )
+    // {
+    //     int intorder = 2 * el1.GetOrder();
+    //     ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
+    // }
+
+    // Eigen::Rotation2Dd r( EIGEN_PI / 2 );
+
+    // const Eigen::MatrixXd identity = Eigen::MatrixXd::Identity( vdim, vdim );
+
+    // auto& Ttr = Tr.GetElement1Transformation();
+
+    // for ( int i = 0; i < ir->GetNPoints(); i++ )
+    // {
+    //     const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+
+    //     // Set the integration point in the face and the neighboring element
+    //     Tr.SetAllIntPoints( &ip );
+
+    //     // Access the neighboring element's integration point
+    //     const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
+    //     const mfem::IntegrationPoint& eip2 = Tr.GetElement2IntPoint();
+
+    //     el1.CalcShape( eip1, shape1 );
+    //     el2.CalcShape( eip2, shape2 );
+
+    //     // Use Tr transformation in case Q depends on boundary attribute
+    //     const double val = Q.Eval( Tr, ip ) * GetLambda();
+    //     // vec *= Tr.Weight() * ip.weight;
+    //     el1.CalcShape( eip, shape );
+    //     el1.CalcDShape( eip, mDShape );
+    //     Mult( mDShape, Ttr.InverseJacobian(), mGShape );
+    //     mdxdX = u.transpose() * Eigen::Map<const Eigen::MatrixXd>( mGShape.Data(), dof, vdim ) + identity;
+
+    //     Eigen::Map<const Eigen::MatrixXd> vec( shape.GetData(), 1, dof );
+
+    //     Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
+
+    //     Eigen::VectorXd dxdxi = mdxdX * Jac;
+
+    //     eigenVec -= Eigen::kroneckerProduct( identity, vec ).transpose() * r.toRotationMatrix() * dxdxi.normalized() *
+    //                 dxdxi.norm() * ip.weight * val;
+    // }
+}
+
+void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
+                                      const mfem::FiniteElement& el2,
+                                      mfem::FaceElementTransformations& Tr,
+                                      const mfem::Vector& elfun,
+                                      mfem::DenseMatrix& elmat )
+{
+    int vdim = Tr.GetSpaceDim();
+    int dof1 = el1.GetDof();
+    int dof2 = el2.GetDof();
+    int dof = dof1 + dof2;
+    MFEM_ASSERT( vdim == 2, "CZMIntegrator only support 2D elements" );
+    MFEM_ASSERT( Tr.Elem2No >= 0, "CZMIntegrator is an internal bdr integrator" );
+
+    double q = mPhiT / mPhiN;
+    double r = mDeltaNStar / mDeltaT;
+    shape1.SetSize( dof1 );
+    shape2.SetSize( dof2 );
+
+    elmat.SetSize( dof * vdim );
+    elmat = 0.0;
+}
 } // namespace plugin
