@@ -200,8 +200,19 @@ int main( int argc, char* argv[] )
     nlf->AddInteriorFaceIntegrator( &czm_intg );
 
     Vector zero;
+
     GridFunction u( fespace );
-    newton_solver->Mult( zero, u );
+    u = 0.;
+
+    Array<int> bdr2( mesh->bdr_attributes.Max() );
+    bdr2 = 0;
+    bdr2[1] = 1;
+
+    Vector vec( 2 );
+    vec( 1 ) = .01;
+    VectorConstantCoefficient vcc( vec );
+    u.ProjectBdrCoefficient( vcc, bdr2 );
+    // newton_solver->Mult( zero, u );
 
     // // 15. Save data in the ParaView format
     // ParaViewDataCollection paraview_dc( "test2", mesh );

@@ -726,53 +726,52 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
 
     elvect.SetSize( dof * vdim );
     elvect = 0.0;
-    // Eigen::Map<Eigen::VectorXd> eigenVec( elvect.GetData(), elvect.Size() );
-    // Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, vdim );
+    Eigen::Map<Eigen::VectorXd> eigenVec( elvect.GetData(), elvect.Size() );
+    Eigen::Map<const Eigen::VectorXd> u( elfun.GetData(), elfun.Size() );
 
-    // const mfem::IntegrationRule* ir = IntRule;
-    // if ( ir == NULL )
-    // {
-    //     int intorder = 2 * el1.GetOrder();
-    //     ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
-    // }
+    const mfem::IntegrationRule* ir = IntRule;
+    if ( ir == NULL )
+    {
+        int intorder = 2 * el1.GetOrder();
+        ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
+    }
 
-    // Eigen::Rotation2Dd r( EIGEN_PI / 2 );
+    Eigen::Rotation2Dd rot( -EIGEN_PI / 2 );
 
-    // const Eigen::MatrixXd identity = Eigen::MatrixXd::Identity( vdim, vdim );
+    for ( int i = 0; i < ir->GetNPoints(); i++ )
+    {
+        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
 
-    // auto& Ttr = Tr.GetElement1Transformation();
+        // Set the integration point in the face and the neighboring element
+        Tr.SetAllIntPoints( &ip );
 
-    // for ( int i = 0; i < ir->GetNPoints(); i++ )
-    // {
-    //     const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+        // Access the neighboring element's integration point
+        const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
+        const mfem::IntegrationPoint& eip2 = Tr.GetElement2IntPoint();
 
-    //     // Set the integration point in the face and the neighboring element
-    //     Tr.SetAllIntPoints( &ip );
+        el1.CalcShape( eip1, shape1 );
+        el2.CalcShape( eip2, shape2 );
 
-    //     // Access the neighboring element's integration point
-    //     const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
-    //     const mfem::IntegrationPoint& eip2 = Tr.GetElement2IntPoint();
+        matrixB( dof1, dof2, vdim );
+        Eigen::VectorXd Delta = mB * u;
+        Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
+        Eigen::MatrixXd DeltaToTN( vdim, vdim );
+        DeltaToTN.col( 1 ) = Jac;
+        DeltaToTN.col( 1 ).normalize();
+        DeltaToTN.col( 0 ) = rot.toRotationMatrix() * DeltaToTN.col( 1 );
+        std::cout << exp( 1 ) * DeltaToTN << std::endl << std::endl;
+        Delta = ( DeltaToTN.transpose() * Delta ).eval();
 
-    //     el1.CalcShape( eip1, shape1 );
-    //     el2.CalcShape( eip2, shape2 );
-
-    //     // Use Tr transformation in case Q depends on boundary attribute
-    //     const double val = Q.Eval( Tr, ip ) * GetLambda();
-    //     // vec *= Tr.Weight() * ip.weight;
-    //     el1.CalcShape( eip, shape );
-    //     el1.CalcDShape( eip, mDShape );
-    //     Mult( mDShape, Ttr.InverseJacobian(), mGShape );
-    //     mdxdX = u.transpose() * Eigen::Map<const Eigen::MatrixXd>( mGShape.Data(), dof, vdim ) + identity;
-
-    //     Eigen::Map<const Eigen::MatrixXd> vec( shape.GetData(), 1, dof );
-
-    //     Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
-
-    //     Eigen::VectorXd dxdxi = mdxdX * Jac;
-
-    //     eigenVec -= Eigen::kroneckerProduct( identity, vec ).transpose() * r.toRotationMatrix() * dxdxi.normalized() *
-    //                 dxdxi.norm() * ip.weight * val;
-    // }
+        Eigen::VectorXd T( 2 );
+        // Tt
+        T( 0 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * mPhiN *
+                 ( q + Delta( 1 ) * ( r - q ) / mDeltaN / ( r - 1 ) ) / mDeltaT / mDeltaT;
+        // Tn
+        T( 1 ) = mPhiN / mDeltaN * exp( -Delta( 1 ) / mDeltaN ) *
+                 ( Delta( 1 ) / mDeltaN * exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) +
+                   ( 1 - q ) / ( r - 1 ) * ( 1 - exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) ) * ( r - Delta( 1 ) / mDeltaN ) );
+        eigenVec += mB.transpose() * DeltaToTN * T * ip.weight * Tr.Weight();
+    }
 }
 
 void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
@@ -795,5 +794,57 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
 
     elmat.SetSize( dof * vdim );
     elmat = 0.0;
+    Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * vdim, dof * vdim );
+    Eigen::Map<const Eigen::VectorXd> u( elfun.GetData(), elfun.Size() );
+
+    const mfem::IntegrationRule* ir = IntRule;
+    if ( ir == NULL )
+    {
+        int intorder = 2 * el1.GetOrder();
+        ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
+    }
+
+    Eigen::Rotation2Dd rot( -EIGEN_PI / 2 );
+
+    for ( int i = 0; i < ir->GetNPoints(); i++ )
+    {
+        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+
+        // Set the integration point in the face and the neighboring element
+        Tr.SetAllIntPoints( &ip );
+
+        // Access the neighboring element's integration point
+        const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
+        const mfem::IntegrationPoint& eip2 = Tr.GetElement2IntPoint();
+
+        el1.CalcShape( eip1, shape1 );
+        el2.CalcShape( eip2, shape2 );
+
+        matrixB( dof1, dof2, vdim );
+        Eigen::VectorXd Delta = mB * u;
+        Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
+        Eigen::MatrixXd DeltaToTN( vdim, vdim );
+        DeltaToTN.col( 1 ) = Jac;
+        DeltaToTN.col( 1 ).normalize();
+        DeltaToTN.col( 0 ) = rot.toRotationMatrix() * DeltaToTN.col( 1 );
+        std::cout << exp( 1 ) * DeltaToTN << std::endl << std::endl;
+        Delta = ( DeltaToTN.transpose() * Delta ).eval();
+
+        Eigen::MatrixXd T( 2, 2 );
+        // Ttt
+        T( 0, 0 ) = 2 * ( std::pow( mDeltaT, 2 ) - 2 * std::pow( Delta( 0 ), 2 ) ) *
+                    exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * mPhiN *
+                    ( mDeltaN * ( r - 1 ) * Delta( 1 ) * ( r - q ) ) / mDeltaN / std::pow( Delta( 0 ), 4 ) / ( r - 1 );
+        // Tnn
+        T( 1, 1 ) = exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * mPhiN *
+                    ( mDeltaN * ( 2 * r - q - q * r + exp( Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * ( q - 1 ) * ( r + 1 ) ) -
+                      Delta( 1 ) * ( exp( Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * ( q - 1 ) - q + r ) ) /
+                    std::pow( mDeltaN, 3 ) / ( r - 1 );
+        // Tnt
+        T( 1, 0 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * mPhiN *
+                    ( Delta( 1 ) * ( q - r ) - mDeltaN * ( q - 1 ) * r / std::pow( mDeltaN * Delta( 0 ), 2 ) / ( r - 1 ) );
+        T( 0, 1 ) = T( 1, 0 );
+        eigenMat += mB.transpose() * DeltaToTN * T * DeltaToTN.transpose() * mB * ip.weight * Tr.Weight();
+    }
 }
 } // namespace plugin
