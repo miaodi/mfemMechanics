@@ -199,7 +199,6 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
             }
         }
     }
-    std::cout << eigenMat << std::endl << std::endl;
 }
 
 void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteElement& el,
@@ -773,7 +772,27 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
 
         matrixB( dof1, dof2, vdim );
         Eigen::VectorXd Delta = mB * u;
-        eigenVec += 1e16 * mB.transpose() * Delta * ip.weight * Tr.Weight();
+        Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
+        Eigen::MatrixXd DeltaToTN( vdim, vdim );
+        DeltaToTN.col( 0 ) = Jac;
+        DeltaToTN.col( 0 ).normalize();
+        DeltaToTN.col( 1 ) = rot.toRotationMatrix() * DeltaToTN.col( 0 );
+        Delta = ( DeltaToTN.transpose() * Delta ).eval();
+        Eigen::VectorXd T( 2 );
+        // Tt
+        T( 0 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * mPhiN *
+                 ( q + Delta( 1 ) * ( r - q ) / mDeltaN / ( r - 1 ) ) / mDeltaT / mDeltaT;
+        // Tn
+        T( 1 ) = mPhiN / mDeltaN * exp( -Delta( 1 ) / mDeltaN ) *
+                 ( Delta( 1 ) / mDeltaN * exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) +
+                   ( 1 - q ) / ( r - 1 ) * ( 1 - exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) ) * ( r - Delta( 1 ) / mDeltaN ) );
+        // T( 1 ) = exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * mPhiN *
+        //          ( Delta( 1 ) * ( exp( std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * ( q - 1 ) - q + r ) -
+        //            mDeltaN * ( exp( std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) - 1 ) ) /
+        //          std::pow( mDeltaN, 2 ) / ( r - 1 );
+        std::cout << "DeltaToTN: \n" << DeltaToTN << std::endl;
+        std::cout << "T: \n" << T << std::endl;
+        eigenVec += mB.transpose() * DeltaToTN * T * ip.weight * Tr.Weight();
     }
 
     std::cout << eigenVec << std::endl << std::endl;
@@ -837,76 +856,31 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
         shape2.Print( mfem::out, 10 );
 
         matrixB( dof1, dof2, vdim );
+        Eigen::VectorXd Delta = mB * u;
+        Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
+        Eigen::MatrixXd DeltaToTN( vdim, vdim );
+        DeltaToTN.col( 0 ) = Jac;
+        DeltaToTN.col( 0 ).normalize();
+        DeltaToTN.col( 1 ) = rot.toRotationMatrix() * DeltaToTN.col( 0 );
+        Delta = ( DeltaToTN.transpose() * Delta ).eval();
+        // std::cout << Delta << std::endl << std::endl;
 
-        eigenMat += 1e16 * mB.transpose() * mB * ip.weight * Tr.Weight();
+        Eigen::MatrixXd T( 2, 2 );
+        // Ttt
+        T( 0, 0 ) = 2 * ( std::pow( mDeltaT, 2 ) - 2 * std::pow( Delta( 0 ), 2 ) ) *
+                    exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * mPhiN *
+                    ( mDeltaN * q * ( r - 1 ) + Delta( 1 ) * ( r - q ) ) / mDeltaN / std::pow( mDeltaT, 4 ) / ( r - 1 );
+        // Tnn
+        T( 1, 1 ) = exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * mPhiN *
+                    ( mDeltaN * ( 2 * r - q - q * r + exp( Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * ( q - 1 ) * ( r + 1 ) ) -
+                      Delta( 1 ) * ( exp( Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * ( q - 1 ) - q + r ) ) /
+                    std::pow( mDeltaN, 3 ) / ( r - 1 );
+        // Tnt
+        T( 1, 0 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * mPhiN *
+                    ( Delta( 1 ) * ( q - r ) - mDeltaN * ( q - 1 ) * r ) / std::pow( mDeltaN * mDeltaT, 2 ) / ( r - 1 );
+        T( 0, 1 ) = T( 1, 0 );
+        eigenMat += mB.transpose() * DeltaToTN * T * DeltaToTN.transpose() * mB * ip.weight * Tr.Weight();
     }
-    std::cout << eigenMat << std::endl << std::endl;
+    std::cout<<eigenMat<<std::endl;
 }
-
-void NonlinearDirichletPenaltyIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
-                                                              const mfem::FiniteElement& el2,
-                                                              mfem::FaceElementTransformations& Tr,
-                                                              const mfem::Vector& elfun,
-                                                              mfem::Vector& elvect )
-{
-    int vdim = Tr.GetSpaceDim();
-    int dof = el1.GetDof();
-
-    shape.SetSize( dof );
-    vec.SetSize( vdim );
-
-    elvect.SetSize( dof * vdim );
-    elvect = 0.0;
-
-    const mfem::IntegrationRule* ir = IntRule;
-    if ( ir == NULL )
-    {
-        int intorder = 2 * el1.GetOrder();
-        ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
-    }
-
-    for ( int i = 0; i < ir->GetNPoints(); i++ )
-    {
-        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
-
-        // Set the integration point in the face and the neighboring element
-        Tr.SetAllIntPoints( &ip );
-
-        // Access the neighboring element's integration point
-        const mfem::IntegrationPoint& eip = Tr.GetElement1IntPoint();
-
-        // Use Tr transformation in case Q depends on boundary attribute
-        Q.Eval( vec, Tr, ip );
-        vec *= Tr.Weight() * ip.weight * GetLambda();
-        // vec.Print();
-        // std::cout << GetLambda() << " " << Tr.Attribute << std::endl;
-        el1.CalcShape( eip, shape );
-
-        for ( int k = 0; k < vdim; k++ )
-        {
-            for ( int s = 0; s < dof; s++ )
-            {
-                // move r.h.s to l.h.s, hence minus
-                elvect( dof * k + s ) -= vec( k ) * shape( s );
-            }
-        }
-    }
-}
-
-void NonlinearDirichletPenaltyIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
-                                                            const mfem::FiniteElement& el2,
-                                                            mfem::FaceElementTransformations& Tr,
-                                                            const mfem::Vector& elfun,
-                                                            mfem::DenseMatrix& elmat )
-{
-    int vdim = Tr.GetSpaceDim();
-    int dof = el1.GetDof();
-
-    shape.SetSize( dof );
-    vec.SetSize( vdim );
-
-    elmat.SetSize( dof * vdim );
-    elmat = 0.0;
-}
-
 } // namespace plugin

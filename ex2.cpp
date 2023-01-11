@@ -50,7 +50,7 @@ using namespace mfem;
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/tensile.mesh";
+    const char* mesh_file = "../../data/twoElementTensile.mesh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -169,7 +169,7 @@ int main( int argc, char* argv[] )
     //    corresponding to the linear elasticity integrator with piece-wise
     //    constants coefficient lambda and mu.
     Vector Nu( mesh->attributes.Max() );
-    Nu = .3;
+    Nu = .0;
     PWConstCoefficient nu_func( Nu );
 
     Vector E( mesh->attributes.Max() );
@@ -189,7 +189,7 @@ int main( int argc, char* argv[] )
     bdr2[1] = 1;
 
     Vector vec( 2 );
-    vec( 0 ) = .2;
+    vec( 1 ) = .2;
     VectorConstantCoefficient vcc( vec );
     x.ProjectBdrCoefficient( vcc, bdr2 );
 

@@ -23,7 +23,8 @@ double NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, const mfem
     const bool have_b = ( b.Size() == Height() );
     double sL, sR, s;
     double etaL = 0., etaR = 1., eta = 1., ratio = 1.;
-    auto CalcS = [&b, &x, have_b, this]( const double eta ) {
+    auto CalcS = [&b, &x, have_b, this]( const double eta )
+    {
         add( x, -eta, c, this->u_cur );
         this->oper->Mult( this->u_cur, this->r );
         if ( have_b )
@@ -73,6 +74,120 @@ double NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, const mfem
     }
     std::cout << "eta: " << eta << std::endl;
     return eta;
+}
+
+void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
+{
+    using namespace mfem;
+    MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
+    MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
+
+    int it;
+    double norm0, norm, norm_goal;
+    const bool have_b = ( b.Size() == Height() );
+
+    if ( !iterative_mode )
+    {
+        x = 0.0;
+    }
+
+    ProcessNewState( x );
+
+    oper->Mult( x, r );
+    if ( have_b )
+    {
+        r -= b;
+    }
+
+    norm0 = norm = Norm( r );
+    if ( print_options.first_and_last && !print_options.iterations )
+    {
+        mfem::out << "Newton iteration " << std::setw( 2 ) << 0 << " : ||r|| = " << norm << "...\n";
+    }
+    norm_goal = std::max( rel_tol * norm, abs_tol );
+
+    prec->iterative_mode = false;
+
+    // x_{i+1} = x_i - [DF(x_i)]^{-1} [F(x_i)-b]
+    for ( it = 0; true; it++ )
+    {
+        MFEM_ASSERT( IsFinite( norm ), "norm = " << norm );
+        if ( print_options.iterations )
+        {
+            mfem::out << "Newton iteration " << std::setw( 2 ) << it << " : ||r|| = " << norm;
+            if ( it > 0 )
+            {
+                mfem::out << ", ||r||/||r_0|| = " << norm / norm0;
+            }
+            mfem::out << '\n';
+        }
+        Monitor( it, norm, r, x );
+
+        if ( norm <= norm_goal )
+        {
+            converged = true;
+            break;
+        }
+
+        if ( it >= max_iter )
+        {
+            converged = false;
+            break;
+        }
+
+        grad = &oper->GetGradient( x );        
+        {
+            std::ofstream myfile;
+            myfile.open ("mat1.txt");
+            grad->PrintMatlab(myfile);
+            myfile.close();
+        }
+
+        prec->SetOperator( *grad );
+
+        if ( lin_rtol_type )
+        {
+            AdaptiveLinRtolPreSolve( x, it, norm );
+        }
+
+        prec->Mult( r, c ); // c = [DF(x_i)]^{-1} [F(x_i)-b]
+
+        if ( lin_rtol_type )
+        {
+            AdaptiveLinRtolPostSolve( c, r, it, norm );
+        }
+
+        const double c_scale = ComputeScalingFactor( x, b );
+        if ( c_scale == 0.0 )
+        {
+            converged = false;
+            break;
+        }
+        add( x, -c_scale, c, x );
+
+        ProcessNewState( x );
+
+        oper->Mult( x, r );
+        std::cout<<"print X:\n";
+        x.Print();
+        if ( have_b )
+        {
+            r -= b;
+        }
+        norm = Norm( r );
+    }
+
+    final_iter = it;
+    final_norm = norm;
+
+    if ( print_options.summary || ( !converged && print_options.warnings ) || print_options.first_and_last )
+    {
+        mfem::out << "Newton: Number of iterations: " << final_iter << '\n' << "   ||r|| = " << final_norm << '\n';
+    }
+    if ( !converged && ( print_options.summary || print_options.warnings ) )
+    {
+        mfem::out << "Newton: No convergence!\n";
+    }
 }
 
 void Crisfield::SetOperator( const mfem::Operator& op )
@@ -446,7 +561,7 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         delta_lambda = std::min( delta_lambda, 1. - cur_lambda );
         SetLambdaToIntegrators( oper, delta_lambda + cur_lambda );
 
-        mfem::NewtonSolver::Mult( b, *u );
+        NewtonLineSearch::Mult( b, *u );
         if ( GetConverged() )
         {
             cur_lambda += delta_lambda;

@@ -313,4 +313,30 @@ protected:
     Eigen::MatrixXd mB;
     Eigen::VectorXd u;
 };
+
+class NonlinearDirichletPenaltyIntegrator : public NonlinearFormIntegratorLambda
+{
+public:
+    NonlinearDirichletPenaltyIntegrator( mfem::VectorCoefficient& QG ) : NonlinearFormIntegratorLambda(), Q( QG )
+    {
+    }
+
+    virtual void AssembleFaceVector( const mfem::FiniteElement& el1,
+                                     const mfem::FiniteElement& el2,
+                                     mfem::FaceElementTransformations& Tr,
+                                     const mfem::Vector& elfun,
+                                     mfem::Vector& elvect ) override;
+
+    virtual void AssembleFaceGrad( const mfem::FiniteElement& el1,
+                                   const mfem::FiniteElement& el2,
+                                   mfem::FaceElementTransformations& Tr,
+                                   const mfem::Vector& elfun,
+                                   mfem::DenseMatrix& elmat ) override;
+
+protected:
+    mfem::Vector shape, vec;
+    Eigen::MatrixXd mB;
+    mfem::VectorCoefficient& Q;
+};
+
 } // namespace plugin

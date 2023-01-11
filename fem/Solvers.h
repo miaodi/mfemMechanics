@@ -50,6 +50,7 @@ public:
 
     virtual double ComputeScalingFactor( const mfem::Vector& x, const mfem::Vector& b ) const;
     virtual void SetOperator( const mfem::Operator& op );
+    virtual void Mult(const mfem::Vector &b, mfem::Vector &x) const;
 };
 
 void SetLambdaToIntegrators( const mfem::Operator*, const double l );
@@ -136,7 +137,7 @@ protected:
     mutable mfem::DataCollection* data{ nullptr };
 };
 
-class MultiNewtonAdaptive : public mfem::NewtonSolver
+class MultiNewtonAdaptive : public NewtonLineSearch
 {
 public:
     void SetMaxStep( const int step )
@@ -151,7 +152,7 @@ public:
     MultiNewtonAdaptive();
 
 #ifdef MFEM_USE_MPI
-    MultiNewtonAdaptive( MPI_Comm comm_ ) : mfem::NewtonSolver( comm_ )
+    MultiNewtonAdaptive( MPI_Comm comm_ ) : NewtonLineSearch( comm_ )
     {
     }
 #endif
