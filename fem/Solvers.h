@@ -137,7 +137,7 @@ protected:
     mutable mfem::DataCollection* data{ nullptr };
 };
 
-class MultiNewtonAdaptive : public NewtonLineSearch
+class MultiNewtonAdaptive : public mfem::NewtonSolver
 {
 public:
     void SetMaxStep( const int step )
@@ -152,7 +152,7 @@ public:
     MultiNewtonAdaptive();
 
 #ifdef MFEM_USE_MPI
-    MultiNewtonAdaptive( MPI_Comm comm_ ) : NewtonLineSearch( comm_ )
+    MultiNewtonAdaptive( MPI_Comm comm_ ) : NewtonSolver( comm_ )
     {
     }
 #endif
@@ -162,11 +162,17 @@ public:
     virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;
     virtual void SetOperator( const mfem::Operator& op );
 
+
+    void SetDataCollection( mfem::DataCollection* dc )
+    {
+        data = dc;
+    }
 protected:
     int max_steps{ 100 };
     mutable double delta_lambda{ 1. };
     mutable mfem::IterativeSolver* prec{ nullptr };
     mutable mfem::Vector u_cur;
     const mfem::Operator* oper{ nullptr };
+    mutable mfem::DataCollection* data{ nullptr };
 };
 } // namespace plugin

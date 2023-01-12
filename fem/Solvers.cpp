@@ -135,11 +135,11 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             break;
         }
 
-        grad = &oper->GetGradient( x );        
+        grad = &oper->GetGradient( x );
         {
             std::ofstream myfile;
-            myfile.open ("mat1.txt");
-            grad->PrintMatlab(myfile);
+            myfile.open( "mat1.txt" );
+            grad->PrintMatlab( myfile );
             myfile.close();
         }
 
@@ -168,7 +168,7 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         ProcessNewState( x );
 
         oper->Mult( x, r );
-        std::cout<<"print X:\n";
+        std::cout << "print X:\n";
         x.Print();
         if ( have_b )
         {
@@ -529,6 +529,7 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     double cur_lambda = 0.;
     int step = 0;
 
+    int count = 1;
     mfem::Vector* u;
     if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
     {
@@ -561,25 +562,25 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         delta_lambda = std::min( delta_lambda, 1. - cur_lambda );
         SetLambdaToIntegrators( oper, delta_lambda + cur_lambda );
 
-        NewtonLineSearch::Mult( b, *u );
+        mfem::NewtonSolver::Mult( b, *u );
         if ( GetConverged() )
         {
             cur_lambda += delta_lambda;
             u_cur = *u;
 
-            // if ( data )
-            // {
-            //     if ( step % 5 == 0 )
-            //     {
-            //         if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
-            //         {
-            //             par_grid_x->Distribute( *u );
-            //         }
-            //         data->SetCycle( count );
-            //         data->SetTime( count++ );
-            //         data->Save();
-            //     }
-            // }
+            if ( data )
+            {
+                if ( step % 1 == 0 )
+                {
+                    if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
+                    {
+                        par_grid_x->Distribute( *u );
+                    }
+                    data->SetCycle( count );
+                    data->SetTime( count++ );
+                    data->Save();
+                }
+            }
         }
         else
         {

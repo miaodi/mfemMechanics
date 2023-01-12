@@ -317,7 +317,8 @@ protected:
 class NonlinearDirichletPenaltyIntegrator : public NonlinearFormIntegratorLambda
 {
 public:
-    NonlinearDirichletPenaltyIntegrator( mfem::VectorCoefficient& QG ) : NonlinearFormIntegratorLambda(), Q( QG )
+    NonlinearDirichletPenaltyIntegrator( mfem::VectorCoefficient& QG, mfem::Coefficient& HG )
+        : NonlinearFormIntegratorLambda(), Q( QG ), H( HG )
     {
     }
 
@@ -333,10 +334,129 @@ public:
                                    const mfem::Vector& elfun,
                                    mfem::DenseMatrix& elmat ) override;
 
+    void matrixB( const int dof, const int dim )
+    {
+        mB.resize( dim, dim * dof );
+        mB.setZero();
+
+        for ( int i = 0; i < dof; i++ )
+        {
+            for ( int j = 0; j < dim; j++ )
+            {
+                mB( j, i + j * dof ) = shape( i );
+            }
+        }
+    }
+
 protected:
-    mfem::Vector shape, vec;
+    mfem::Vector shape, dispEval;
     Eigen::MatrixXd mB;
+    Eigen::VectorXd mU;
     mfem::VectorCoefficient& Q;
+    mfem::Coefficient& H;
 };
 
+class NonlinearInternalPenaltyIntegrator : public mfem::NonlinearFormIntegrator
+{
+public:
+    NonlinearInternalPenaltyIntegrator( const double penalty = 1e10 ) : mfem::NonlinearFormIntegrator(), p{ penalty }
+    {
+    }
+
+    virtual void AssembleFaceVector( const mfem::FiniteElement& el1,
+                                     const mfem::FiniteElement& el2,
+                                     mfem::FaceElementTransformations& Tr,
+                                     const mfem::Vector& elfun,
+                                     mfem::Vector& elvect ) override;
+
+    virtual void AssembleFaceGrad( const mfem::FiniteElement& el1,
+                                   const mfem::FiniteElement& el2,
+                                   mfem::FaceElementTransformations& Tr,
+                                   const mfem::Vector& elfun,
+                                   mfem::DenseMatrix& elmat ) override;
+
+    void matrixB( const int dof1, const int dof2, const int dim )
+    {
+        mB.resize( dim, dim * ( dof1 + dof2 ) );
+        mB.setZero();
+
+        for ( int i = 0; i < dof1; i++ )
+        {
+            for ( int j = 0; j < dim; j++ )
+            {
+                mB( j, i + j * dof1 ) = shape1( i );
+            }
+        }
+        for ( int i = 0; i < dof2; i++ )
+        {
+            for ( int j = 0; j < dim; j++ )
+            {
+                mB( j, i + j * dof2 + dim * dof1 ) = -shape2( i );
+            }
+        }
+    }
+
+protected:
+    mfem::Vector shape1, shape2;
+
+    Eigen::MatrixXd mB;
+    Eigen::VectorXd u;
+    double p;
+};
+
+class LinearCZMIntegrator : public mfem::NonlinearFormIntegrator
+{
+public:
+    LinearCZMIntegrator() : mfem::NonlinearFormIntegrator()
+    {
+    }
+
+    LinearCZMIntegrator( const double Gc, const double epsilon0, const double sigmat, const double E )
+        : mfem::NonlinearFormIntegrator(), mGc( Gc ), mEpsilon0( epsilon0 ), mSigmat( sigmat ), mE( E )
+    {
+    }
+
+    virtual void AssembleFaceVector( const mfem::FiniteElement& el1,
+                                     const mfem::FiniteElement& el2,
+                                     mfem::FaceElementTransformations& Tr,
+                                     const mfem::Vector& elfun,
+                                     mfem::Vector& elvect ) override;
+
+    virtual void AssembleFaceGrad( const mfem::FiniteElement& el1,
+                                   const mfem::FiniteElement& el2,
+                                   mfem::FaceElementTransformations& Tr,
+                                   const mfem::Vector& elfun,
+                                   mfem::DenseMatrix& elmat ) override;
+
+    void matrixB( const int dof1, const int dof2, const int dim )
+    {
+        mB.resize( dim, dim * ( dof1 + dof2 ) );
+        mB.setZero();
+
+        for ( int i = 0; i < dof1; i++ )
+        {
+            for ( int j = 0; j < dim; j++ )
+            {
+                mB( j, i + j * dof1 ) = shape1( i );
+            }
+        }
+        for ( int i = 0; i < dof2; i++ )
+        {
+            for ( int j = 0; j < dim; j++ )
+            {
+                mB( j, i + j * dof2 + dim * dof1 ) = -shape2( i );
+            }
+        }
+    }
+
+protected:
+    double mGc;
+    double mEpsilon0;
+    double mSigmat;
+    double mE;
+    mfem::Vector shape1, shape2;
+
+    Eigen::MatrixXd mB;
+    Eigen::VectorXd u;
+};
 } // namespace plugin
