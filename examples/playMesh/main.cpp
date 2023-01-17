@@ -130,123 +130,14 @@ int main( int argc, char* argv[] )
     }
     else
     {
-        fec = new DG_FECollection( order, dim, mfem::BasisType::GaussLobatto );
+        fec = new H1_FECollection( order, dim, mfem::BasisType::GaussLobatto );
         fespace = new FiniteElementSpace( mesh, fec, dim );
     }
     cout << "Number of vertices: " << fespace->GetNV() << endl;
+    cout << "Number of faces: " << mesh->GetNumFaces() << endl;
+    cout << "Number of faces (with ghost): " << mesh->GetNumFacesWithGhost() << endl;
     cout << "Number of finite element unknowns: " << fespace->GetTrueVSize() << endl << "Assembling: " << endl;
     mfem::Array<int> vdofs;
-    fespace->GetElementVDofs( 0, vdofs );
-    cout << "vdofs: " << vdofs.Size() << endl;
-    vdofs.Print();
-    fespace->GetElementVDofs( 1, vdofs );
-    vdofs.Print();
-
-    // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
-    //    In this example, the boundary conditions are defined by marking only
-    //    boundary attribute 1 from the mesh as essential and converting it to a
-    //    list of true dofs.
-    VectorArrayCoefficient d( dim );
-    for ( int i = 0; i < dim; i++ )
-    {
-        d.Set( i, new ConstantCoefficient( 0.0 ) );
-    }
-
-    // Vector topDisp( mesh->bdr_attributes.Max() );
-    // topDisp = .0;
-    // topDisp( 1 ) = 2;
-    // d.Set( 1, new PWConstCoefficient( topDisp ) );
-
-    Vector activeBC( mesh->bdr_attributes.Max() );
-    activeBC = 0.0;
-    activeBC( 0 ) = 1e15;
-    activeBC( 1 ) = 1e15;
-    PWConstCoefficient hevi( activeBC );
-
-    printf( "Mesh is %i dimensional.\n", dim );
-    printf( "Number of mesh attributes: %i\n", mesh->attributes.Size() );
-    printf( "Number of boundary attributes: %i\n", mesh->bdr_attributes.Size() );
-
-    // 8. Define the solution vector x as a finite element grid function
-    //    corresponding to fespace. Initialize x with initial guess of zero,
-    //    which satisfies the boundary conditions.
-    Vector Nu( mesh->attributes.Max() );
-    Nu = .0;
-    PWConstCoefficient nu_func( Nu );
-
-    Vector E( mesh->attributes.Max() );
-    E = 324e7;
-    PWConstCoefficient E_func( E );
-
-    IsotropicElasticMaterial iem( E_func, nu_func );
-
-    plugin::Memorize mm( mesh );
-
-    auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
-    intg->setNonlinear( false );
-
-    NonlinearForm* nlf = new NonlinearForm( fespace );
-    nlf->AddDomainIntegrator( intg );
-
-    nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
-
-    GeneralResidualMonitor newton_monitor( "Newton", 1 );
-    GeneralResidualMonitor j_monitor( "GMRES", 3 );
-
-    // Set up the Jacobian solver
-    auto j_gmres = new UMFPackSolver();
-
-    auto newton_solver = new plugin::MultiNewtonAdaptive();
-
-    // Set the newton solve parameters
-    newton_solver->iterative_mode = true;
-    newton_solver->SetSolver( *j_gmres );
-    newton_solver->SetOperator( *nlf );
-    newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-7 );
-    newton_solver->SetAbsTol( 1e-11 );
-    newton_solver->SetMaxIter( 7 );
-    newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( .0001 );
-    newton_solver->SetMaxStep( 100 );
-
-    nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e2 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( 180E6, 120E6, 1, 2 ) );
-    // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
-
-    Vector zero;
-
-    GridFunction u( fespace );
-    u = 0.;
-    std::cout << u.Size() << std::endl;
-
-    VectorArrayCoefficient f( dim );
-    for ( int i = 0; i < dim - 1; i++ )
-    {
-        f.Set( i, new ConstantCoefficient( 0.0 ) );
-    }
-    {
-        Vector pull_force( mesh->bdr_attributes.Max() );
-        pull_force = 0.0;
-        pull_force( 1 ) = 5.e13;
-        f.Set( dim - 1, new PWConstCoefficient( pull_force ) );
-    }
-
-    nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
-    // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "czm", mesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &u );
-    newton_solver->SetDataCollection( &paraview_dc );
-    paraview_dc.Save();
-
-    newton_solver->Mult( zero, u );
 
     return 0;
 }

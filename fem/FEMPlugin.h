@@ -256,14 +256,8 @@ public:
     {
     }
 
-    CZMIntegrator( const double sigmaMax,
-                   const double tauMax,
-                   const double phiN,
-                   const double phiT,
-                   const double deltaN,
-                   const double deltaT,
-                   const double deltaNStar = 0 )
-        : mfem::NonlinearFormIntegrator(), mSigmaMax{ sigmaMax }, mTauMax{ tauMax }, mPhiN{ phiN }, mPhiT{ phiT }, mDeltaN{ deltaN }, mDeltaT{ deltaT }, mDeltaNStar{ deltaNStar }
+    CZMIntegrator( const double sigmaMax, const double tauMax, const double phiN, const double phiT )
+        : mfem::NonlinearFormIntegrator(), mSigmaMax{ sigmaMax }, mTauMax{ tauMax }, mPhiN{ phiN }, mPhiT{ phiT }
     {
     }
 
@@ -305,9 +299,6 @@ protected:
     double mTauMax{ 0. };
     double mPhiN{ 0. };
     double mPhiT{ 0. };
-    double mDeltaN{ 0. };
-    double mDeltaT{ 0. };
-    double mDeltaNStar{ 0. };
     mfem::Vector shape1, shape2;
 
     Eigen::MatrixXd mB;
