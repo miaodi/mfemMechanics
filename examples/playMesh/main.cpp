@@ -1,8 +1,14 @@
 
 #include "Plugin.h"
 #include "mfem.hpp"
+#include <autodiff/forward/dual.hpp>
+#include <autodiff/forward/dual/eigen.hpp>
+#include <autodiff/forward/real.hpp>
+#include <autodiff/forward/real/eigen.hpp>
 #include <fstream>
 #include <iostream>
+
+using VectorXr = std::vector<autodiff::real>;
 
 using namespace std;
 using namespace mfem;
@@ -45,7 +51,32 @@ void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector&
         mfem::out << '\n';
     }
 }
+autodiff::dual2nd f( const autodiff::ArrayXdual2nd& x, const autodiff::ArrayXdual2nd& p )
+{
+    autodiff::dual2nd res =
+        p( 2 ) + p( 2 ) * autodiff::detail::exp( -x( 1 ) / p( 1 ) ) *
+                     ( ( autodiff::dual2nd( 1. ) - p( 3 ) + x( 1 ) / p( 1 ) ) * ( autodiff::dual2nd( 1. ) - p( 4 ) ) /
+                           ( p( 3 ) - autodiff::dual2nd( 1. ) ) -
+                       ( p( 4 ) + ( p( 3 ) - p( 4 ) ) / ( p( 3 ) - autodiff::dual2nd( 1. ) ) * x( 1 ) / p( 1 ) ) *
+                           autodiff::detail::exp( -x( 0 ) * x( 0 ) / p( 0 ) / p( 0 ) ) );
+    return res;
+}
 
+autodiff::dual2nd ff( const autodiff::dual2nd& DeltaT,
+                      const autodiff::dual2nd& DeltaN,
+                      const autodiff::dual2nd& deltaT,
+                      const autodiff::dual2nd& deltaN,
+                      const autodiff::dual2nd& PhiN,
+                      const autodiff::dual2nd& r,
+                      const autodiff::dual2nd& q )
+{
+    autodiff::dual2nd res = PhiN + PhiN * autodiff::detail::exp( -DeltaN / deltaN ) *
+                                       ( ( autodiff::dual2nd( 1. ) - r + DeltaN / deltaN ) *
+                                             ( autodiff::dual2nd( 1. ) - q ) / ( r - autodiff::dual2nd( 1. ) ) -
+                                         ( q + ( r - q ) / ( r - autodiff::dual2nd( 1. ) ) * DeltaN / deltaN ) *
+                                             autodiff::detail::exp( -DeltaT * DeltaT / deltaT * deltaT ) );
+    return res;
+}
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
@@ -139,5 +170,34 @@ int main( int argc, char* argv[] )
     cout << "Number of finite element unknowns: " << fespace->GetTrueVSize() << endl << "Assembling: " << endl;
     mfem::Array<int> vdofs;
 
+    autodiff::ArrayXdual2nd x( 2 ); // the input vector x with 5 variables
+    x << 1, 2;                      // x = [1, 2, 3, 4, 5]
+
+    autodiff::ArrayXdual2nd p( 5 ); // the input parameter vector p with 3 variables
+    p << 1, 2, 3, 4, 5;             // p = [1, 2, 3]
+
+    autodiff::dual2nd u; // the output scalar u = f(x, p, q) evaluated together with gradient below
+
+    autodiff::VectorXdual g; // gradient of f(x) evaluated together with Hessian below
+
+    Eigen::MatrixXd H = hessian( f, wrt( x ), at( x, p ), u,
+                                 g ); // evaluate the function value u, its gradient vector g, and its Hessian matrix H with respect to (x, p, q)
+    std::cout << "u = " << u << std::endl;   // print the evaluated output u
+    std::cout << "g =\n" << g << std::endl;  // print the evaluated gradient vector g = [du/dx, du/dp, du/dq]
+    std::cout << "H = \n" << H << std::endl; // print the evaluated Hessian matrix H = d²u/d[x, p, q]²
+
+    autodiff::dual2nd DeltaT = 1.;
+    autodiff::dual2nd DeltaN = 2.;
+    autodiff::dual2nd deltaT = 1.;
+    autodiff::dual2nd deltaN = 2.0;
+    autodiff::dual2nd PhiN = 3.0;
+    autodiff::dual2nd r = 4.0;
+    autodiff::dual2nd q = 5.0;
+
+    auto [u0, ux, uxy] = autodiff::derivatives( ff, autodiff::wrt( DeltaT, DeltaN ), autodiff::at( DeltaT, DeltaN, deltaT, deltaN, PhiN, r, q ) );
+
+    std::cout << "u0 = " << u0 << std::endl;       // print the evaluated value of u = f(x, y, z)
+    std::cout << "ux = " << ux << std::endl;       // print the evaluated derivative du/dx
+    std::cout << "uxy = " << uxy << std::endl;     // print the evaluated derivative d²u/dxdy
     return 0;
 }

@@ -11,53 +11,66 @@ set(CMAKE_FIND_DEBUG_MODE 1)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 find_package(MPI REQUIRED)
-FetchContent_Declare(
-    Fastor
-    GIT_REPOSITORY  https://github.com/romeric/Fastor.git
-    GIT_TAG         origin/master
-)
+# FetchContent_Declare(
+#     Fastor
+#     GIT_REPOSITORY  https://github.com/romeric/Fastor.git
+#     GIT_TAG         origin/master
+# )
+
 FetchContent_Declare(
   Eigen
   GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
   GIT_TAG master
 )
-set(BUILD_TESTING OFF)
-set(EIGEN_BUILD_DOC OFF)
-set(EIGEN_BUILD_PKGCONFIG OFF)
-
-FetchContent_MakeAvailable(Fastor Eigen)
 
 FetchContent_Declare(
-  taco
-  GIT_REPOSITORY https://github.com/tensor-compiler/taco.git
-  GIT_TAG master
+  autodiff
+  GIT_REPOSITORY https://github.com/autodiff/autodiff.git
+  GIT_TAG main
 )
-FetchContent_MakeAvailable(taco)
-target_include_directories(taco PUBLIC ${taco_BINARY_DIR}/include)
+# set(BUILD_TESTING OFF)
+set(EIGEN_BUILD_DOC OFF)
+set(EIGEN_BUILD_PKGCONFIG OFF)
+set(AUTODIFF_BUILD_TESTS OFF)
+set(AUTODIFF_BUILD_PYTHON OFF)
+
+FetchContent_MakeAvailable(Eigen autodiff)
+
+# FetchContent_Declare(
+#   taco
+#   GIT_REPOSITORY https://github.com/tensor-compiler/taco.git
+#   GIT_TAG master
+# )
+
+# FetchContent_MakeAvailable(taco)
+# target_include_directories(taco PUBLIC ${taco_BINARY_DIR}/include)
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(MFEM_FOLDER "build-debug")
 else()
     set(MFEM_FOLDER "build-release")
 endif()
+
+
+
+# find_path(TACO_INCLUDE_DIR REQUIRED NAMES taco.h HINTS ${CMAKE_BINARY_DIR}/_deps/taco-src/include)
+
+# find_library(TACO_LIB REQUIRED NAMES taco libtaco HINTS ${CMAKE_BINARY_DIR}/lib)
+
 find_package(mfem REQUIRED NAMES MFEM  HINTS ${CMAKE_SOURCE_DIR}/../mfem/${MFEM_FOLDER})
-
-find_path(TACO_INCLUDE_DIR REQUIRED NAMES taco.h HINTS ${CMAKE_BINARY_DIR}/_deps/taco-src/include)
-
-find_library(TACO_LIB REQUIRED NAMES taco libtaco HINTS ${CMAKE_BINARY_DIR}/lib)
 
 add_subdirectory(util)
 add_subdirectory(material)
 add_subdirectory(fem)
 
 set (INCLUDE_DIRS ${MFEM_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR})
-set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX)
+set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX autodiff::autodiff)
 
 add_subdirectory(examples)
 
-add_executable(test test.cpp)
-target_include_directories(test PUBLIC ${INCLUDE_DIRS} ${fastor_SOURCE_DIR} ${TACO_INCLUDE_DIR})
-target_link_libraries(test PRIVATE ${LIBS} ${TACO_LIB})
+# add_executable(test test.cpp)
+# target_include_directories(test PUBLIC ${INCLUDE_DIRS} ${fastor_SOURCE_DIR} ${TACO_INCLUDE_DIR})
+# target_link_libraries(test PRIVATE ${LIBS} ${TACO_LIB})
 
 add_executable(test2 test2.cpp)
 target_include_directories(test2 PUBLIC ${INCLUDE_DIRS})

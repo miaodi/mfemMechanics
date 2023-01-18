@@ -154,8 +154,8 @@ int main( int argc, char* argv[] )
 
     Vector topDisp( mesh->bdr_attributes.Max() );
     topDisp = .0;
-    topDisp( 11 ) = 1e-2;
-    topDisp( 12 ) = -1e-2;
+    topDisp( 11 ) = 4e-2;
+    topDisp( 12 ) = -4e-2;
     d.Set( 1, new PWConstCoefficient( topDisp ) );
 
     Vector activeBCX( mesh->bdr_attributes.Max() );
@@ -184,7 +184,7 @@ int main( int argc, char* argv[] )
     PWConstCoefficient nu_func( Nu );
 
     Vector E( mesh->attributes.Max() );
-    E = 324e7;
+    E = 324E7;
     PWConstCoefficient E_func( E );
 
     IsotropicElasticMaterial iem( E_func, nu_func );
@@ -213,17 +213,17 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-11 );
+    newton_solver->SetRelTol( 1e-8 );
     newton_solver->SetAbsTol( 1e-11 );
     newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .0001 );
     newton_solver->SetMaxDelta( .01 );
-    newton_solver->SetMinDelta( 1e-8 );
-    newton_solver->SetMaxStep( 100 );
+    newton_solver->SetMinDelta( 1e-12 );
+    newton_solver->SetMaxStep( 10000 );
 
     nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( 180E5, 120E5, 1, 2 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( 324E5, 755.4E5, 4E-7, 4E-7 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;

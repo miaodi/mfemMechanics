@@ -6,6 +6,12 @@
 #include <mfem.hpp>
 #include <vector>
 
+// autodiff include
+#include <autodiff/forward/dual.hpp>
+#include <autodiff/forward/dual/eigen.hpp>
+#include <autodiff/forward/real.hpp>
+#include <autodiff/forward/real/eigen.hpp>
+
 namespace plugin
 {
 Eigen::MatrixXd mapper( const int dim, const int dof );
@@ -256,8 +262,8 @@ public:
     {
     }
 
-    CZMIntegrator( const double sigmaMax, const double tauMax, const double phiN, const double phiT )
-        : mfem::NonlinearFormIntegrator(), mSigmaMax{ sigmaMax }, mTauMax{ tauMax }, mPhiN{ phiN }, mPhiT{ phiT }
+    CZMIntegrator( const double sigmaMax, const double tauMax, const double deltaN, const double deltaT )
+        : mfem::NonlinearFormIntegrator(), mSigmaMax{ sigmaMax }, mTauMax{ tauMax }, mDeltaN{ deltaN }, mDeltaT{ deltaT }
     {
     }
 
@@ -294,11 +300,22 @@ public:
         }
     }
 
+    static autodiff::dual2nd f( const autodiff::ArrayXdual2nd& x, const autodiff::ArrayXdual2nd& p )
+    {
+        autodiff::dual2nd res =
+            p( 2 ) + p( 2 ) * autodiff::detail::exp( -x( 1 ) / p( 1 ) ) *
+                         ( ( autodiff::dual2nd( 1. ) - p( 3 ) + x( 1 ) / p( 1 ) ) *
+                               ( autodiff::dual2nd( 1. ) - p( 4 ) ) / ( p( 3 ) - autodiff::dual2nd( 1. ) ) -
+                           ( p( 4 ) + ( p( 3 ) - p( 4 ) ) / ( p( 3 ) - autodiff::dual2nd( 1. ) ) * x( 1 ) / p( 1 ) ) *
+                               autodiff::detail::exp( -x( 0 ) * x( 0 ) / p( 0 ) / p( 0 ) ) );
+        return res;
+    }
+
 protected:
     double mSigmaMax{ 0. };
     double mTauMax{ 0. };
-    double mPhiN{ 0. };
-    double mPhiT{ 0. };
+    double mDeltaN{ 0. };
+    double mDeltaT{ 0. };
     mfem::Vector shape1, shape2;
 
     Eigen::MatrixXd mB;
