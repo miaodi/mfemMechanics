@@ -308,7 +308,7 @@ protected:
 class NonlinearDirichletPenaltyIntegrator : public NonlinearFormIntegratorLambda
 {
 public:
-    NonlinearDirichletPenaltyIntegrator( mfem::VectorCoefficient& QG, mfem::Coefficient& HG )
+    NonlinearDirichletPenaltyIntegrator( mfem::VectorCoefficient& QG, mfem::VectorCoefficient& HG )
         : NonlinearFormIntegratorLambda(), Q( QG ), H( HG )
     {
     }
@@ -340,11 +340,11 @@ public:
     }
 
 protected:
-    mfem::Vector shape, dispEval;
+    mfem::Vector shape, dispEval, penalEval;
     Eigen::MatrixXd mB;
     Eigen::VectorXd mU;
     mfem::VectorCoefficient& Q;
-    mfem::Coefficient& H;
+    mfem::VectorCoefficient& H;
 };
 
 class NonlinearInternalPenaltyIntegrator : public mfem::NonlinearFormIntegrator

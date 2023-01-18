@@ -49,7 +49,7 @@ void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector&
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/tensile.mesh";
+    const char* mesh_file = "../../data/DCB.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -154,24 +154,27 @@ int main( int argc, char* argv[] )
 
     Vector topDisp( mesh->bdr_attributes.Max() );
     topDisp = .0;
-    topDisp( 1 ) = 2;
+    topDisp( 11 ) = 1e-2;
+    topDisp( 12 ) = -1e-2;
     d.Set( 1, new PWConstCoefficient( topDisp ) );
 
-    Vector activeBC( mesh->bdr_attributes.Max() );
-    activeBC = 0.0;
-    activeBC( 0 ) = 1e15;
-    activeBC( 1 ) = 1e15;
+    Vector activeBCX( mesh->bdr_attributes.Max() );
+    activeBCX = 0.0;
+    activeBCX( 10 ) = 1e15;
+    Vector activeBCY( mesh->bdr_attributes.Max() );
+    activeBCY = 0.0;
+    activeBCY( 10 ) = 1e15;
+    activeBCY( 11 ) = 1e15;
+    activeBCY( 12 ) = 1e15;
 
     VectorArrayCoefficient hevi( dim );
-    for ( int i = 0; i < dim; i++ )
-    {
-        hevi.Set( i, new PWConstCoefficient( activeBC ) );
-    }
-
+    hevi.Set( 0, new PWConstCoefficient( activeBCX ) );
+    hevi.Set( 1, new PWConstCoefficient( activeBCY ) );
 
     printf( "Mesh is %i dimensional.\n", dim );
     printf( "Number of mesh attributes: %i\n", mesh->attributes.Size() );
     printf( "Number of boundary attributes: %i\n", mesh->bdr_attributes.Size() );
+    printf( "Max of boundary attributes: %i\n", mesh->bdr_attributes.Max() );
 
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
@@ -216,11 +219,11 @@ int main( int argc, char* argv[] )
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .0001 );
     newton_solver->SetMaxDelta( .01 );
-    newton_solver->SetMinDelta( 1e-7 );
+    newton_solver->SetMinDelta( 1e-8 );
     newton_solver->SetMaxStep( 100 );
 
-    nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
-    // nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( 180E6, 120E6, 1, 2 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( 180E5, 120E5, 1, 2 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;

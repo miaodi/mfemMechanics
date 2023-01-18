@@ -731,7 +731,7 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
     {
-        int intorder = 2 * el1.GetOrder();
+        int intorder = 1 * el1.GetOrder();
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
 
@@ -743,6 +743,9 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
 
         // Set the integration point in the face and the neighboring element
         Tr.SetAllIntPoints( &ip );
+        mfem::Vector phy;
+        Tr.Transform(ip, phy);
+        if(std::abs(phy(1))>1e-10) continue; 
 
         // Access the neighboring element's integration point
         const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
@@ -795,7 +798,7 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
     {
-        int intorder = 2 * el1.GetOrder();
+        int intorder = 1 * el1.GetOrder();
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
 
@@ -807,6 +810,9 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
 
         // Set the integration point in the face and the neighboring element
         Tr.SetAllIntPoints( &ip );
+        mfem::Vector phy;
+        Tr.Transform(ip, phy);
+        if(std::abs(phy(1))>1e-10) continue; 
 
         // Access the neighboring element's integration point
         const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
@@ -851,12 +857,15 @@ void NonlinearDirichletPenaltyIntegrator::AssembleFaceVector( const mfem::Finite
 
     shape.SetSize( dof );
     dispEval.SetSize( vdim );
+    penalEval.SetSize( vdim );
 
     elvect.SetSize( dof * vdim );
     elvect = 0.0;
 
     Eigen::Map<const Eigen::VectorXd> u( elfun.GetData(), elfun.Size() );
     Eigen::Map<Eigen::VectorXd> eigenVec( elvect.GetData(), elvect.Size() );
+    Eigen::Map<const Eigen::VectorXd> dispEvalEigen( dispEval.GetData(), dispEval.Size() );
+    Eigen::Map<const Eigen::VectorXd> penalEvalEigen( penalEval.GetData(), penalEval.Size() );
 
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
@@ -877,15 +886,15 @@ void NonlinearDirichletPenaltyIntegrator::AssembleFaceVector( const mfem::Finite
 
         // Use Tr transformation in case Q depends on boundary attribute
         Q.Eval( dispEval, Tr, ip );
+        H.Eval( penalEval, Tr, ip );
         dispEval *= GetLambda();
-        Eigen::Map<const Eigen::VectorXd> dispEvalEigen( dispEval.GetData(), dispEval.Size() );
 
         el1.CalcShape( eip, shape );
 
         matrixB( dof, vdim );
 
         mU = mB * u;
-        eigenVec += mB.transpose() * ( mU - dispEvalEigen ) * Tr.Weight() * ip.weight * H.Eval( Tr, ip );
+        eigenVec += mB.transpose() * penalEvalEigen.asDiagonal() * ( mU - dispEvalEigen ) * Tr.Weight() * ip.weight;
     }
 }
 
@@ -899,11 +908,12 @@ void NonlinearDirichletPenaltyIntegrator::AssembleFaceGrad( const mfem::FiniteEl
     int dof = el1.GetDof();
 
     shape.SetSize( dof );
+    penalEval.SetSize( vdim );
 
     elmat.SetSize( dof * vdim );
     elmat = 0.0;
 
-    Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * vdim, dof * vdim );
+    Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * vdim, dof * vdim );    Eigen::Map<const Eigen::VectorXd> penalEvalEigen( penalEval.GetData(), penalEval.Size() );
 
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
@@ -918,6 +928,7 @@ void NonlinearDirichletPenaltyIntegrator::AssembleFaceGrad( const mfem::FiniteEl
 
         // Set the integration point in the face and the neighboring element
         Tr.SetAllIntPoints( &ip );
+        H.Eval( penalEval, Tr, ip );
 
         // Access the neighboring element's integration point
         const mfem::IntegrationPoint& eip = Tr.GetElement1IntPoint();
@@ -926,7 +937,7 @@ void NonlinearDirichletPenaltyIntegrator::AssembleFaceGrad( const mfem::FiniteEl
 
         matrixB( dof, vdim );
 
-        eigenMat += mB.transpose() * mB * ip.weight * Tr.Weight() * H.Eval( Tr, ip );
+        eigenMat += mB.transpose() * penalEvalEigen.asDiagonal() * mB * ip.weight * Tr.Weight();
     }
 }
 
@@ -962,6 +973,9 @@ void NonlinearInternalPenaltyIntegrator::AssembleFaceVector( const mfem::FiniteE
 
         // Set the integration point in the face and the neighboring element
         Tr.SetAllIntPoints( &ip );
+        mfem::Vector phy;
+        Tr.Transform(ip, phy);
+        if(std::abs(phy(1))<=1e-10) continue; 
 
         // Access the neighboring element's integration point
         const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
@@ -1008,6 +1022,9 @@ void NonlinearInternalPenaltyIntegrator::AssembleFaceGrad( const mfem::FiniteEle
 
         // Set the integration point in the face and the neighboring element
         Tr.SetAllIntPoints( &ip );
+        mfem::Vector phy;
+        Tr.Transform(ip, phy);
+        if(std::abs(phy(1))<=1e-10) continue; 
 
         // Access the neighboring element's integration point
         const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
