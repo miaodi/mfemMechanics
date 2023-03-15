@@ -125,13 +125,13 @@ public:
     }
 
 protected:
-    mutable mfem::Vector r, Delta_u, delta_u, u_cur, q, delta_u_bar, delta_u_t, delta_u_t_p_Delta_u, Delta_u_prev;
+    mutable mfem::Vector r, Delta_u, delta_u, u_cur, q, delta_u_bar, delta_u_t, Delta_u_prev;
     mutable mfem::Operator* grad;
 
     mutable double lambda, Delta_lambda, delta_lambda, Delta_lambda_prev, max_delta{ 1. }, min_delta{ 1. };
 
     mutable double L{ 1 };
-    double phi{ 1 };
+    mutable double phi{ 1 };
 
     int max_steps{ 100 };
     mutable mfem::DataCollection* data{ nullptr };
