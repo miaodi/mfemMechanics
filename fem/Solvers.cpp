@@ -294,7 +294,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             L *= std::pow( .7 * max_iter / final_iter, .6 );
             L = std::min( L, max_delta );
         }
-
+        
         MFEM_VERIFY( L > min_delta, "Required step size is smaller than the minimal bound." );
         delta_u = 0.;
         Delta_u = 0.;
@@ -332,6 +332,10 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             r.Neg();
             grad = &oper->GetGradient( u_cur );
             prec->SetOperator( *grad );
+            // std::cout<<"q: \n";
+            // q.Print();
+            // std::cout<<"r: \n";
+            // r.Print();
 
             prec->Mult( q, delta_u_t );
             // mfem::OperatorHandle gradHandle( grad, false );
@@ -339,6 +343,11 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             // MatIsSymmetric( ( mfem::petsc::Mat )( *gradHandle.As<mfem::PetscParMatrix>() ), 0., &isSymmetric );
 
             prec->Mult( r, delta_u_bar );
+            
+            // std::cout<<"delta_u_t: \n";
+            // delta_u_t.Print();
+            // std::cout<<"delta_u_bar: \n";
+            // delta_u_bar.Print();
 
             add( Delta_u, delta_u_bar, delta_u_t_p_Delta_u );
 
@@ -376,10 +385,12 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             const double a = a0;
             const double b = b0 + b1 * ds;
             const double c = c0 + c1 * ds + c2 * ds * ds;
-
+            // std::cout<<std::setprecision(10)
+            // <<"a1: "<<a<<" a2: "<<b<<" a3 "<<c<<std::endl;
             delta_lambda1 = ( -1. * b + std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
             delta_lambda2 = ( -1. * b - std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
 
+            // std::cout<<std::setprecision(10)<<"delta_lambda1: "<<delta_lambda1<<" delta_lambda2: "<<delta_lambda2<<std::endl;
             util::mfemOut( "delta_lambda1: ", delta_lambda1, ", delta_lambda2: ", delta_lambda2, "\n", util::Color::RESET );
 
             if ( it == 0 )
@@ -460,7 +471,16 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
             Delta_u += delta_u;
             Delta_lambda += delta_lambda;
+            // delta_u.Print();
+            // if(it==0){
+                
+            //     std::ofstream myfile;
+            //     myfile.open ("mat.txt");
+            //     grad->PrintMatlab(myfile, 16, 16);
+            //     myfile.close();
+            // }
         }
+            // std::exit(0);
         // update
         if ( converged )
         {
@@ -488,7 +508,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
             if ( data )
             {
-                if ( step % 5 == 0 )
+                if ( step % 2 == 0 )
                 {
                     if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
                     {

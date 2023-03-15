@@ -49,7 +49,7 @@ void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector&
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/DCB.msh";
+    const char* mesh_file = "../../data/DCB_3D.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -218,7 +218,7 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .0001 );
-    newton_solver->SetMaxDelta( .01 );
+    newton_solver->SetMaxDelta( 10 );
     newton_solver->SetMinDelta( 1e-12 );
     newton_solver->SetMaxStep( 20000 );
 
@@ -246,7 +246,7 @@ int main( int argc, char* argv[] )
 
     // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "czm", mesh );
+    ParaViewDataCollection paraview_dc( "czm3D", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );

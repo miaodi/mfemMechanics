@@ -199,6 +199,8 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
             }
         }
     }
+    // std::cout<<"stiffness:\n";
+    // std::cout<<eigenMat<<std::endl;
 }
 
 void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteElement& el,
@@ -241,7 +243,8 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
         w = ip.weight * mMemo.GetDetdXdXi( i );
         eigenVec += w * ( mB.transpose() * mMaterialModel->getPK2StressVector() );
     }
-    // std::cout<<eigenVec.transpose()<<std::endl;
+    // std::cout<<"Rhs:\n";
+    // std::cout<<eigenVec<<std::endl;
 }
 
 void NonlinearElasticityIntegrator::matrixB( const int dof, const int dim, const Eigen::MatrixXd& gshape )
@@ -744,10 +747,10 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
 
         // Set the integration point in the face and the neighboring element
         Tr.SetAllIntPoints( &ip );
-        mfem::Vector phy;
-        Tr.Transform( ip, phy );
-        if ( std::abs( phy( 1 ) ) > 1e-10 )
-            continue;
+        // mfem::Vector phy;
+        // Tr.Transform( ip, phy );
+        // if ( std::abs( phy( 1 ) ) > 1e-10 )
+        //     continue;
 
         // Access the neighboring element's integration point
         const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
@@ -758,30 +761,11 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
 
         matrixB( dof1, dof2, vdim );
         Eigen::VectorXd Delta = mB * u;
-        Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
-        Eigen::MatrixXd DeltaToTN( vdim, vdim );
-        DeltaToTN.col( 0 ) = Jac;
-        DeltaToTN.col( 0 ).normalize();
-        DeltaToTN.col( 1 ) = rot.toRotationMatrix() * DeltaToTN.col( 0 );
+        Eigen::MatrixXd DeltaToTN;
+        DeltaToTNMat( Tr, DeltaToTN );
         Delta = ( DeltaToTN.transpose() * Delta ).eval();
-
-        Eigen::VectorXd T( 2 );
-        // Tt
-        T( 0 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * PhiN *
-                 ( q + Delta( 1 ) * ( r - q ) / mDeltaN / ( r - 1 ) ) / mDeltaT / mDeltaT;
-        // Tn
-        T( 1 ) = PhiN / mDeltaN * exp( -Delta( 1 ) / mDeltaN ) *
-                 ( Delta( 1 ) / mDeltaN * exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) +
-                   ( 1 - q ) / ( r - 1 ) * ( 1 - exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) ) * ( r - Delta( 1 ) / mDeltaN ) );
-
-        // autodiff::ArrayXdual2nd deltaDiff( 2 );
-        // deltaDiff << Delta( 0 ), Delta( 1 );
-        // autodiff::ArrayXdual2nd params( 5 );
-        // params << mDeltaT, mDeltaN, PhiN, r, q;
-        // autodiff::dual2nd u;
-        // Eigen::VectorXd T =
-        //     autodiff::gradient( CZMIntegrator::f, autodiff::wrt( deltaDiff ), autodiff::at( deltaDiff, params ), u );
-
+        Eigen::VectorXd T;
+        Traction( PhiN, q, r, Delta, T );
         eigenVec += mB.transpose() * DeltaToTN * T * ip.weight * Tr.Weight();
     }
 }
@@ -816,19 +800,16 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
         int intorder = 1 * el1.GetOrder();
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
-
-    Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
-
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
         const mfem::IntegrationPoint& ip = ir->IntPoint( i );
 
         // Set the integration point in the face and the neighboring element
         Tr.SetAllIntPoints( &ip );
-        mfem::Vector phy;
-        Tr.Transform( ip, phy );
-        if ( std::abs( phy( 1 ) ) > 1e-10 )
-            continue;
+        // mfem::Vector phy;
+        // Tr.Transform( ip, phy );
+        // if ( std::abs( phy( 1 ) ) > 1e-10 )
+        //     continue;
 
         // Access the neighboring element's integration point
         const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
@@ -837,14 +818,90 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
         el2.CalcShape( eip2, shape2 );
         matrixB( dof1, dof2, vdim );
         Eigen::VectorXd Delta = mB * u;
-        Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
-        Eigen::MatrixXd DeltaToTN( vdim, vdim );
+        Eigen::MatrixXd DeltaToTN;
+        DeltaToTNMat( Tr, DeltaToTN );
+        Delta = ( DeltaToTN.transpose() * Delta ).eval();
+
+        Eigen::MatrixXd H;
+        TractionStiffTangent( PhiN, q, r, Delta, H );
+        eigenMat += mB.transpose() * DeltaToTN * H.selfadjointView<Eigen::Upper>() * DeltaToTN.transpose() * mB *
+                    ip.weight * Tr.Weight();
+    }
+    // std::cout<<eigenMat<<std::endl;
+}
+
+void CZMIntegrator::DeltaToTNMat( mfem::FaceElementTransformations& Tr, Eigen::MatrixXd& DeltaToTN ) const
+{
+    int vdim = Tr.GetSpaceDim();
+    DeltaToTN.resize( vdim, vdim );
+    if ( vdim == 2 )
+    {
+        Eigen::Map<const Eigen::Matrix<double, 2, 1>> Jac( Tr.Jacobian().Data() );
+        static Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
         DeltaToTN.col( 0 ) = Jac;
         DeltaToTN.col( 0 ).normalize();
         DeltaToTN.col( 1 ) = rot.toRotationMatrix() * DeltaToTN.col( 0 );
-        Delta = ( DeltaToTN.transpose() * Delta ).eval();
+    }
+    else if ( vdim == 3 )
+    {
+        Eigen::Map<const Eigen::Matrix<double, 3, 2>> Jac( Tr.Jacobian().Data() );
+        DeltaToTN.col( 0 ) = Jac.col( 0 );
+        DeltaToTN.col( 0 ).normalize();
+        DeltaToTN.col( 2 ) = Jac.col( 1 ).cross( Jac.col( 0 ) );
+        DeltaToTN.col( 2 ).normalize();
+        Eigen::Map<const Eigen::Matrix<double, 3, 3>> DeltaToTN33( DeltaToTN.data() );
+        DeltaToTN.col( 1 ) = DeltaToTN33.col( 2 ).cross( DeltaToTN33.col( 0 ) );
+    }
+}
 
-        Eigen::MatrixXd H( 2, 2 );
+void CZMIntegrator::Traction( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::VectorXd& T ) const
+{
+    if ( Delta.size() == 2 )
+    {
+        T.resize( 2 );
+        // Tt
+        T( 0 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * PhiN *
+                 ( q + Delta( 1 ) * ( r - q ) / mDeltaN / ( r - 1 ) ) / mDeltaT / mDeltaT;
+        // Tn
+        T( 1 ) = PhiN / mDeltaN * exp( -Delta( 1 ) / mDeltaN ) *
+                 ( Delta( 1 ) / mDeltaN * exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) +
+                   ( 1 - q ) / ( r - 1 ) * ( 1 - exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) ) * ( r - Delta( 1 ) / mDeltaN ) );
+
+        // autodiff::ArrayXdual2nd deltaDiff( 2 );
+        // deltaDiff << Delta( 0 ), Delta( 1 );
+        // autodiff::ArrayXdual2nd params( 5 );
+        // params << mDeltaT, mDeltaN, PhiN, r, q;
+        // autodiff::dual2nd u;
+        // Eigen::VectorXd T =
+        //     autodiff::gradient( CZMIntegrator::f, autodiff::wrt( deltaDiff ), autodiff::at( deltaDiff, params ), u );
+    }
+    else if ( Delta.size() == 3 )
+    {
+        T.resize( 3 );
+        // Tt1
+        T( 0 ) = ( 2 * Delta( 0 ) *
+                   exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
+                   PhiN * ( q + ( Delta( 2 ) * ( r - q ) ) / ( mDeltaN * ( r - 1 ) ) ) ) /
+                 pow( mDeltaT, 2 );
+        // Tt2
+        T( 1 ) = ( 2 * Delta( 1 ) *
+                   exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
+                   PhiN * ( q + ( Delta( 2 ) * ( r - q ) ) / ( mDeltaN * ( r - 1 ) ) ) ) /
+                 pow( mDeltaT, 2 );
+        // Tn
+        T( 2 ) =
+            ( exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) * PhiN *
+              ( -( mDeltaN * ( -1 + exp( ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) ) * ( -1 + q ) * r ) +
+                Delta( 2 ) * ( exp( ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) * ( -1 + q ) - q + r ) ) ) /
+            ( pow( mDeltaN, 2 ) * ( -1 + r ) );
+    }
+}
+
+void CZMIntegrator::TractionStiffTangent( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::MatrixXd& H ) const
+{
+    if ( Delta.size() == 2 )
+    {
+        H.resize( 2, 2 );
         // Ttt
         H( 0, 0 ) = 2 * ( std::pow( mDeltaT, 2 ) - 2 * std::pow( Delta( 0 ), 2 ) ) *
                     exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * PhiN *
@@ -855,9 +912,8 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
                       Delta( 1 ) * ( exp( Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * ( q - 1 ) - q + r ) ) /
                     std::pow( mDeltaN, 3 ) / ( r - 1 );
         // Tnt
-        H( 1, 0 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * PhiN *
+        H( 0, 1 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * PhiN *
                     ( Delta( 1 ) * ( q - r ) - mDeltaN * ( q - 1 ) * r ) / std::pow( mDeltaN * mDeltaT, 2 ) / ( r - 1 );
-        H( 0, 1 ) = H( 1, 0 );
 
         // autodiff::ArrayXdual2nd deltaDiff( 2 );
         // deltaDiff << Delta( 0 ), Delta( 1 );
@@ -867,8 +923,42 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
         // autodiff::VectorXdual g;
         // Eigen::MatrixXd H =
         //     autodiff::hessian( CZMIntegrator::f, autodiff::wrt( deltaDiff ), autodiff::at( deltaDiff, params ), u, g );
-
-        eigenMat += mB.transpose() * DeltaToTN * H * DeltaToTN.transpose() * mB * ip.weight * Tr.Weight();
+    }
+    else if ( Delta.size() == 3 )
+    {
+        H.resize( 3, 3 );
+        // Tt1t1
+        H( 0, 0 ) = ( 2 * ( pow( mDeltaT, 2 ) - 2 * pow( Delta( 0 ), 2 ) ) *
+                      exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
+                      PhiN * ( mDeltaN * q * ( -1 + r ) + Delta( 2 ) * ( -q + r ) ) ) /
+                    ( mDeltaN * pow( mDeltaT, 4 ) * ( -1 + r ) );
+        // Tt2t2
+        H( 1, 1 ) = ( 2 * ( pow( mDeltaT, 2 ) - 2 * pow( Delta( 1 ), 2 ) ) *
+                      exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
+                      PhiN * ( mDeltaN * q * ( -1 + r ) + Delta( 2 ) * ( -q + r ) ) ) /
+                    ( mDeltaN * pow( mDeltaT, 4 ) * ( -1 + r ) );
+        // Tnn
+        H( 2, 2 ) =
+            ( exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) * PhiN *
+              ( -( Delta( 2 ) * ( exp( ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) * ( -1 + q ) - q + r ) ) +
+                mDeltaN * ( -q + 2 * r - q * r +
+                            exp( ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) * ( -1 + q ) * ( 1 + r ) ) ) ) /
+            ( pow( mDeltaN, 3 ) * ( -1 + r ) );
+        // Tt1t2
+        H( 0, 1 ) = ( -4 * Delta( 0 ) * Delta( 1 ) *
+                      exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
+                      PhiN * ( q + ( Delta( 2 ) * ( -q + r ) ) / ( mDeltaN * ( -1 + r ) ) ) ) /
+                    pow( mDeltaT, 4 );
+        // Tt1n
+        H( 0, 2 ) = ( 2 * Delta( 0 ) *
+                      exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
+                      PhiN * ( Delta( 2 ) * ( q - r ) - mDeltaN * ( -1 + q ) * r ) ) /
+                    ( pow( mDeltaN, 2 ) * pow( mDeltaT, 2 ) * ( -1 + r ) );
+        // Tt2n
+        H( 1, 2 ) = ( 2 * Delta( 1 ) *
+                      exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
+                      PhiN * ( Delta( 2 ) * ( q - r ) - mDeltaN * ( -1 + q ) * r ) ) /
+                    ( pow( mDeltaN, 2 ) * pow( mDeltaT, 2 ) * ( -1 + r ) );
     }
 }
 

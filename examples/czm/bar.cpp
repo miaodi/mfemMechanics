@@ -49,7 +49,7 @@ void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector&
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/DCB.msh";
+    const char* mesh_file = "../../data/simple_bar.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -131,45 +131,15 @@ int main( int argc, char* argv[] )
     else
     {
         fec = new DG_FECollection( order, dim, mfem::BasisType::GaussLobatto );
-        fespace = new FiniteElementSpace( mesh, fec, dim );
+        fespace = new FiniteElementSpace( mesh, fec, dim, mfem::Ordering::byVDIM );
     }
     cout << "Number of vertices: " << fespace->GetNV() << endl;
     cout << "Number of finite element unknowns: " << fespace->GetTrueVSize() << endl << "Assembling: " << endl;
-    mfem::Array<int> vdofs;
-    fespace->GetElementVDofs( 0, vdofs );
-    cout << "vdofs: " << vdofs.Size() << endl;
-    vdofs.Print();
-    fespace->GetElementVDofs( 1, vdofs );
-    vdofs.Print();
+    Array<int> ess_tdof_list, ess_bdr( mesh->bdr_attributes.Max() );
+    ess_bdr = 0;
+    ess_bdr[3] = 1;
 
-    // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
-    //    In this example, the boundary conditions are defined by marking only
-    //    boundary attribute 1 from the mesh as essential and converting it to a
-    //    list of true dofs.
-    VectorArrayCoefficient d( dim );
-    for ( int i = 0; i < dim; i++ )
-    {
-        d.Set( i, new ConstantCoefficient( 0.0 ) );
-    }
-
-    Vector topDisp( mesh->bdr_attributes.Max() );
-    topDisp = .0;
-    topDisp( 11 ) = 4e-2;
-    topDisp( 12 ) = -4e-2;
-    d.Set( 1, new PWConstCoefficient( topDisp ) );
-
-    Vector activeBCX( mesh->bdr_attributes.Max() );
-    activeBCX = 0.0;
-    activeBCX( 10 ) = 1e15;
-    Vector activeBCY( mesh->bdr_attributes.Max() );
-    activeBCY = 0.0;
-    activeBCY( 10 ) = 1e15;
-    activeBCY( 11 ) = 1e15;
-    activeBCY( 12 ) = 1e15;
-
-    VectorArrayCoefficient hevi( dim );
-    hevi.Set( 0, new PWConstCoefficient( activeBCX ) );
-    hevi.Set( 1, new PWConstCoefficient( activeBCY ) );
+    fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
 
     printf( "Mesh is %i dimensional.\n", dim );
     printf( "Number of mesh attributes: %i\n", mesh->attributes.Size() );
@@ -184,7 +154,7 @@ int main( int argc, char* argv[] )
     PWConstCoefficient nu_func( Nu );
 
     Vector E( mesh->attributes.Max() );
-    E = 324E7;
+    E = 1E8;
     PWConstCoefficient E_func( E );
 
     IsotropicElasticMaterial iem( E_func, nu_func );
@@ -196,8 +166,7 @@ int main( int argc, char* argv[] )
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
-
-    nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
+    nlf->SetEssentialTrueDofs( ess_tdof_list );
 
     GeneralResidualMonitor newton_monitor( "Newton", 1 );
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
@@ -213,40 +182,53 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-8 );
-    newton_solver->SetAbsTol( 1e-11 );
+    newton_solver->SetRelTol( 1e-11 );
+    newton_solver->SetAbsTol( 1e-13 );
     newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( .0001 );
-    newton_solver->SetMaxDelta( .01 );
-    newton_solver->SetMinDelta( 1e-12 );
-    newton_solver->SetMaxStep( 20000 );
-
-    nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( 324E5, 755.4E5, 4E-7, 4E-7 ) );
-    // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
-
+    newton_solver->SetDelta( 1E-3 );
+    newton_solver->SetMaxDelta( 1. );
+    newton_solver->SetMinDelta( 1e-14 );
+    newton_solver->SetMaxStep( 500 );
+    newton_solver->SetPhi( 1. );
     Vector zero;
 
     GridFunction u( fespace );
     u = 0.;
-    std::cout << u.Size() << std::endl;
+    VectorArrayCoefficient f1( dim );
+    for ( int i = 0; i < dim; i++ )
+    {
+        f1.Set( i, new ConstantCoefficient( 0.0 ) );
+    }
+    Vector force( mesh->bdr_attributes.Max() );
+    force = .0;
+    force( 0 ) = -1000000000;
+    force( 1 ) =  1000000000;
+    f1.Set( 1, new PWConstCoefficient( force ) );
+    nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f1 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( 324E5, 755.4E5, 4E-7, 4E-7 ) );
 
-    // VectorArrayCoefficient f( dim );
-    // for ( int i = 0; i < dim - 1; i++ )
-    // {
-    //     f.Set( i, new ConstantCoefficient( 0.0 ) );
-    // }
-    // {
-    //     Vector pull_force( mesh->bdr_attributes.Max() );
-    //     pull_force = 0.0;
-    //     pull_force( 1 ) = 5.e13;
-    //     f.Set( dim - 1, new PWConstCoefficient( pull_force ) );
-    // }
+    VectorArrayCoefficient d( dim );
+    for ( int i = 0; i < dim; i++ )
+    {
+        d.Set( i, new ConstantCoefficient( 0.0 ) );
+    }
+
+    Vector activeBC( mesh->bdr_attributes.Max() );
+    activeBC = 0.0;
+    activeBC( 3 ) = 1e25;
+
+    VectorArrayCoefficient hevi( dim );
+    for ( int i = 0; i < dim; i++ )
+    {
+        hevi.Set( i, new PWConstCoefficient( activeBC ) );
+    }
+    nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
+
 
     // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "czm", mesh );
+    ParaViewDataCollection paraview_dc( "bar", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );

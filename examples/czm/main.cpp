@@ -216,11 +216,11 @@ int main( int argc, char* argv[] )
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .0001 );
     newton_solver->SetMaxDelta( .01 );
-    newton_solver->SetMinDelta( 1e-7 );
-    newton_solver->SetMaxStep( 100 );
+    newton_solver->SetMinDelta( 1e-12 );
+    newton_solver->SetMaxStep( 1 );
 
-    nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
-    // nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( 180E6, 120E6, 1, 2 ) );
+    // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( 324E5, 755.4E5, 4E-7, 4E-7 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;

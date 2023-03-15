@@ -300,6 +300,12 @@ public:
         }
     }
 
+    void DeltaToTNMat( mfem::FaceElementTransformations& Tr, Eigen::MatrixXd& DeltaToTN ) const;
+
+    void Traction( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::VectorXd& T ) const;
+
+    void TractionStiffTangent( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::MatrixXd& H ) const;
+
     static autodiff::dual2nd f( const autodiff::ArrayXdual2nd& x, const autodiff::ArrayXdual2nd& p )
     {
         autodiff::dual2nd res =
