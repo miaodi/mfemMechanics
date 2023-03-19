@@ -24,6 +24,18 @@ struct GaussPointStorage
     double DetdXdXi;
 };
 
+struct CZMGaussPointStorage
+{
+    double CurrentOmegaN{ 0. };
+    double CurrentOmegaT{ 0. };
+    double CurrentAlphaN{ 0. };
+    double CurrentAlphaT{ 0. };
+    double OmegaN{ 0. };
+    double OmegaT{ 0. };
+    double AlphaN{ 0. };
+    double AlphaT{ 0. };
+}
+
 class Memorize
 {
 public:
@@ -31,12 +43,15 @@ public:
 
     void InitializeElement( const mfem::FiniteElement&, mfem::ElementTransformation&, const mfem::IntegrationRule& );
 
+    void InitializeFace( const mfem::FiniteElement&, mfem::ElementTransformation&, const mfem::IntegrationRule& );
+
     const Eigen::MatrixXd& GetdNdX( const int gauss ) const;
 
     double GetDetdXdXi( const int gauss ) const;
 
 private:
-    std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mStorage;
+    std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mEleStorage;
+    std::vector<std::unique_ptr<std::vector<CZMGaussPointStorage>>> mFaceStorage;
     mfem::DenseMatrix mDShape, mGShape;
     int mElementNo{ 0 };
 };

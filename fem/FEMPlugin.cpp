@@ -57,42 +57,66 @@ void smallDeformMatrixB( const int dof, const int dim, const Eigen::MatrixXd& gs
     }
 }
 
-Memorize::Memorize( mfem::Mesh* m ) : mStorage( m->GetNE() )
+Memorize::Memorize( mfem::Mesh* m ) : mEleStorage( m->GetNE() ), mFaceStorage( m->GetNumFaces() )
 {
 }
 
 void Memorize::InitializeElement( const mfem::FiniteElement& el, mfem::ElementTransformation& Trans, const mfem::IntegrationRule& ir )
 {
     mElementNo = Trans.ElementNo;
-    if ( mStorage[mElementNo] != nullptr )
+    if ( mEleStorage[mElementNo] != nullptr )
         return;
 
     const int dim = el.GetDim();
     const int numOfNodes = el.GetDof();
     const int numOfGauss = ir.GetNPoints();
     mDShape.SetSize( numOfNodes, dim );
-    mStorage[mElementNo] = std::make_unique<std::vector<GaussPointStorage>>( numOfGauss );
+    mEleStorage[mElementNo] = std::make_unique<std::vector<GaussPointStorage>>( numOfGauss );
     for ( int i = 0; i < numOfGauss; i++ )
     {
-        ( *mStorage[mElementNo] )[i].GShape.resize( numOfNodes, dim );
+        ( *mEleStorage[mElementNo] )[i].GShape.resize( numOfNodes, dim );
         const mfem::IntegrationPoint& ip = ir.IntPoint( i );
         Trans.SetIntPoint( &ip );
         el.CalcDShape( ip, mDShape );
-        mGShape.UseExternalData( ( *mStorage[mElementNo] )[i].GShape.data(), numOfNodes, dim );
+        mGShape.UseExternalData( ( *mEleStorage[mElementNo] )[i].GShape.data(), numOfNodes, dim );
         Mult( mDShape, Trans.InverseJacobian(), mGShape );
 
-        ( *mStorage[mElementNo] )[i].DetdXdXi = Trans.Weight();
+        ( *mEleStorage[mElementNo] )[i].DetdXdXi = Trans.Weight();
+    }
+}
+
+void Memorize::InitializeFace( const mfem::FiniteElement& el, mfem::FaceElementTransformations& Trans, const mfem::IntegrationRule& ir )
+{
+    mElementNo = Trans.ElementNo;
+    if ( mEleStorage[mElementNo] != nullptr )
+        return;
+
+    const int dim = el.GetDim();
+    const int numOfNodes = el.GetDof();
+    const int numOfGauss = ir.GetNPoints();
+    mDShape.SetSize( numOfNodes, dim );
+    mEleStorage[mElementNo] = std::make_unique<std::vector<GaussPointStorage>>( numOfGauss );
+    for ( int i = 0; i < numOfGauss; i++ )
+    {
+        ( *mEleStorage[mElementNo] )[i].GShape.resize( numOfNodes, dim );
+        const mfem::IntegrationPoint& ip = ir.IntPoint( i );
+        Trans.SetIntPoint( &ip );
+        el.CalcDShape( ip, mDShape );
+        mGShape.UseExternalData( ( *mEleStorage[mElementNo] )[i].GShape.data(), numOfNodes, dim );
+        Mult( mDShape, Trans.InverseJacobian(), mGShape );
+
+        ( *mEleStorage[mElementNo] )[i].DetdXdXi = Trans.Weight();
     }
 }
 
 const Eigen::MatrixXd& Memorize::GetdNdX( const int gauss ) const
 {
-    return ( *mStorage[mElementNo] )[gauss].GShape;
+    return ( *mEleStorage[mElementNo] )[gauss].GShape;
 }
 
 double Memorize::GetDetdXdXi( const int gauss ) const
 {
-    return ( *mStorage[mElementNo] )[gauss].DetdXdXi;
+    return ( *mEleStorage[mElementNo] )[gauss].DetdXdXi;
 }
 
 void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el, mfem::ElementTransformation& Trans, mfem::DenseMatrix& elmat )
@@ -735,7 +759,7 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
     {
-        int intorder = 1 * el1.GetOrder();
+        int intorder = 2 * el1.GetOrder();
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
 
@@ -797,7 +821,7 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
     {
-        int intorder = 1 * el1.GetOrder();
+        int intorder = 2 * el1.GetOrder();
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
     for ( int i = 0; i < ir->GetNPoints(); i++ )
@@ -872,8 +896,7 @@ void CZMIntegrator::Traction( const double PhiN, const double q, const double r,
         // autodiff::ArrayXdual2nd params( 5 );
         // params << mDeltaT, mDeltaN, PhiN, r, q;
         // autodiff::dual2nd u;
-        // Eigen::VectorXd T =
-        //     autodiff::gradient( CZMIntegrator::f, autodiff::wrt( deltaDiff ), autodiff::at( deltaDiff, params ), u );
+        // T = autodiff::gradient( CZMIntegrator::f, autodiff::wrt( deltaDiff ), autodiff::at( deltaDiff, params ), u );
     }
     else if ( Delta.size() == 3 )
     {
@@ -921,8 +944,7 @@ void CZMIntegrator::TractionStiffTangent( const double PhiN, const double q, con
         // params << mDeltaT, mDeltaN, PhiN, r, q;
         // autodiff::dual2nd u;
         // autodiff::VectorXdual g;
-        // Eigen::MatrixXd H =
-        //     autodiff::hessian( CZMIntegrator::f, autodiff::wrt( deltaDiff ), autodiff::at( deltaDiff, params ), u, g );
+        // H = autodiff::hessian( CZMIntegrator::f, autodiff::wrt( deltaDiff ), autodiff::at( deltaDiff, params ), u, g );
     }
     else if ( Delta.size() == 3 )
     {

@@ -192,7 +192,7 @@ int main( int argc, char* argv[] )
     plugin::Memorize mm( mesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
-    intg->setNonlinear( false );
+    intg->setNonlinear( true );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
@@ -214,10 +214,10 @@ int main( int argc, char* argv[] )
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-8 );
-    newton_solver->SetAbsTol( 1e-13 );
+    newton_solver->SetAbsTol( 1e-11 );
     newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( .0001 );
+    newton_solver->SetDelta( .001 );
     newton_solver->SetMaxDelta( 10 );
     newton_solver->SetMinDelta( 1e-12 );
     newton_solver->SetMaxStep( 20000 );

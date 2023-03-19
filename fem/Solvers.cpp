@@ -296,8 +296,8 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
         MFEM_VERIFY( L > min_delta, "Required step size is smaller than the minimal bound." );
 
-        if ( step )
-            phi = std::abs( Dot( Delta_u_prev, Delta_u_prev ) / Delta_lambda_prev / Delta_lambda_prev );
+        // if ( step )
+        //     phi = std::abs( Dot( Delta_u_prev, Delta_u_prev ) / Delta_lambda_prev / Delta_lambda_prev );
 
         util::mfemOut( "L: ", L, ", phi: ", phi, "\n", util::Color::RESET );
 
@@ -346,10 +346,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             // mfem::OperatorHandle gradHandle( grad, false );
             // PetscBool isSymmetric;
             // MatIsSymmetric( ( mfem::petsc::Mat )( *gradHandle.As<mfem::PetscParMatrix>() ), 0., &isSymmetric );
-            if ( it == 0 )
-                delta_u_bar = 0.0;
-            else
-                prec->Mult( r, delta_u_bar );
+            prec->Mult( r, delta_u_bar );
 
             // std::cout<<"delta_u_t: \n";
             // delta_u_t.Print();
@@ -361,14 +358,52 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             const double delta_u_t_dot_delta_u_t = Dot( delta_u_t, delta_u_t );
             const double Delta_u_dot_delta_u_t = Dot( Delta_u, delta_u_t );
             const double Delta_u_dot_delta_u_bar = Dot( Delta_u, delta_u_bar );
+            const double Delta_u_dot_Delta_u = Dot( Delta_u, Delta_u );
 
             double ds = 1.;
+            const double as = std::pow( delta_u_bar_dot_delta_u_t, 2 ) - phi * delta_u_bar_dot_delta_u_bar -
+                              delta_u_bar_dot_delta_u_bar * delta_u_t_dot_delta_u_t;
+            const double bs = 2 * ( Delta_lambda * phi + Delta_u_dot_delta_u_t ) * delta_u_bar_dot_delta_u_t -
+                              2 * Delta_u_dot_delta_u_bar * ( phi + delta_u_t_dot_delta_u_t );
+            const double cs = ( it == 0 ) ? std::pow( Delta_lambda * phi + Delta_u_dot_delta_u_t, 2 ) +
+                                                ( L * L - Delta_lambda * Delta_lambda * phi - Delta_u_dot_Delta_u ) *
+                                                    ( phi + delta_u_t_dot_delta_u_t )
+                                          : std::pow( Delta_lambda * phi + Delta_u_dot_delta_u_t, 2 );
 
+            auto func = [as, bs, cs]( const double ds ) { return as * ds * ds + bs * ds + cs; };
+            if ( func( ds ) < 0 )
+            {
+                util::mfemOut( util::Color::YELLOW, "Complex root detected, adaptive step size (ds) is activated!\n",
+                               util::Color::RESET );
+                const double beta1 = ( -bs + std::sqrt( bs * bs - 4 * as * cs ) ) / ( 2 * as );
+                const double beta2 = ( -bs - std::sqrt( bs * bs - 4 * as * cs ) ) / ( 2 * as );
+                util::mfemOut( util::Color::YELLOW, "beta1: ", beta1, ", beta2: ", beta2, '\n', util::Color::RESET );
+                const double xi = beta2 - beta1;
+                ds = std::min( beta2 - xi * .05, ds );
+                util::mfemOut( util::Color::YELLOW, "ds=: ", ds, util::Color::RESET );
+                if ( ds < .1 )
+                {
+                    util::mfemOut( util::Color::YELLOW, ", which is smaller than ds_min, restart!\n ", util::Color::RESET );
+                    converged = false;
+                    break;
+                }
+                util::mfemOut( "func(ds)= ", func( ds ), '\n' );
+            }
+            const double a0 = delta_u_t_dot_delta_u_t + phi;
+            const double b0 = 2 * Delta_u_dot_delta_u_t + 2 * phi * Delta_lambda;
+            const double b1 = 2 * delta_u_bar_dot_delta_u_t;
+            const double c0 = Delta_u_dot_Delta_u + phi * Delta_lambda * Delta_lambda - L * L;
+            const double c1 = 2 * Delta_u_dot_delta_u_bar;
+            const double c2 = delta_u_bar_dot_delta_u_bar;
+
+            const double a = a0;
+            const double b = b0 + b1 * ds;
+            const double c = c0 + c1 * ds + c2 * ds * ds;
+            delta_lambda1 = ( -1. * b + std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
+            delta_lambda2 = ( -1. * b - std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
+            util::mfemOut( "delta_lambda1: ", delta_lambda1, ", delta_lambda2: ", delta_lambda2, "\n", util::Color::RESET );
             if ( it == 0 )
             {
-                delta_lambda1 = L / std::sqrt( delta_u_t_dot_delta_u_t + phi );
-                delta_lambda2 = -L / std::sqrt( delta_u_t_dot_delta_u_t + phi );
-                util::mfemOut( "delta_lambda1: ", delta_lambda1, ", delta_lambda2: ", delta_lambda2, "\n", util::Color::RESET );
                 if ( step == 0 )
                 {
                     delta_lambda = delta_lambda1;
@@ -387,45 +422,6 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
             else
             {
-                const double as = std::pow( delta_u_bar_dot_delta_u_t, 2 ) - phi * delta_u_bar_dot_delta_u_bar -
-                                  delta_u_bar_dot_delta_u_bar * delta_u_t_dot_delta_u_t;
-                const double bs = 2 * ( Delta_lambda * phi + Delta_u_dot_delta_u_t ) * delta_u_bar_dot_delta_u_t -
-                                  2 * Delta_u_dot_delta_u_bar * ( phi + delta_u_t_dot_delta_u_t );
-                const double cs = std::pow( Delta_lambda * phi + Delta_u_dot_delta_u_t, 2 );
-
-                auto func = [as, bs, cs]( const double ds ) { return as * ds * ds + bs * ds + cs; };
-                if ( func( ds ) <= 0 )
-                {
-                    util::mfemOut( util::Color::YELLOW, "Complex root detected, adaptive step size (ds) is activated!\n",
-                                   util::Color::RESET );
-                    const double beta1 = ( -bs + std::sqrt( bs * bs - 4 * as * cs ) ) / ( 2 * as );
-                    const double beta2 = ( -bs - std::sqrt( bs * bs - 4 * as * cs ) ) / ( 2 * as );
-                    util::mfemOut( util::Color::YELLOW, "beta1: ", beta1, ", beta2: ", beta2, '\n', util::Color::RESET );
-                    const double xi = beta2 - beta1;
-                    ds = std::min( beta2 - xi * .05, ds );
-                    util::mfemOut( util::Color::YELLOW, "ds=: ", ds, util::Color::RESET );
-                    if ( ds < .1 )
-                    {
-                        util::mfemOut( util::Color::YELLOW, ", which is smaller than ds_min, restart!\n ", util::Color::RESET );
-                        converged = false;
-                        break;
-                    }
-                    util::mfemOut( "func(ds)= ", func( ds ), '\n' );
-                }
-                const double a0 = delta_u_t_dot_delta_u_t + phi;
-                const double b0 = 2 * Delta_u_dot_delta_u_t + 2 * phi * Delta_lambda;
-                const double b1 = 2 * delta_u_bar_dot_delta_u_t;
-                const double c0 = Dot( Delta_u, Delta_u ) + phi * Delta_lambda * Delta_lambda - L * L;
-                const double c1 = 2 * Delta_u_dot_delta_u_bar;
-                const double c2 = delta_u_bar_dot_delta_u_bar;
-
-                const double a = a0;
-                const double b = b0 + b1 * ds;
-                const double c = c0 + c1 * ds + c2 * ds * ds;
-                delta_lambda1 = ( -1. * b + std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
-                delta_lambda2 = ( -1. * b - std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
-                util::mfemOut( "delta_lambda1: ", delta_lambda1, ", delta_lambda2: ", delta_lambda2, "\n", util::Color::RESET );
-
                 const double t = InnerProduct( Delta_u, Delta_lambda, delta_u_t, 1 );
                 if ( t * delta_lambda1 > t * delta_lambda2 )
                 {
@@ -439,6 +435,10 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             // mfem::out << "delta_lambda: " << delta_lambda << '\n';
 
             add( ds, delta_u_bar, delta_lambda, delta_u_t, delta_u );
+
+            // update
+            Delta_u += delta_u;
+            Delta_lambda += delta_lambda;
 
             if ( it == 0 )
             {
@@ -480,10 +480,6 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 break;
             }
 
-            // update
-
-            Delta_u += delta_u;
-            Delta_lambda += delta_lambda;
             // delta_u.Print();
             // if(it==0){
 
@@ -521,7 +517,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
             if ( data )
             {
-                if ( step % 10 == 0 )
+                if ( step % 20 == 0 )
                 {
                     if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
                     {
