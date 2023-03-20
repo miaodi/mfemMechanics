@@ -85,28 +85,41 @@ void Memorize::InitializeElement( const mfem::FiniteElement& el, mfem::ElementTr
     }
 }
 
-void Memorize::InitializeFace( const mfem::FiniteElement& el, mfem::FaceElementTransformations& Trans, const mfem::IntegrationRule& ir )
+void Memorize::InitializeFace( const mfem::FiniteElement& el1,
+                               const mfem::FiniteElement& el2,
+                               mfem::FaceElementTransformations& Trans,
+                               const mfem::IntegrationRule& ir )
 {
     mElementNo = Trans.ElementNo;
-    if ( mEleStorage[mElementNo] != nullptr )
+    if ( mFaceStorage[mElementNo] != nullptr )
         return;
 
-    const int dim = el.GetDim();
-    const int numOfNodes = el.GetDof();
     const int numOfGauss = ir.GetNPoints();
-    mDShape.SetSize( numOfNodes, dim );
-    mEleStorage[mElementNo] = std::make_unique<std::vector<GaussPointStorage>>( numOfGauss );
+    mFaceStorage[mElementNo] = std::make_unique<std::vector<CZMGaussPointStorage>>( numOfGauss );
     for ( int i = 0; i < numOfGauss; i++ )
     {
-        ( *mEleStorage[mElementNo] )[i].GShape.resize( numOfNodes, dim );
+        ( *mFaceStorage[mElementNo] )[i].Shape1.SetSize( el1.GetDof() );
+        ( *mFaceStorage[mElementNo] )[i].Shape2.SetSize( el2.GetDof() );
         const mfem::IntegrationPoint& ip = ir.IntPoint( i );
-        Trans.SetIntPoint( &ip );
-        el.CalcDShape( ip, mDShape );
-        mGShape.UseExternalData( ( *mEleStorage[mElementNo] )[i].GShape.data(), numOfNodes, dim );
-        Mult( mDShape, Trans.InverseJacobian(), mGShape );
+        Trans.SetAllIntPoints( &ip );
+        const mfem::IntegrationPoint& eip1 = Trans.GetElement1IntPoint();
+        const mfem::IntegrationPoint& eip2 = Trans.GetElement2IntPoint();
+        el1.CalcShape( eip1, ( *mFaceStorage[mElementNo] )[i].Shape1 );
+        el2.CalcShape( eip2, ( *mFaceStorage[mElementNo] )[i].Shape2 );
 
-        ( *mEleStorage[mElementNo] )[i].DetdXdXi = Trans.Weight();
+        ( *mFaceStorage[mElementNo] )[i].Weight = ip.weight * Trans.Weight();
+        ( *mFaceStorage[mElementNo] )[i].Jacobian = Trans.Jacobian();
     }
+}
+
+const mfem::Vector& Memorize::GetFace1Shape( const int gauss ) const
+{
+    return ( *mFaceStorage[mElementNo] )[gauss].Shape1;
+}
+
+const mfem::Vector& Memorize::GetFace2Shape( const int gauss ) const
+{
+    return ( *mFaceStorage[mElementNo] )[gauss].Shape2;
 }
 
 const Eigen::MatrixXd& Memorize::GetdNdX( const int gauss ) const
@@ -117,6 +130,16 @@ const Eigen::MatrixXd& Memorize::GetdNdX( const int gauss ) const
 double Memorize::GetDetdXdXi( const int gauss ) const
 {
     return ( *mEleStorage[mElementNo] )[gauss].DetdXdXi;
+}
+
+const mfem::DenseMatrix& Memorize::GetFaceJacobian( const int gauss ) const
+{
+    return ( *mFaceStorage[mElementNo] )[gauss].Jacobian;
+}
+
+double Memorize::GetFaceWeight( const int gauss ) const
+{
+    return ( *mFaceStorage[mElementNo] )[gauss].Weight;
 }
 
 void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el, mfem::ElementTransformation& Trans, mfem::DenseMatrix& elmat )
@@ -748,8 +771,6 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
     double PhiN( std::exp( 1. ) * mSigmaMax * mDeltaN );
     double r( 0. );
     double q( 1. );
-    shape1.SetSize( dof1 );
-    shape2.SetSize( dof2 );
 
     elvect.SetSize( dof * vdim );
     elvect = 0.0;
@@ -759,10 +780,11 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
     {
-        int intorder = 2 * el1.GetOrder();
+        int intorder = el1.GetOrder();
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
 
+    mMemo.InitializeFace( el1, el2, Tr, *ir );
     Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
@@ -770,27 +792,22 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
         const mfem::IntegrationPoint& ip = ir->IntPoint( i );
 
         // Set the integration point in the face and the neighboring element
-        Tr.SetAllIntPoints( &ip );
+        // Tr.SetAllIntPoints( &ip );
         // mfem::Vector phy;
         // Tr.Transform( ip, phy );
         // if ( std::abs( phy( 1 ) ) > 1e-10 )
         //     continue;
 
-        // Access the neighboring element's integration point
-        const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
-        const mfem::IntegrationPoint& eip2 = Tr.GetElement2IntPoint();
-
-        el1.CalcShape( eip1, shape1 );
-        el2.CalcShape( eip2, shape2 );
-
-        matrixB( dof1, dof2, vdim );
+        const mfem::Vector& shape1 = mMemo.GetFace1Shape( i );
+        const mfem::Vector& shape2 = mMemo.GetFace2Shape( i );
+        matrixB( dof1, dof2, shape1, shape2, vdim );
         Eigen::VectorXd Delta = mB * u;
         Eigen::MatrixXd DeltaToTN;
-        DeltaToTNMat( Tr, DeltaToTN );
+        DeltaToTNMat( mMemo.GetFaceJacobian( i ), vdim, DeltaToTN );
         Delta = ( DeltaToTN.transpose() * Delta ).eval();
         Eigen::VectorXd T;
         Traction( PhiN, q, r, Delta, T );
-        eigenVec += mB.transpose() * DeltaToTN * T * ip.weight * Tr.Weight();
+        eigenVec += mB.transpose() * DeltaToTN * T * mMemo.GetFaceWeight( i );
     }
 }
 
@@ -810,9 +827,6 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
     double r( 0. );
     double q( 1. );
 
-    shape1.SetSize( dof1 );
-    shape2.SetSize( dof2 );
-
     elmat.SetSize( dof * vdim );
     elmat = 0.0;
     Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * vdim, dof * vdim );
@@ -821,54 +835,51 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
     {
-        int intorder = 2 * el1.GetOrder();
+        int intorder = el1.GetOrder();
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
+    mMemo.InitializeFace( el1, el2, Tr, *ir );
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
         const mfem::IntegrationPoint& ip = ir->IntPoint( i );
 
         // Set the integration point in the face and the neighboring element
-        Tr.SetAllIntPoints( &ip );
+        // Tr.SetAllIntPoints( &ip );
         // mfem::Vector phy;
         // Tr.Transform( ip, phy );
         // if ( std::abs( phy( 1 ) ) > 1e-10 )
         //     continue;
 
-        // Access the neighboring element's integration point
-        const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
-        const mfem::IntegrationPoint& eip2 = Tr.GetElement2IntPoint();
-        el1.CalcShape( eip1, shape1 );
-        el2.CalcShape( eip2, shape2 );
-        matrixB( dof1, dof2, vdim );
+        const mfem::Vector& shape1 = mMemo.GetFace1Shape( i );
+        const mfem::Vector& shape2 = mMemo.GetFace2Shape( i );
+        matrixB( dof1, dof2, shape1, shape2, vdim );
         Eigen::VectorXd Delta = mB * u;
         Eigen::MatrixXd DeltaToTN;
-        DeltaToTNMat( Tr, DeltaToTN );
+        DeltaToTNMat( mMemo.GetFaceJacobian( i ), vdim, DeltaToTN );
         Delta = ( DeltaToTN.transpose() * Delta ).eval();
 
         Eigen::MatrixXd H;
         TractionStiffTangent( PhiN, q, r, Delta, H );
         eigenMat += mB.transpose() * DeltaToTN * H.selfadjointView<Eigen::Upper>() * DeltaToTN.transpose() * mB *
-                    ip.weight * Tr.Weight();
+                    mMemo.GetFaceWeight( i );
     }
     // std::cout<<eigenMat<<std::endl;
 }
 
-void CZMIntegrator::DeltaToTNMat( mfem::FaceElementTransformations& Tr, Eigen::MatrixXd& DeltaToTN ) const
+void CZMIntegrator::DeltaToTNMat( const mfem::DenseMatrix& Jacobian, const int dim, Eigen::MatrixXd& DeltaToTN ) const
 {
-    int vdim = Tr.GetSpaceDim();
-    DeltaToTN.resize( vdim, vdim );
-    if ( vdim == 2 )
+    DeltaToTN.resize( dim, dim );
+    if ( dim == 2 )
     {
-        Eigen::Map<const Eigen::Matrix<double, 2, 1>> Jac( Tr.Jacobian().Data() );
+        Eigen::Map<const Eigen::Matrix<double, 2, 1>> Jac( Jacobian.Data() );
         static Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
         DeltaToTN.col( 0 ) = Jac;
         DeltaToTN.col( 0 ).normalize();
         DeltaToTN.col( 1 ) = rot.toRotationMatrix() * DeltaToTN.col( 0 );
     }
-    else if ( vdim == 3 )
+    else if ( dim == 3 )
     {
-        Eigen::Map<const Eigen::Matrix<double, 3, 2>> Jac( Tr.Jacobian().Data() );
+        Eigen::Map<const Eigen::Matrix<double, 3, 2>> Jac( Jacobian.Data() );
         DeltaToTN.col( 0 ) = Jac.col( 0 );
         DeltaToTN.col( 0 ).normalize();
         DeltaToTN.col( 2 ) = Jac.col( 1 ).cross( Jac.col( 0 ) );

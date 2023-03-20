@@ -34,7 +34,11 @@ struct CZMGaussPointStorage
     double OmegaT{ 0. };
     double AlphaN{ 0. };
     double AlphaT{ 0. };
-}
+    double Weight{ 0. };
+
+    mfem::Vector Shape1, Shape2;
+    mfem::DenseMatrix Jacobian;
+};
 
 class Memorize
 {
@@ -43,11 +47,18 @@ public:
 
     void InitializeElement( const mfem::FiniteElement&, mfem::ElementTransformation&, const mfem::IntegrationRule& );
 
-    void InitializeFace( const mfem::FiniteElement&, mfem::ElementTransformation&, const mfem::IntegrationRule& );
+    void InitializeFace( const mfem::FiniteElement&, const mfem::FiniteElement&, mfem::FaceElementTransformations&, const mfem::IntegrationRule& );
 
     const Eigen::MatrixXd& GetdNdX( const int gauss ) const;
 
+    const mfem::Vector& GetFace1Shape( const int gauss ) const;
+
+    const mfem::Vector& GetFace2Shape( const int gauss ) const;
+
     double GetDetdXdXi( const int gauss ) const;
+
+    double GetFaceWeight( const int gauss ) const;
+    const mfem::DenseMatrix& GetFaceJacobian( const int gauss ) const;
 
 private:
     std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mEleStorage;
@@ -273,12 +284,12 @@ protected:
 class CZMIntegrator : public mfem::NonlinearFormIntegrator
 {
 public:
-    CZMIntegrator() : mfem::NonlinearFormIntegrator()
+    CZMIntegrator( Memorize& memo ) : mfem::NonlinearFormIntegrator(), mMemo{ memo }
     {
     }
 
-    CZMIntegrator( const double sigmaMax, const double tauMax, const double deltaN, const double deltaT )
-        : mfem::NonlinearFormIntegrator(), mSigmaMax{ sigmaMax }, mTauMax{ tauMax }, mDeltaN{ deltaN }, mDeltaT{ deltaT }
+    CZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT )
+        : mfem::NonlinearFormIntegrator(), mMemo{ memo }, mSigmaMax{ sigmaMax }, mTauMax{ tauMax }, mDeltaN{ deltaN }, mDeltaT{ deltaT }
     {
     }
 
@@ -294,7 +305,7 @@ public:
                                    const mfem::Vector& elfun,
                                    mfem::DenseMatrix& elmat ) override;
 
-    void matrixB( const int dof1, const int dof2, const int dim )
+    void matrixB( const int dof1, const int dof2, const mfem::Vector& shape1, const mfem::Vector& shape2, const int dim )
     {
         mB.resize( dim, dim * ( dof1 + dof2 ) );
         mB.setZero();
@@ -315,7 +326,7 @@ public:
         }
     }
 
-    void DeltaToTNMat( mfem::FaceElementTransformations& Tr, Eigen::MatrixXd& DeltaToTN ) const;
+    void DeltaToTNMat( const mfem::DenseMatrix&, const int dim, Eigen::MatrixXd& DeltaToTN ) const;
 
     void Traction( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::VectorXd& T ) const;
 
@@ -333,6 +344,7 @@ public:
     }
 
 protected:
+    Memorize& mMemo;
     double mSigmaMax{ 0. };
     double mTauMax{ 0. };
     double mDeltaN{ 0. };

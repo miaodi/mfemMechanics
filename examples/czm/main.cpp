@@ -168,7 +168,6 @@ int main( int argc, char* argv[] )
         hevi.Set( i, new PWConstCoefficient( activeBC ) );
     }
 
-
     printf( "Mesh is %i dimensional.\n", dim );
     printf( "Number of mesh attributes: %i\n", mesh->attributes.Size() );
     printf( "Number of boundary attributes: %i\n", mesh->bdr_attributes.Size() );
@@ -220,7 +219,7 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxStep( 1 );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( 324E5, 755.4E5, 4E-7, 4E-7 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;

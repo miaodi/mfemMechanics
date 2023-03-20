@@ -203,10 +203,10 @@ int main( int argc, char* argv[] )
     Vector force( mesh->bdr_attributes.Max() );
     force = .0;
     force( 0 ) = -1000000000;
-    force( 1 ) =  1000000000;
+    force( 1 ) = 1000000000;
     f1.Set( 1, new PWConstCoefficient( force ) );
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f1 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( 324E5, 755.4E5, 4E-7, 4E-7 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7 ) );
 
     VectorArrayCoefficient d( dim );
     for ( int i = 0; i < dim; i++ )
@@ -224,7 +224,6 @@ int main( int argc, char* argv[] )
         hevi.Set( i, new PWConstCoefficient( activeBC ) );
     }
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
-
 
     // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
     // 15. Save data in the ParaView format
