@@ -142,6 +142,28 @@ double Memorize::GetFaceWeight( const int gauss ) const
     return ( *mFaceStorage[mElementNo] )[gauss].Weight;
 }
 
+void Memorize::UpdateHistoryParams( const bool success )
+{
+    // currently only for CZM
+    for ( auto& ptr : mFaceStorage )
+    {
+        for ( auto& storage : ( *ptr ) )
+        {
+            if ( success )
+            {
+                storage.OmegaN = storage.CurrentOmegaN;
+                storage.OmegaT = storage.CurrentOmegaT;
+                storage.AlphaN = storage.CurrentAlphaN;
+                storage.AlphaT = storage.CurrentAlphaT;
+            }
+            storage.CurrentOmegaN = 0.;
+            storage.CurrentOmegaT = 0.;
+            storage.CurrentAlphaN = 0.;
+            storage.CurrentAlphaT = 0.;
+        }
+    }
+}
+
 void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el, mfem::ElementTransformation& Trans, mfem::DenseMatrix& elmat )
 {
     int dof = el.GetDof();

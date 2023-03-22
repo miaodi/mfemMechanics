@@ -34,8 +34,8 @@ struct CZMGaussPointStorage
     double OmegaT{ 0. };
     double AlphaN{ 0. };
     double AlphaT{ 0. };
-    double Weight{ 0. };
 
+    double Weight{ 0. };
     mfem::Vector Shape1, Shape2;
     mfem::DenseMatrix Jacobian;
 };
@@ -58,7 +58,10 @@ public:
     double GetDetdXdXi( const int gauss ) const;
 
     double GetFaceWeight( const int gauss ) const;
+
     const mfem::DenseMatrix& GetFaceJacobian( const int gauss ) const;
+
+    void UpdateHistoryParams( const bool success );
 
 private:
     std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mEleStorage;

@@ -207,6 +207,8 @@ int main( int argc, char* argv[] )
 
     auto newton_solver = new plugin::Crisfield();
 
+    newton_solver->SetCache( mm );
+
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
     newton_solver->SetSolver( *j_gmres );

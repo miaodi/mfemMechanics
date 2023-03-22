@@ -283,6 +283,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             converged = false;
             break;
         }
+
         // initialize
         if ( converged == false )
         {
@@ -295,6 +296,9 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         }
 
         MFEM_VERIFY( L > min_delta, "Required step size is smaller than the minimal bound." );
+
+        if ( memo )
+            memo->UpdateHistoryParams( converged );
 
         // if ( step )
         //     phi = std::abs( Dot( Delta_u_prev, Delta_u_prev ) / Delta_lambda_prev / Delta_lambda_prev );

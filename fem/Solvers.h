@@ -7,6 +7,7 @@
 
 namespace plugin
 {
+class Memorize;
 class NewtonLineSearch : public mfem::NewtonSolver
 {
 protected:
@@ -50,7 +51,7 @@ public:
 
     virtual double ComputeScalingFactor( const mfem::Vector& x, const mfem::Vector& b ) const;
     virtual void SetOperator( const mfem::Operator& op );
-    virtual void Mult(const mfem::Vector &b, mfem::Vector &x) const;
+    virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;
 };
 
 void SetLambdaToIntegrators( const mfem::Operator*, const double l );
@@ -123,6 +124,10 @@ public:
     {
         data = dc;
     }
+    void SetCache( Memorize& cache )
+    {
+        memo = &cache;
+    }
 
 protected:
     mutable mfem::Vector r, Delta_u, delta_u, u_cur, q, delta_u_bar, delta_u_t, Delta_u_prev;
@@ -135,6 +140,7 @@ protected:
 
     int max_steps{ 100 };
     mutable mfem::DataCollection* data{ nullptr };
+    mutable Memorize* memo{ nullptr };
 };
 
 class MultiNewtonAdaptive : public mfem::NewtonSolver
@@ -162,11 +168,11 @@ public:
     virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;
     virtual void SetOperator( const mfem::Operator& op );
 
-
     void SetDataCollection( mfem::DataCollection* dc )
     {
         data = dc;
     }
+
 protected:
     int max_steps{ 100 };
     mutable double delta_lambda{ 1. };
