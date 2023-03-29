@@ -63,6 +63,11 @@ public:
 
     void UpdateHistoryParams( const bool success );
 
+    CZMGaussPointStorage& GetCZMGaussPointStorage( const int gauss )
+    {
+        return ( *mFaceStorage[mElementNo] )[gauss];
+    }
+
 private:
     std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mEleStorage;
     std::vector<std::unique_ptr<std::vector<CZMGaussPointStorage>>> mFaceStorage;
@@ -331,9 +336,14 @@ public:
 
     void DeltaToTNMat( const mfem::DenseMatrix&, const int dim, Eigen::MatrixXd& DeltaToTN ) const;
 
-    void Traction( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::VectorXd& T ) const;
+    void Traction( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::VectorXd& T, CZMGaussPointStorage& czmPoint );
 
-    void TractionStiffTangent( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::MatrixXd& H ) const;
+    void TractionStiffTangent( const double PhiN,
+                               const double q,
+                               const double r,
+                               const Eigen::VectorXd& Delta,
+                               Eigen::MatrixXd& H,
+                               CZMGaussPointStorage& czmPoint );
 
     static autodiff::dual2nd f( const autodiff::ArrayXdual2nd& x, const autodiff::ArrayXdual2nd& p )
     {

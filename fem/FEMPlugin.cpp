@@ -156,10 +156,13 @@ void Memorize::UpdateHistoryParams( const bool success )
                 storage.AlphaN = storage.CurrentAlphaN;
                 storage.AlphaT = storage.CurrentAlphaT;
             }
-            storage.CurrentOmegaN = 0.;
-            storage.CurrentOmegaT = 0.;
-            storage.CurrentAlphaN = 0.;
-            storage.CurrentAlphaT = 0.;
+            else
+            {
+                storage.CurrentOmegaN = storage.OmegaN;
+                storage.CurrentOmegaT = storage.OmegaT;
+                storage.CurrentAlphaN = storage.AlphaN;
+                storage.CurrentAlphaT = storage.AlphaT;
+            }
         }
     }
 }
@@ -811,7 +814,7 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
-        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+        // const mfem::IntegrationPoint& ip = ir->IntPoint( i );
 
         // Set the integration point in the face and the neighboring element
         // Tr.SetAllIntPoints( &ip );
@@ -863,7 +866,7 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
     mMemo.InitializeFace( el1, el2, Tr, *ir );
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
-        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+        // const mfem::IntegrationPoint& ip = ir->IntPoint( i );
 
         // Set the integration point in the face and the neighboring element
         // Tr.SetAllIntPoints( &ip );
@@ -911,18 +914,38 @@ void CZMIntegrator::DeltaToTNMat( const mfem::DenseMatrix& Jacobian, const int d
     }
 }
 
-void CZMIntegrator::Traction( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::VectorXd& T ) const
+void CZMIntegrator::Traction( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::VectorXd& T, CZMGaussPointStorage& czmPoint )
 {
     if ( Delta.size() == 2 )
     {
         T.resize( 2 );
         // Tt
-        T( 0 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * PhiN *
-                 ( q + Delta( 1 ) * ( r - q ) / mDeltaN / ( r - 1 ) ) / mDeltaT / mDeltaT;
+        if ( czmPoint.CurrentOmegaT > std::abs( Delta( 0 ) ) )
+        {
+            T( 0 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) *
+                     PhiN * ( q + Delta( 1 ) * ( r - q ) / mDeltaN / ( r - 1 ) ) / mDeltaT / mDeltaT;
+            czmPoint.CurrentOmegaT = std::abs( Delta( 0 ) );
+            czmPoint.AlphaT = T( 0 ) / Delta( 0 );
+        }
+        else
+        {
+            T( 0 ) = czmPoint.AlphaT * Delta( 0 );
+        }
+
         // Tn
-        T( 1 ) = PhiN / mDeltaN * exp( -Delta( 1 ) / mDeltaN ) *
-                 ( Delta( 1 ) / mDeltaN * exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) +
-                   ( 1 - q ) / ( r - 1 ) * ( 1 - exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) ) * ( r - Delta( 1 ) / mDeltaN ) );
+        if ( czmPoint.CurrentOmegaN > Delta( 1 ) < 0 ? 0 : Delta( 1 ) )
+        {
+            T( 1 ) = PhiN / mDeltaN * exp( -Delta( 1 ) / mDeltaN ) *
+                     ( Delta( 1 ) / mDeltaN * exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) +
+                       ( 1 - q ) / ( r - 1 ) * ( 1 - exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) ) *
+                           ( r - Delta( 1 ) / mDeltaN ) );
+            czmPoint.CurrentOmegaN = std::abs( Delta( 1 ) );
+            czmPoint.AlphaN = T( 1 ) / Delta( 1 );
+        }
+        else
+        {
+            T( 1 ) = czmPoint.AlphaN * Delta( 1 );
+        }
 
         // autodiff::ArrayXdual2nd deltaDiff( 2 );
         // deltaDiff << Delta( 0 ), Delta( 1 );
@@ -953,15 +976,25 @@ void CZMIntegrator::Traction( const double PhiN, const double q, const double r,
     }
 }
 
-void CZMIntegrator::TractionStiffTangent( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::MatrixXd& H ) const
+void CZMIntegrator::TractionStiffTangent(
+    const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::MatrixXd& H, CZMGaussPointStorage& czmPoint )
 {
     if ( Delta.size() == 2 )
     {
         H.resize( 2, 2 );
         // Ttt
-        H( 0, 0 ) = 2 * ( std::pow( mDeltaT, 2 ) - 2 * std::pow( Delta( 0 ), 2 ) ) *
-                    exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * PhiN *
-                    ( mDeltaN * q * ( r - 1 ) + Delta( 1 ) * ( r - q ) ) / mDeltaN / std::pow( mDeltaT, 4 ) / ( r - 1 );
+        if ( czmPoint.CurrentOmegaT > std::abs( Delta( 0 ) ) )
+        {
+            H( 0, 0 ) = 2 * ( std::pow( mDeltaT, 2 ) - 2 * std::pow( Delta( 0 ), 2 ) ) *
+                        exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * PhiN *
+                        ( mDeltaN * q * ( r - 1 ) + Delta( 1 ) * ( r - q ) ) / mDeltaN / std::pow( mDeltaT, 4 ) / ( r - 1 );
+            czmPoint.CurrentOmegaT = std::abs( Delta( 0 ) );
+            czmPoint.AlphaT = T( 0 ) / Delta( 0 );
+        }
+        else
+        {
+            T( 0 ) = czmPoint.AlphaT * Delta( 0 );
+        }
         // Tnn
         H( 1, 1 ) = exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * PhiN *
                     ( mDeltaN * ( 2 * r - q - q * r + exp( Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * ( q - 1 ) * ( r + 1 ) ) -
