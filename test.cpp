@@ -3,7 +3,7 @@
 #include <Fastor/Fastor.h>
 #include <fstream>
 #include <iostream>
-#include <taco.h>
+// #include <taco.h>
 #include <unsupported/Eigen/KroneckerProduct>
 
 using namespace std;
@@ -128,79 +128,79 @@ int main()
     // }
     // Rotation2Dd r( EIGEN_PI / 2 );
     // cout << r.toRotationMatrix() << endl;
-    {
-        // Create formats
-        taco::Format sv4( { taco::Dense, taco::Dense, taco::Dense, taco::Dense } );
-        taco::Format sv2( { taco::Sparse, taco::Sparse } );
-        taco::Format sd2( { taco::Dense, taco::Dense } );
+    // {
+    //     // Create formats
+    //     taco::Format sv4( { taco::Dense, taco::Dense, taco::Dense, taco::Dense } );
+    //     taco::Format sv2( { taco::Sparse, taco::Sparse } );
+    //     taco::Format sd2( { taco::Dense, taco::Dense } );
 
-        // Create tensors
-        taco::Tensor<double> I2( { 3, 3 }, sv2 );
-        taco::Tensor<double> I4( { 3, 3, 3, 3 }, sv4 );
-        taco::Tensor<double> C( { 3, 3, 3, 3 }, sv4 );
+    //     // Create tensors
+    //     taco::Tensor<double> I2( { 3, 3 }, sv2 );
+    //     taco::Tensor<double> I4( { 3, 3, 3, 3 }, sv4 );
+    //     taco::Tensor<double> C( { 3, 3, 3, 3 }, sv4 );
 
-        // Insert data into B and c
-        I2.insert( { 0, 0 }, 1. );
-        I2.insert( { 1, 1 }, 1. );
-        I2.insert( { 2, 2 }, 1. );
+    //     // Insert data into B and c
+    //     I2.insert( { 0, 0 }, 1. );
+    //     I2.insert( { 1, 1 }, 1. );
+    //     I2.insert( { 2, 2 }, 1. );
 
-        // Pack inserted data as described by the formats
-        I2.pack();
+    //     // Pack inserted data as described by the formats
+    //     I2.pack();
 
-        Matrix3d rand = MatrixXd::Random( 3, 3 );
+    //     Matrix3d rand = MatrixXd::Random( 3, 3 );
 
-        taco::Array A2( taco::Float64, rand.data(), 9, taco::Array::UserOwns );
+    //     taco::Array A2( taco::Float64, rand.data(), 9, taco::Array::UserOwns );
 
-        std::cout << rand << std::endl;
+    //     std::cout << rand << std::endl;
 
-        taco::Tensor<double> x( { 3, 3 }, { taco::Dense, taco::Dense } );
-        // Array x_array = makeArray<double>( x_values, 10 );
-        taco::TensorStorage x_storage = x.getStorage();
-        x_storage.setValues( A2 );
-        x.setStorage( x_storage );
-        auto T = x.transpose( { 1, 0 } );
+    //     taco::Tensor<double> x( { 3, 3 }, { taco::Dense, taco::Dense } );
+    //     // Array x_array = makeArray<double>( x_values, 10 );
+    //     taco::TensorStorage x_storage = x.getStorage();
+    //     x_storage.setValues( A2 );
+    //     x.setStorage( x_storage );
+    //     auto T = x.transpose( { 1, 0 } );
 
-        // Lame
+    //     // Lame
 
-        const double lambda = 1;
-        const double mu = 0;
+    //     const double lambda = 1;
+    //     const double mu = 0;
 
-        // Form a tensor-vector multiplication expression
-        taco::IndexVar i, j, k, l;
-        taco::IndexVar m, n, o, p;
-        I4( i, j, k, l ) = .5 * ( I2( i, k ) * I2( j, l ) + I2( i, l ) * I2( j, k ) );
+    //     // Form a tensor-vector multiplication expression
+    //     taco::IndexVar i, j, k, l;
+    //     taco::IndexVar m, n, o, p;
+    //     I4( i, j, k, l ) = .5 * ( I2( i, k ) * I2( j, l ) + I2( i, l ) * I2( j, k ) );
 
-        C( i, j, k, l ) = lambda * I2( i, j ) * I2( k, l ) + 2 * mu * I4( i, j, k, l );
-        C.evaluate();
+    //     C( i, j, k, l ) = lambda * I2( i, j ) * I2( k, l ) + 2 * mu * I4( i, j, k, l );
+    //     C.evaluate();
 
-        taco::Tensor<double> CT( { 3, 3, 3, 3 }, sv4 );
-        CT( i, j, k, l ) = T( m, i ) * T( n, j ) * T( o, k ) * T( p, l ) * C( m, n, o, p );
+    //     taco::Tensor<double> CT( { 3, 3, 3, 3 }, sv4 );
+    //     CT( i, j, k, l ) = T( m, i ) * T( n, j ) * T( o, k ) * T( p, l ) * C( m, n, o, p );
 
-        Matrix6d EigenC;
+    //     Matrix6d EigenC;
 
-        for ( int i = 0; i < 6; i++ )
-        {
-            for ( int j = 0; j < 6; j++ )
-            {
-                EigenC( i, j ) = C.at( { (int)util::Voigt( i, 0 ), (int)util::Voigt( i, 1 ), (int)util::Voigt( j, 2 ),
-                                         (int)util::Voigt( j, 3 ) } );
-            }
-        }
-        Eigen::Matrix6d Trans = util::TransformationVoigtForm( rand );
-        std::cout << Trans.transpose() * EigenC * Trans << std::endl << std::endl;
-        Matrix6d EigenCTACO;
-        for ( int i = 0; i < 6; i++ )
-        {
-            for ( int j = 0; j < 6; j++ )
-            {
-                EigenCTACO( i, j ) = CT.at( { (int)util::Voigt( i, 0 ), (int)util::Voigt( i, 1 ),
-                                              (int)util::Voigt( j, 2 ), (int)util::Voigt( j, 3 ) } );
-            }
-        }
+    //     for ( int i = 0; i < 6; i++ )
+    //     {
+    //         for ( int j = 0; j < 6; j++ )
+    //         {
+    //             EigenC( i, j ) = C.at( { (int)util::Voigt( i, 0 ), (int)util::Voigt( i, 1 ), (int)util::Voigt( j, 2 ),
+    //                                      (int)util::Voigt( j, 3 ) } );
+    //         }
+    //     }
+    //     Eigen::Matrix6d Trans = util::TransformationVoigtForm( rand );
+    //     std::cout << Trans.transpose() * EigenC * Trans << std::endl << std::endl;
+    //     Matrix6d EigenCTACO;
+    //     for ( int i = 0; i < 6; i++ )
+    //     {
+    //         for ( int j = 0; j < 6; j++ )
+    //         {
+    //             EigenCTACO( i, j ) = CT.at( { (int)util::Voigt( i, 0 ), (int)util::Voigt( i, 1 ),
+    //                                           (int)util::Voigt( j, 2 ), (int)util::Voigt( j, 3 ) } );
+    //         }
+    //     }
 
-        // MFEM_VERIFY( 1 == 2, "fuck." );
-        std::cout << EigenCTACO - Trans.transpose() * EigenC * Trans << std::endl;
-    }
+    //     // MFEM_VERIFY( 1 == 2, "fuck." );
+    //     std::cout << EigenCTACO - Trans.transpose() * EigenC * Trans << std::endl;
+    // }
     // {
     //     enum
     //     {
