@@ -789,7 +789,7 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
-        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+        // const mfem::IntegrationPoint& ip = ir->IntPoint( i );
 
         // Set the integration point in the face and the neighboring element
         // Tr.SetAllIntPoints( &ip );
@@ -841,7 +841,7 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
     mMemo.InitializeFace( el1, el2, Tr, *ir );
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
-        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+        // const mfem::IntegrationPoint& ip = ir->IntPoint( i );
 
         // Set the integration point in the face and the neighboring element
         // Tr.SetAllIntPoints( &ip );
@@ -863,7 +863,7 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
         eigenMat += mB.transpose() * DeltaToTN * H.selfadjointView<Eigen::Upper>() * DeltaToTN.transpose() * mB *
                     mMemo.GetFaceWeight( i );
     }
-    // std::cout<<eigenMat<<std::endl;
+    std::cout << eigenMat.cols() << " " << eigenMat.rows() << std::endl;
 }
 
 void CZMIntegrator::DeltaToTNMat( const mfem::DenseMatrix& Jacobian, const int dim, Eigen::MatrixXd& DeltaToTN ) const

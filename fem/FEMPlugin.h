@@ -26,14 +26,6 @@ struct GaussPointStorage
 
 struct CZMGaussPointStorage
 {
-    double CurrentOmegaN{ 0. };
-    double CurrentOmegaT{ 0. };
-    double CurrentAlphaN{ 0. };
-    double CurrentAlphaT{ 0. };
-    double OmegaN{ 0. };
-    double OmegaT{ 0. };
-    double AlphaN{ 0. };
-    double AlphaT{ 0. };
     double Weight{ 0. };
 
     mfem::Vector Shape1, Shape2;

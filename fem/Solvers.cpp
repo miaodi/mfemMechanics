@@ -321,7 +321,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             add( *u, Delta_u, u_cur );
 
             // compute q
-            SetLambdaToIntegrators( oper, 1. + lambda + Delta_lambda );
+            SetLambdaToIntegrators( oper, .0001 + lambda + Delta_lambda );
 
             oper->Mult( u_cur, q );
 
@@ -330,6 +330,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             oper->Mult( u_cur, r );
             q -= r;
             q.Neg();
+            q *= 10000;
             if ( have_b )
             {
                 r -= b;
@@ -517,7 +518,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
             if ( data )
             {
-                if ( step % 20 == 0 )
+                if ( step % 1 == 0 )
                 {
                     if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
                     {

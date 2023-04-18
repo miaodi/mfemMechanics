@@ -14,3 +14,7 @@ target_link_libraries(${PROJECT_NAME}3D PRIVATE ${LIBS})
 add_executable(bar bar.cpp)
 target_include_directories(bar PUBLIC ${INCLUDE_DIRS})
 target_link_libraries(bar PRIVATE ${LIBS})
+
+add_executable(bar_3D bar_3D.cpp)
+target_include_directories(bar_3D PUBLIC ${INCLUDE_DIRS})
+target_link_libraries(bar_3D PRIVATE ${LIBS})
