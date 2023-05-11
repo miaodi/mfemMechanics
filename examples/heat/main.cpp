@@ -69,7 +69,7 @@ protected:
     CGSolver T_solver; // Implicit solver for T = M + dt K
     DSmoother T_prec;  // Preconditioner for the implicit solver
 
-    mutable Vector z; // auxiliary vector
+    mutable Vector z;  // auxiliary vector
 
 public:
     ConductionOperator( FiniteElementSpace& f );
@@ -104,9 +104,8 @@ int main( int argc, char* argv[] )
     args.AddOption( &order, "-o", "--order", "Order (degree) of the finite elements." );
     args.AddOption( &t_final, "-tf", "--t-final", "Final time; start time is 0." );
     args.AddOption( &dt, "-dt", "--time-step", "Time step." );
-   args.AddOption(&paraview, "-paraview", "--paraview-datafiles", "-no-paraview",
-                  "--no-paraview-datafiles",
-                  "Save data files for ParaView (paraview.org) visualization.");
+    args.AddOption( &paraview, "-paraview", "--paraview-datafiles", "-no-paraview", "--no-paraview-datafiles",
+                    "Save data files for ParaView (paraview.org) visualization." );
     args.AddOption( &vis_steps, "-vs", "--visualization-steps", "Visualize every n-th timestep." );
     args.Parse();
     if ( !args.Good() )
@@ -164,19 +163,19 @@ int main( int argc, char* argv[] )
         u_gf.Save( osol );
     }
 
-   ParaViewDataCollection *pd = NULL;
-   if (paraview)
-   {
-      pd = new ParaViewDataCollection("thermal", mesh);
-      pd->SetPrefixPath("ParaView");
-      pd->RegisterField("temperature", &u_gf);
-      pd->SetLevelsOfDetail(order);
-      pd->SetDataFormat(VTKFormat::BINARY);
-      pd->SetHighOrderOutput(true);
-      pd->SetCycle(0);
-      pd->SetTime(0.0);
-      pd->Save();
-   }
+    ParaViewDataCollection* pd = NULL;
+    if ( paraview )
+    {
+        pd = new ParaViewDataCollection( "thermal", mesh );
+        pd->SetPrefixPath( "ParaView" );
+        pd->RegisterField( "temperature", &u_gf );
+        pd->SetLevelsOfDetail( order );
+        pd->SetDataFormat( VTKFormat::BINARY );
+        pd->SetHighOrderOutput( true );
+        pd->SetCycle( 0 );
+        pd->SetTime( 0.0 );
+        pd->Save();
+    }
 
     // 8. Perform time-integration (looping over the time iterations, ti, with a
     //    time-step dt).
@@ -198,15 +197,16 @@ int main( int argc, char* argv[] )
             cout << "step " << ti << ", t = " << t << endl;
 
             u_gf.SetFromTrueDofs( u );
-            if (paraview)
+            if ( paraview )
             {
-                pd->SetCycle(ti);
-                pd->SetTime(t);
+                pd->SetCycle( ti );
+                pd->SetTime( t );
                 pd->Save();
             }
         }
     }
-    std::cout<<u_gf.Max();;
+    std::cout << u_gf.Max();
+    ;
 
     // 9. Save the final solution. This output can be viewed later using GLVis:
     //    "glvis -m ex16.mesh -g ex16-final.gf".
@@ -223,7 +223,7 @@ int main( int argc, char* argv[] )
     return 0;
 }
 
-ConductionOperator::ConductionOperator( FiniteElementSpace& f)
+ConductionOperator::ConductionOperator( FiniteElementSpace& f )
     : TimeDependentOperator( f.GetTrueVSize(), 0.0 ), fespace( f ), M( NULL ), K( NULL ), T( NULL ), current_dt( 0.0 ), z( height )
 {
     Array<int> ess_bdr( fespace.GetMesh()->bdr_attributes.Max() );
@@ -244,8 +244,8 @@ ConductionOperator::ConductionOperator( FiniteElementSpace& f)
     M->FormSystemMatrix( ess_tdof_list, Mmat );
     Mmat.PrintInfo( mfem::out );
     ofstream myfile;
-    myfile.open ("m.txt");
-    Mmat.PrintMatlab(myfile);
+    myfile.open( "m.txt" );
+    Mmat.PrintMatlab( myfile );
     myfile.close();
 
     K = new BilinearForm( &fespace );
@@ -254,8 +254,8 @@ ConductionOperator::ConductionOperator( FiniteElementSpace& f)
     K->Assemble();
     K->FormSystemMatrix( ess_tdof_list, Kmat );
     Kmat.PrintInfo( mfem::out );
-    myfile.open ("k.txt");
-    Kmat.PrintMatlab(myfile);
+    myfile.open( "k.txt" );
+    Kmat.PrintMatlab( myfile );
     myfile.close();
 
     M_solver.iterative_mode = false;
@@ -274,6 +274,8 @@ ConductionOperator::ConductionOperator( FiniteElementSpace& f)
     T_solver.SetPrintLevel( 0 );
     T_solver.SetPreconditioner( T_prec );
 
+    mfem::DenseMatrix q( f.GetTrueVSize(),2 );
+    q = 0.;
     Vector power( fespace.GetMesh()->bdr_attributes.Max() );
     {
         b = new LinearForm( &fespace );
@@ -283,7 +285,14 @@ ConductionOperator::ConductionOperator( FiniteElementSpace& f)
         PWConstCoefficient powerCoef( power );
         b->AddBdrFaceIntegrator( new BoundaryLFIntegrator( powerCoef ) );
         b->Assemble();
-        b->Print(mfem::out, 200);
+        for ( int i = 0; i < f.GetTrueVSize(); i++ )
+        {
+            if ( ( *b ).Elem( i ) != 0 )
+            {
+                q.Elem( i, 0 ) = ( *b ).Elem( i );
+            }
+        }
+        b->Print( mfem::out, 200 );
         delete b;
     }
 
@@ -295,10 +304,21 @@ ConductionOperator::ConductionOperator( FiniteElementSpace& f)
         PWConstCoefficient powerCoef( power );
         b->AddBdrFaceIntegrator( new BoundaryLFIntegrator( powerCoef ) );
         b->Assemble();
-        b->Print(mfem::out, 200);
+        b->Print( mfem::out, 200 );
+        for ( int i = 0; i < f.GetTrueVSize(); i++ )
+        {
+            if ( ( *b ).Elem( i ) != 0 )
+            {
+                q.Elem( i, 1 ) = ( *b ).Elem( i );
+            }
+        }
         delete b;
     }
-    
+
+    myfile.open( "g.txt" );
+    q.PrintMatlab( myfile );
+    myfile.close();
+
     {
         b = new LinearForm( &fespace );
         power = .0;
@@ -307,7 +327,7 @@ ConductionOperator::ConductionOperator( FiniteElementSpace& f)
         PWConstCoefficient powerCoef( power );
         b->AddBdrFaceIntegrator( new BoundaryLFIntegrator( powerCoef ) );
         b->Assemble();
-        b->Print(mfem::out, 200);
+        b->Print( mfem::out, 200 );
     }
 }
 
