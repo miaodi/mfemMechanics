@@ -33,7 +33,7 @@ void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector&
 {
     if ( print_level == 1 || ( print_level == 3 && ( final || it == 0 ) ) )
     {
-        mfem::out << prefix << " iteration " << setw( 2 ) << it << " : ||r|| = " << norm;
+        mfem::out << std::setprecision( 16 ) << prefix << " iteration " << setw( 2 ) << it << " : ||r|| = " << norm;
         if ( it > 0 )
         {
             mfem::out << ",  ||r||/||r_0|| = " << norm / norm0;
@@ -137,14 +137,133 @@ int main( int argc, char* argv[] )
     cout << "Number of finite element unknowns: " << fespace->GetTrueVSize() << endl << "Assembling: " << endl;
     Array<int> ess_tdof_list, ess_bdr( mesh->bdr_attributes.Max() );
     ess_bdr = 0;
-    ess_bdr[10] = 1;
+    ess_bdr[13] = 1;
 
     fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
 
     printf( "Mesh is %i dimensional.\n", dim );
     printf( "Number of mesh attributes: %i\n", mesh->attributes.Size() );
     printf( "Number of boundary attributes: %i\n", mesh->bdr_attributes.Size() );
+    printf( "Number of elements: %i\n", fespace->GetNE() );
     printf( "Max of boundary attributes: %i\n", mesh->bdr_attributes.Max() );
+    const mfem::FiniteElement* fe;
+    mfem::ElementTransformation* tr;
+    mfem::IntegrationPoint ip;
+    Array<int> vdofs;
+    mfem::Vector pt, shape;
+    shape.SetSize( 8 );
+
+    fespace->GetElementVDofs( 0, vdofs );
+    vdofs.Print();
+    {
+        fe = fespace->GetFE( 0 );
+        tr = mesh->GetElementTransformation( 0 );
+        ip.Set3( 0, 0, 0 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 1, 0, 0 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 1, 1, 0 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 0, 1, 0 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 0, 0, 1 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 1, 0, 1 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 1, 1, 1 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 0, 1, 1 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+    }
+    std::cout << std::endl;
+    fespace->GetElementVDofs( 1, vdofs );
+    vdofs.Print();
+    {
+        fe = fespace->GetFE( 1 );
+        tr = mesh->GetElementTransformation( 1 );
+        ip.Set3( 0, 0, 0 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 1, 0, 0 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 1, 1, 0 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 0, 1, 0 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 0, 0, 1 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 1, 0, 1 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 1, 1, 1 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+        ip.Set3( 0, 1, 1 );
+        fe->CalcShape( ip, shape );
+        shape.Print( std::cout, 20 );
+        tr->Transform( ip, pt );
+        pt.Print();
+    }
+
+    mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
+    auto intrule = GLIntRules.Get( mfem::Geometry::SQUARE, 2 * 1 - 3 );
+    for ( int i = 0; i < intrule.GetNPoints(); i++ )
+    {
+        auto pt = intrule.IntPoint( i );
+        std::cout << pt.x << " " << pt.y << " " << pt.z << std::endl;
+    }
+    // vdofs.Print();
+    // std::cout<<std::endl;
+    // fespace->GetElementVDofs(1, vdofs);
+    // vdofs.Print();
+    // std::cout<<std::endl;
+    // mfem::DenseMatrix mat;
+    // mat = static_cast<mfem::IsoparametricTransformation*>(fespace->GetElementTransformation(0))->GetPointMat();
+    // mat.Print(std::cout, 20);
+    // mat = static_cast<mfem::IsoparametricTransformation*>(fespace->GetElementTransformation(1))->GetPointMat();
+    // mat.Print(std::cout, 20);
 
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
@@ -182,14 +301,14 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-11 );
+    newton_solver->SetRelTol( 1e-7 );
     newton_solver->SetAbsTol( 1e-13 );
     newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( 1E-3 );
-    newton_solver->SetMaxDelta( 1. );
+    newton_solver->SetDelta( 1e-3 );
+    newton_solver->SetMaxDelta( 1e-1 );
     newton_solver->SetMinDelta( 1e-14 );
-    newton_solver->SetMaxStep( 100 );
+    newton_solver->SetMaxStep( 1000 );
     newton_solver->SetPhi( 1. );
     Vector zero;
 
@@ -202,11 +321,12 @@ int main( int argc, char* argv[] )
     }
     Vector force( mesh->bdr_attributes.Max() );
     force = .0;
-    force( 12 ) = -10000000;
-    force( 11 ) = 10000000;
+    force( 12 ) = -100000000;
+    force( 11 ) = 100000000;
     f1.Set( 1, new PWConstCoefficient( force ) );
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f1 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e16 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( mm, 324e5, 755.4E5, 4E-7, 4E-3 ) );
 
     VectorArrayCoefficient d( dim );
     for ( int i = 0; i < dim; i++ )
@@ -216,14 +336,16 @@ int main( int argc, char* argv[] )
 
     Vector activeBC( mesh->bdr_attributes.Max() );
     activeBC = 0.0;
-    activeBC( 10 ) = 1e25;
+    activeBC( 13 ) = 1e25;
 
     VectorArrayCoefficient hevi( dim );
     for ( int i = 0; i < dim; i++ )
     {
         hevi.Set( i, new PWConstCoefficient( activeBC ) );
     }
-    nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
+    auto penalty = new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi );
+    penalty->SetIntRule( &GLIntRules.Get( mfem::Geometry::SQUARE, -1 ) );
+    nlf->AddBdrFaceIntegrator( penalty );
 
     // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
     // 15. Save data in the ParaView format

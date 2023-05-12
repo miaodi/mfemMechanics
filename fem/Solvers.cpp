@@ -168,8 +168,6 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         ProcessNewState( x );
 
         oper->Mult( x, r );
-        std::cout << "print X:\n";
-        x.Print();
         if ( have_b )
         {
             r -= b;
@@ -307,6 +305,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         Delta_lambda = 0.;
         int it = 0;
 
+        // mfem::out << std::setprecision( 16 ) << "time: " << lambda << std::endl;
         for ( ; true; it++ )
         {
             if ( it >= max_iter )
@@ -322,11 +321,8 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
             // compute q
             SetLambdaToIntegrators( oper, .0001 + lambda + Delta_lambda );
-
             oper->Mult( u_cur, q );
-
             SetLambdaToIntegrators( oper, lambda + Delta_lambda );
-
             oper->Mult( u_cur, r );
             q -= r;
             q.Neg();
@@ -337,22 +333,17 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
             r.Neg();
             grad = &oper->GetGradient( u_cur );
+            // std::ofstream myfile;
+            // myfile.open( "mat.txt" );
+            // grad->PrintMatlab( myfile );
+            // myfile.close();
             prec->SetOperator( *grad );
-            // std::cout<<"q: \n";
-            // q.Print();
-            // std::cout<<"r: \n";
-            // r.Print();
 
             prec->Mult( q, delta_u_t );
             // mfem::OperatorHandle gradHandle( grad, false );
             // PetscBool isSymmetric;
             // MatIsSymmetric( ( mfem::petsc::Mat )( *gradHandle.As<mfem::PetscParMatrix>() ), 0., &isSymmetric );
             prec->Mult( r, delta_u_bar );
-
-            // std::cout<<"delta_u_t: \n";
-            // delta_u_t.Print();
-            // std::cout<<"delta_u_bar: \n";
-            // delta_u_bar.Print();
 
             const double delta_u_bar_dot_delta_u_t = Dot( delta_u_bar, delta_u_t );
             const double delta_u_bar_dot_delta_u_bar = Dot( delta_u_bar, delta_u_bar );
@@ -539,10 +530,6 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     }
 }
 
-MultiNewtonAdaptive::MultiNewtonAdaptive()
-{
-}
-
 void MultiNewtonAdaptive::SetOperator( const mfem::Operator& op )
 {
     mfem::NewtonSolver::SetOperator( op );
@@ -592,7 +579,7 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         delta_lambda = std::min( delta_lambda, 1. - cur_lambda );
         SetLambdaToIntegrators( oper, delta_lambda + cur_lambda );
 
-        mfem::NewtonSolver::Mult( b, *u );
+        plugin::NewtonLineSearch::Mult( b, *u );
         if ( GetConverged() )
         {
             cur_lambda += delta_lambda;
@@ -600,7 +587,7 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
             if ( data )
             {
-                if ( step % 1 == 0 )
+                if ( step % 5 == 0 )
                 {
                     if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
                     {

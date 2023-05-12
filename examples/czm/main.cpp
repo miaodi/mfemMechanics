@@ -154,7 +154,7 @@ int main( int argc, char* argv[] )
 
     Vector topDisp( mesh->bdr_attributes.Max() );
     topDisp = .0;
-    topDisp( 1 ) = 2;
+    topDisp( 1 ) = 5e-2;
     d.Set( 1, new PWConstCoefficient( topDisp ) );
 
     Vector activeBC( mesh->bdr_attributes.Max() );
@@ -209,17 +209,18 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-11 );
-    newton_solver->SetAbsTol( 1e-11 );
+    newton_solver->SetRelTol( 1e-9 );
+    newton_solver->SetAbsTol( 1e-20 );
     newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( .0001 );
-    newton_solver->SetMaxDelta( .01 );
-    newton_solver->SetMinDelta( 1e-12 );
-    newton_solver->SetMaxStep( 1 );
+    newton_solver->SetDelta( .001 );
+    newton_solver->SetMaxDelta( 1. );
+    newton_solver->SetMinDelta( 1e-14 );
+    newton_solver->SetMaxStep( 1000 );
+    newton_solver->SetPhi( 0. );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7, 35, 35 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;
@@ -242,7 +243,7 @@ int main( int argc, char* argv[] )
 
     // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "czm", mesh );
+    ParaViewDataCollection paraview_dc( "czm_square", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );

@@ -283,6 +283,13 @@ public:
     CZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT )
         : mfem::NonlinearFormIntegrator(), mMemo{ memo }, mSigmaMax{ sigmaMax }, mTauMax{ tauMax }, mDeltaN{ deltaN }, mDeltaT{ deltaT }
     {
+        mPhiN = std::exp( 1. ) * mSigmaMax * mDeltaN;
+        mPhiT = std::sqrt( std::exp( 1. ) / 2 ) * mTauMax * mDeltaT;
+    }
+
+    CZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT, const double phiN, const double phiT )
+        : mfem::NonlinearFormIntegrator(), mMemo{ memo }, mSigmaMax{ sigmaMax }, mTauMax{ tauMax }, mDeltaN{ deltaN }, mDeltaT{ deltaT }, mPhiN{ phiN }, mPhiT{ phiT }
+    {
     }
 
     virtual void AssembleFaceVector( const mfem::FiniteElement& el1,
@@ -320,9 +327,9 @@ public:
 
     void DeltaToTNMat( const mfem::DenseMatrix&, const int dim, Eigen::MatrixXd& DeltaToTN ) const;
 
-    void Traction( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::VectorXd& T ) const;
+    virtual void Traction( const Eigen::VectorXd& Delta, Eigen::VectorXd& T ) const;
 
-    void TractionStiffTangent( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::MatrixXd& H ) const;
+    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, Eigen::MatrixXd& H ) const;
 
     static autodiff::dual2nd f( const autodiff::ArrayXdual2nd& x, const autodiff::ArrayXdual2nd& p )
     {
@@ -341,6 +348,8 @@ protected:
     double mTauMax{ 0. };
     double mDeltaN{ 0. };
     double mDeltaT{ 0. };
+    double mPhiN{ 0. };
+    double mPhiT{ 0. };
     mfem::Vector shape1, shape2;
 
     Eigen::MatrixXd mB;
@@ -437,59 +446,26 @@ protected:
     double p;
 };
 
-class LinearCZMIntegrator : public mfem::NonlinearFormIntegrator
+class LinearCZMIntegrator : public CZMIntegrator
 {
 public:
-    LinearCZMIntegrator() : mfem::NonlinearFormIntegrator()
+    LinearCZMIntegrator( Memorize& memo ) : CZMIntegrator( memo )
     {
     }
 
-    LinearCZMIntegrator( const double Gc, const double epsilon0, const double sigmat, const double E )
-        : mfem::NonlinearFormIntegrator(), mGc( Gc ), mEpsilon0( epsilon0 ), mSigmat( sigmat ), mE( E )
+    LinearCZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT, const double phiN, const double phiT )
+        : CZMIntegrator( memo, sigmaMax, tauMax, deltaN, deltaT, phiN, phiT )
     {
+        mDeltaNMax = 2 * phiN / sigmaMax;
+        mDeltaTMax = 2 * phiT / tauMax;
     }
 
-    virtual void AssembleFaceVector( const mfem::FiniteElement& el1,
-                                     const mfem::FiniteElement& el2,
-                                     mfem::FaceElementTransformations& Tr,
-                                     const mfem::Vector& elfun,
-                                     mfem::Vector& elvect ) override;
+    virtual void Traction( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::VectorXd& T ) const;
 
-    virtual void AssembleFaceGrad( const mfem::FiniteElement& el1,
-                                   const mfem::FiniteElement& el2,
-                                   mfem::FaceElementTransformations& Tr,
-                                   const mfem::Vector& elfun,
-                                   mfem::DenseMatrix& elmat ) override;
-
-    void matrixB( const int dof1, const int dof2, const int dim )
-    {
-        mB.resize( dim, dim * ( dof1 + dof2 ) );
-        mB.setZero();
-
-        for ( int i = 0; i < dof1; i++ )
-        {
-            for ( int j = 0; j < dim; j++ )
-            {
-                mB( j, i + j * dof1 ) = shape1( i );
-            }
-        }
-        for ( int i = 0; i < dof2; i++ )
-        {
-            for ( int j = 0; j < dim; j++ )
-            {
-                mB( j, i + j * dof2 + dim * dof1 ) = -shape2( i );
-            }
-        }
-    }
+    virtual void TractionStiffTangent( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::MatrixXd& H ) const;
 
 protected:
-    double mGc;
-    double mEpsilon0;
-    double mSigmat;
-    double mE;
-    mfem::Vector shape1, shape2;
-
-    Eigen::MatrixXd mB;
-    Eigen::VectorXd u;
+    double mDeltaNMax{ 0. };
+    double mDeltaTMax{ 0. };
 };
 } // namespace plugin

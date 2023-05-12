@@ -217,14 +217,14 @@ int main( int argc, char* argv[] )
     newton_solver->SetAbsTol( 1e-14 );
     newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( .0001 );
+    newton_solver->SetDelta( .00001 );
     newton_solver->SetPhi( 10 );
-    newton_solver->SetMaxDelta( .01 );
+    newton_solver->SetMaxDelta( .2 );
     newton_solver->SetMinDelta( 1e-12 );
     newton_solver->SetMaxStep( 200000 );
 
-    nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7 ) );
+    // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7, 35, 35 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;
@@ -247,7 +247,7 @@ int main( int argc, char* argv[] )
 
     // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "czm", mesh );
+    ParaViewDataCollection paraview_dc( "czm2D", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );

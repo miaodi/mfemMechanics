@@ -246,8 +246,6 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
             }
         }
     }
-    // std::cout<<"stiffness:\n";
-    // std::cout<<eigenMat<<std::endl;
 }
 
 void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteElement& el,
@@ -766,11 +764,7 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
     int dof1 = el1.GetDof();
     int dof2 = el2.GetDof();
     int dof = dof1 + dof2;
-    MFEM_ASSERT( vdim == 2, "CZMIntegrator only support 2D elements" );
     MFEM_ASSERT( Tr.Elem2No >= 0, "CZMIntegrator is an internal bdr integrator" );
-    double PhiN( std::exp( 1. ) * mSigmaMax * mDeltaN );
-    double r( 0. );
-    double q( 1. );
 
     elvect.SetSize( dof * vdim );
     elvect = 0.0;
@@ -789,14 +783,13 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
-        // const mfem::IntegrationPoint& ip = ir->IntPoint( i );
-
         // Set the integration point in the face and the neighboring element
-        // Tr.SetAllIntPoints( &ip );
-        // mfem::Vector phy;
-        // Tr.Transform( ip, phy );
-        // if ( std::abs( phy( 1 ) ) > 1e-10 )
-        //     continue;
+        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+        Tr.SetAllIntPoints( &ip );
+        mfem::Vector phy;
+        Tr.Transform( ip, phy );
+        if ( std::abs( phy( 1 ) ) > 1e-10 )
+            continue;
 
         const mfem::Vector& shape1 = mMemo.GetFace1Shape( i );
         const mfem::Vector& shape2 = mMemo.GetFace2Shape( i );
@@ -806,7 +799,7 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
         DeltaToTNMat( mMemo.GetFaceJacobian( i ), vdim, DeltaToTN );
         Delta = ( DeltaToTN.transpose() * Delta ).eval();
         Eigen::VectorXd T;
-        Traction( PhiN, q, r, Delta, T );
+        Traction( Delta, T );
         eigenVec += mB.transpose() * DeltaToTN * T * mMemo.GetFaceWeight( i );
     }
 }
@@ -821,11 +814,7 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
     int dof1 = el1.GetDof();
     int dof2 = el2.GetDof();
     int dof = dof1 + dof2;
-    MFEM_ASSERT( vdim == 2, "CZMIntegrator only support 2D elements" );
     MFEM_ASSERT( Tr.Elem2No >= 0, "CZMIntegrator is an internal bdr integrator" );
-    double PhiN( std::exp( 1. ) * mSigmaMax * mDeltaN );
-    double r( 0. );
-    double q( 1. );
 
     elmat.SetSize( dof * vdim );
     elmat = 0.0;
@@ -841,9 +830,8 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
     mMemo.InitializeFace( el1, el2, Tr, *ir );
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
-        // const mfem::IntegrationPoint& ip = ir->IntPoint( i );
-
         // Set the integration point in the face and the neighboring element
+        // const mfem::IntegrationPoint& ip = ir->IntPoint( i );
         // Tr.SetAllIntPoints( &ip );
         // mfem::Vector phy;
         // Tr.Transform( ip, phy );
@@ -859,11 +847,10 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
         Delta = ( DeltaToTN.transpose() * Delta ).eval();
 
         Eigen::MatrixXd H;
-        TractionStiffTangent( PhiN, q, r, Delta, H );
+        TractionStiffTangent( Delta, H );
         eigenMat += mB.transpose() * DeltaToTN * H.selfadjointView<Eigen::Upper>() * DeltaToTN.transpose() * mB *
                     mMemo.GetFaceWeight( i );
     }
-    std::cout << eigenMat.cols() << " " << eigenMat.rows() << std::endl;
 }
 
 void CZMIntegrator::DeltaToTNMat( const mfem::DenseMatrix& Jacobian, const int dim, Eigen::MatrixXd& DeltaToTN ) const
@@ -889,23 +876,26 @@ void CZMIntegrator::DeltaToTNMat( const mfem::DenseMatrix& Jacobian, const int d
     }
 }
 
-void CZMIntegrator::Traction( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::VectorXd& T ) const
+void CZMIntegrator::Traction( const Eigen::VectorXd& Delta, Eigen::VectorXd& T ) const
 {
+    // double q = mPhiT / mPhiN;
+    double q = 1.;
+    double r = 0.;
     if ( Delta.size() == 2 )
     {
         T.resize( 2 );
         // Tt
-        T( 0 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * PhiN *
+        T( 0 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * mPhiN *
                  ( q + Delta( 1 ) * ( r - q ) / mDeltaN / ( r - 1 ) ) / mDeltaT / mDeltaT;
         // Tn
-        T( 1 ) = PhiN / mDeltaN * exp( -Delta( 1 ) / mDeltaN ) *
+        T( 1 ) = mPhiN / mDeltaN * exp( -Delta( 1 ) / mDeltaN ) *
                  ( Delta( 1 ) / mDeltaN * exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) +
                    ( 1 - q ) / ( r - 1 ) * ( 1 - exp( -Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) ) * ( r - Delta( 1 ) / mDeltaN ) );
 
         // autodiff::ArrayXdual2nd deltaDiff( 2 );
         // deltaDiff << Delta( 0 ), Delta( 1 );
         // autodiff::ArrayXdual2nd params( 5 );
-        // params << mDeltaT, mDeltaN, PhiN, r, q;
+        // params << mDeltaT, mDeltaN, mPhiN, r, q;
         // autodiff::dual2nd u;
         // T = autodiff::gradient( CZMIntegrator::f, autodiff::wrt( deltaDiff ), autodiff::at( deltaDiff, params ), u );
     }
@@ -915,44 +905,50 @@ void CZMIntegrator::Traction( const double PhiN, const double q, const double r,
         // Tt1
         T( 0 ) = ( 2 * Delta( 0 ) *
                    exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
-                   PhiN * ( q + ( Delta( 2 ) * ( r - q ) ) / ( mDeltaN * ( r - 1 ) ) ) ) /
+                   mPhiN * ( q + ( Delta( 2 ) * ( r - q ) ) / ( mDeltaN * ( r - 1 ) ) ) ) /
                  pow( mDeltaT, 2 );
         // Tt2
         T( 1 ) = ( 2 * Delta( 1 ) *
                    exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
-                   PhiN * ( q + ( Delta( 2 ) * ( r - q ) ) / ( mDeltaN * ( r - 1 ) ) ) ) /
+                   mPhiN * ( q + ( Delta( 2 ) * ( r - q ) ) / ( mDeltaN * ( r - 1 ) ) ) ) /
                  pow( mDeltaT, 2 );
         // Tn
         T( 2 ) =
-            ( exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) * PhiN *
+            ( exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) * mPhiN *
               ( -( mDeltaN * ( -1 + exp( ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) ) * ( -1 + q ) * r ) +
                 Delta( 2 ) * ( exp( ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) * ( -1 + q ) - q + r ) ) ) /
             ( pow( mDeltaN, 2 ) * ( -1 + r ) );
     }
 }
 
-void CZMIntegrator::TractionStiffTangent( const double PhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::MatrixXd& H ) const
+void CZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta, Eigen::MatrixXd& H ) const
 {
+    // double q = mPhiT / mPhiN;
+    double q = 1.;
+    double r = 0.;
     if ( Delta.size() == 2 )
     {
         H.resize( 2, 2 );
         // Ttt
         H( 0, 0 ) = 2 * ( std::pow( mDeltaT, 2 ) - 2 * std::pow( Delta( 0 ), 2 ) ) *
-                    exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * PhiN *
+                    exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * mPhiN *
                     ( mDeltaN * q * ( r - 1 ) + Delta( 1 ) * ( r - q ) ) / mDeltaN / std::pow( mDeltaT, 4 ) / ( r - 1 );
         // Tnn
-        H( 1, 1 ) = exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * PhiN *
+        H( 1, 1 ) = exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * mPhiN *
                     ( mDeltaN * ( 2 * r - q - q * r + exp( Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * ( q - 1 ) * ( r + 1 ) ) -
                       Delta( 1 ) * ( exp( Delta( 0 ) * Delta( 0 ) / mDeltaT / mDeltaT ) * ( q - 1 ) - q + r ) ) /
                     std::pow( mDeltaN, 3 ) / ( r - 1 );
         // Tnt
-        H( 0, 1 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * PhiN *
+        H( 0, 1 ) = 2 * Delta( 0 ) * exp( -Delta( 1 ) / mDeltaN - std::pow( Delta( 0 ), 2 ) / std::pow( mDeltaT, 2 ) ) * mPhiN *
                     ( Delta( 1 ) * ( q - r ) - mDeltaN * ( q - 1 ) * r ) / std::pow( mDeltaN * mDeltaT, 2 ) / ( r - 1 );
+
+        // std::cout << std::setprecision( 16 ) << Eigen::MatrixXd( H.selfadjointView<Eigen::Upper>() ) << std::endl
+        //           << std::endl;
 
         // autodiff::ArrayXdual2nd deltaDiff( 2 );
         // deltaDiff << Delta( 0 ), Delta( 1 );
         // autodiff::ArrayXdual2nd params( 5 );
-        // params << mDeltaT, mDeltaN, PhiN, r, q;
+        // params << mDeltaT, mDeltaN, mPhiN, r, q;
         // autodiff::dual2nd u;
         // autodiff::VectorXdual g;
         // H = autodiff::hessian( CZMIntegrator::f, autodiff::wrt( deltaDiff ), autodiff::at( deltaDiff, params ), u, g );
@@ -963,16 +959,16 @@ void CZMIntegrator::TractionStiffTangent( const double PhiN, const double q, con
         // Tt1t1
         H( 0, 0 ) = ( 2 * ( pow( mDeltaT, 2 ) - 2 * pow( Delta( 0 ), 2 ) ) *
                       exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
-                      PhiN * ( mDeltaN * q * ( -1 + r ) + Delta( 2 ) * ( -q + r ) ) ) /
+                      mPhiN * ( mDeltaN * q * ( -1 + r ) + Delta( 2 ) * ( -q + r ) ) ) /
                     ( mDeltaN * pow( mDeltaT, 4 ) * ( -1 + r ) );
         // Tt2t2
         H( 1, 1 ) = ( 2 * ( pow( mDeltaT, 2 ) - 2 * pow( Delta( 1 ), 2 ) ) *
                       exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
-                      PhiN * ( mDeltaN * q * ( -1 + r ) + Delta( 2 ) * ( -q + r ) ) ) /
+                      mPhiN * ( mDeltaN * q * ( -1 + r ) + Delta( 2 ) * ( -q + r ) ) ) /
                     ( mDeltaN * pow( mDeltaT, 4 ) * ( -1 + r ) );
         // Tnn
         H( 2, 2 ) =
-            ( exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) * PhiN *
+            ( exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) * mPhiN *
               ( -( Delta( 2 ) * ( exp( ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) * ( -1 + q ) - q + r ) ) +
                 mDeltaN * ( -q + 2 * r - q * r +
                             exp( ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) * ( -1 + q ) * ( 1 + r ) ) ) ) /
@@ -980,17 +976,17 @@ void CZMIntegrator::TractionStiffTangent( const double PhiN, const double q, con
         // Tt1t2
         H( 0, 1 ) = ( -4 * Delta( 0 ) * Delta( 1 ) *
                       exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
-                      PhiN * ( q + ( Delta( 2 ) * ( -q + r ) ) / ( mDeltaN * ( -1 + r ) ) ) ) /
+                      mPhiN * ( q + ( Delta( 2 ) * ( -q + r ) ) / ( mDeltaN * ( -1 + r ) ) ) ) /
                     pow( mDeltaT, 4 );
         // Tt1n
         H( 0, 2 ) = ( 2 * Delta( 0 ) *
                       exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
-                      PhiN * ( Delta( 2 ) * ( q - r ) - mDeltaN * ( -1 + q ) * r ) ) /
+                      mPhiN * ( Delta( 2 ) * ( q - r ) - mDeltaN * ( -1 + q ) * r ) ) /
                     ( pow( mDeltaN, 2 ) * pow( mDeltaT, 2 ) * ( -1 + r ) );
         // Tt2n
         H( 1, 2 ) = ( 2 * Delta( 1 ) *
                       exp( -( Delta( 2 ) / mDeltaN ) - ( pow( Delta( 0 ), 2 ) + pow( Delta( 1 ), 2 ) ) / pow( mDeltaT, 2 ) ) *
-                      PhiN * ( Delta( 2 ) * ( q - r ) - mDeltaN * ( -1 + q ) * r ) ) /
+                      mPhiN * ( Delta( 2 ) * ( q - r ) - mDeltaN * ( -1 + q ) * r ) ) /
                     ( pow( mDeltaN, 2 ) * pow( mDeltaT, 2 ) * ( -1 + r ) );
     }
 }
@@ -1075,18 +1071,13 @@ void NonlinearDirichletPenaltyIntegrator::AssembleFaceGrad( const mfem::FiniteEl
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
         const mfem::IntegrationPoint& ip = ir->IntPoint( i );
-
         // Set the integration point in the face and the neighboring element
         Tr.SetAllIntPoints( &ip );
         H.Eval( penalEval, Tr, ip );
-
         // Access the neighboring element's integration point
         const mfem::IntegrationPoint& eip = Tr.GetElement1IntPoint();
-
         el1.CalcShape( eip, shape );
-
         matrixB( dof, vdim );
-
         eigenMat += mB.transpose() * penalEvalEigen.asDiagonal() * mB * ip.weight * Tr.Weight();
     }
 }
@@ -1190,129 +1181,81 @@ void NonlinearInternalPenaltyIntegrator::AssembleFaceGrad( const mfem::FiniteEle
     }
 }
 
-void LinearCZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
-                                              const mfem::FiniteElement& el2,
-                                              mfem::FaceElementTransformations& Tr,
-                                              const mfem::Vector& elfun,
-                                              mfem::Vector& elvect )
+void LinearCZMIntegrator::Traction( const double mPhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::VectorXd& T ) const
 {
-    int vdim = Tr.GetSpaceDim();
-    int dof1 = el1.GetDof();
-    int dof2 = el2.GetDof();
-    int dof = dof1 + dof2;
-    MFEM_ASSERT( vdim == 2, "CZMIntegrator only support 2D elements" );
-    MFEM_ASSERT( Tr.Elem2No >= 0, "CZMIntegrator is an internal bdr integrator" );
-    shape1.SetSize( dof1 );
-    shape2.SetSize( dof2 );
-    elvect.SetSize( dof * vdim );
-    elvect = 0.0;
-    Eigen::Map<Eigen::VectorXd> eigenVec( elvect.GetData(), elvect.Size() );
-    Eigen::Map<const Eigen::VectorXd> u( elfun.GetData(), elfun.Size() );
-    const mfem::IntegrationRule* ir = IntRule;
-    if ( ir == NULL )
+    if ( Delta.size() == 2 )
     {
-        int intorder = 2 * el1.GetOrder();
-        ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
-    }
-    Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
-
-    double epsilonc = 2 * mGc / mSigmat;
-
-    const Eigen::Matrix2d identity = Eigen::Matrix2d::Identity();
-
-    for ( int i = 0; i < ir->GetNPoints(); i++ )
-    {
-        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
-
-        // Set the integration point in the face and the neighboring element
-        Tr.SetAllIntPoints( &ip );
-
-        // Access the neighboring element's integration point
-        const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
-        const mfem::IntegrationPoint& eip2 = Tr.GetElement2IntPoint();
-
-        el1.CalcShape( eip1, shape1 );
-        el2.CalcShape( eip2, shape2 );
-
-        matrixB( dof1, dof2, vdim );
-        Eigen::VectorXd Delta = mB * u;
-        Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
-        Eigen::MatrixXd DeltaToTN( vdim, vdim );
-        DeltaToTN.col( 0 ) = Jac;
-        DeltaToTN.col( 0 ).normalize();
-        DeltaToTN.col( 1 ) = rot.toRotationMatrix() * DeltaToTN.col( 0 );
-        Delta = ( DeltaToTN.transpose() * Delta ).eval();
-        double kappa =
-            std::sqrt( Delta( 0 ) * Delta( 0 ) / mEpsilon0 / mEpsilon0 + Delta( 1 ) * Delta( 1 ) / mEpsilon0 / mEpsilon0 ) - 1;
-        Eigen::VectorXd T( 2 );
-        T = ( identity - kappa / ( 1 + kappa ) * epsilonc / ( epsilonc - mEpsilon0 ) * identity ) * mE * Delta;
-        eigenVec += mB.transpose() * DeltaToTN * T * ip.weight * Tr.Weight();
-        std::cout << kappa << std::endl << std::endl;
+        T.resize( 2 );
+        // Tt
+        if ( std::abs( Delta( 0 ) ) <= mDeltaT )
+        {
+            T( 0 ) = mTauMax * Delta( 0 ) / mDeltaT;
+        }
+        else if ( mDeltaT < Delta( 0 ) && Delta( 0 ) <= mDeltaTMax )
+        {
+            T( 0 ) = mTauMax * ( mDeltaTMax - Delta( 0 ) ) / ( mDeltaTMax - mDeltaT );
+        }
+        else if ( -mDeltaT > Delta( 0 ) && Delta( 0 ) >= -mDeltaTMax )
+        {
+            T( 0 ) = -mTauMax * ( mDeltaTMax + Delta( 0 ) ) / ( mDeltaTMax - mDeltaT );
+        }
+        else
+        {
+            T( 0 ) = 0;
+        }
+        // Tn
+        if ( Delta( 1 ) <= mDeltaN )
+        {
+            T( 1 ) = mSigmaMax * Delta( 1 ) / mDeltaN;
+        }
+        else if ( mDeltaN < Delta( 1 ) && Delta( 1 ) <= mDeltaNMax )
+        {
+            T( 1 ) = mSigmaMax * ( mDeltaNMax - Delta( 1 ) ) / ( mDeltaNMax - mDeltaN );
+        }
+        else
+        {
+            T( 1 ) = 0;
+        }
     }
 }
 
-void LinearCZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
-                                            const mfem::FiniteElement& el2,
-                                            mfem::FaceElementTransformations& Tr,
-                                            const mfem::Vector& elfun,
-                                            mfem::DenseMatrix& elmat )
+void LinearCZMIntegrator::TractionStiffTangent(
+    const double mPhiN, const double q, const double r, const Eigen::VectorXd& Delta, Eigen::MatrixXd& H ) const
 {
-    int vdim = Tr.GetSpaceDim();
-    int dof1 = el1.GetDof();
-    int dof2 = el2.GetDof();
-    int dof = dof1 + dof2;
-    MFEM_ASSERT( vdim == 2, "CZMIntegrator only support 2D elements" );
-    MFEM_ASSERT( Tr.Elem2No >= 0, "CZMIntegrator is an internal bdr integrator" );
-
-    shape1.SetSize( dof1 );
-    shape2.SetSize( dof2 );
-
-    elmat.SetSize( dof * vdim );
-    elmat = 0.0;
-    Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * vdim, dof * vdim );
-    Eigen::Map<const Eigen::VectorXd> u( elfun.GetData(), elfun.Size() );
-
-    const mfem::IntegrationRule* ir = IntRule;
-    if ( ir == NULL )
+    if ( Delta.size() == 2 )
     {
-        int intorder = 2 * el1.GetOrder();
-        ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
+        H.resize( 2, 2 );
+        H( 1, 0 ) = H( 0, 1 ) = 0.;
+        // Tt
+        if ( std::abs( Delta( 0 ) ) <= mDeltaT )
+        {
+            H( 0, 0 ) = mTauMax / mDeltaT;
+        }
+        else if ( mDeltaT < Delta( 0 ) && Delta( 0 ) <= mDeltaTMax )
+        {
+            H( 0, 0 ) = -mTauMax / ( mDeltaTMax - mDeltaT );
+        }
+        else if ( -mDeltaT > Delta( 0 ) && Delta( 0 ) >= -mDeltaTMax )
+        {
+            H( 0, 0 ) = -mTauMax / ( mDeltaTMax - mDeltaT );
+        }
+        else
+        {
+            H( 0, 0 ) = 0;
+        }
+        // Tn
+        if ( Delta( 1 ) <= mDeltaN )
+        {
+            H( 1, 1 ) = mSigmaMax / mDeltaN;
+        }
+        else if ( mDeltaN < Delta( 1 ) && Delta( 1 ) <= mDeltaNMax )
+        {
+            H( 1, 1 ) = -mSigmaMax / ( mDeltaNMax - mDeltaN );
+        }
+        else
+        {
+            H( 1, 1 ) = 0;
+        }
     }
-
-    Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
-    double epsilonc = 2 * mGc / mSigmat;
-    const Eigen::Matrix2d identity = Eigen::Matrix2d::Identity();
-
-    for ( int i = 0; i < ir->GetNPoints(); i++ )
-    {
-        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
-
-        // Set the integration point in the face and the neighboring element
-        Tr.SetAllIntPoints( &ip );
-
-        // Access the neighboring element's integration point
-        const mfem::IntegrationPoint& eip1 = Tr.GetElement1IntPoint();
-        const mfem::IntegrationPoint& eip2 = Tr.GetElement2IntPoint();
-        el1.CalcShape( eip1, shape1 );
-        el2.CalcShape( eip2, shape2 );
-        matrixB( dof1, dof2, vdim );
-        Eigen::VectorXd Delta = mB * u;
-        Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
-        Eigen::MatrixXd DeltaToTN( vdim, vdim );
-        DeltaToTN.col( 0 ) = Jac;
-        DeltaToTN.col( 0 ).normalize();
-        DeltaToTN.col( 1 ) = rot.toRotationMatrix() * DeltaToTN.col( 0 );
-        Delta = ( DeltaToTN.transpose() * Delta ).eval();
-        double kappa =
-            std::sqrt( Delta( 0 ) * Delta( 0 ) / mEpsilon0 / mEpsilon0 + Delta( 1 ) * Delta( 1 ) / mEpsilon0 / mEpsilon0 ) - 1;
-        double F = epsilonc / ( epsilonc - mEpsilon0 );
-
-        Eigen::MatrixXd T( 2, 2 );
-        T = ( identity - kappa / ( 1 + kappa ) * F * identity ) * mE -
-            1 / std::pow( 1 + kappa, 3 ) * F * mE / mEpsilon0 / mEpsilon0 * Delta * Delta.transpose();
-
-        eigenMat += mB.transpose() * DeltaToTN * T * DeltaToTN.transpose() * mB * ip.weight * Tr.Weight();
-    }
-    // std::cout<<eigenMat<<std::endl;
 }
 } // namespace plugin
