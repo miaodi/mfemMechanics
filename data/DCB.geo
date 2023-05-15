@@ -48,6 +48,7 @@ Physical Surface(1) = {1, 2, 3, 4};
 Physical Curve("right", 11) = {2, 13};
 Physical Curve("left top", 12) = {4};
 Physical Curve("left bot", 13) = {7};
+Physical Curve("bot", 14) = {1, 12};
 
 Mesh.MshFileVersion = 2.2;
 Mesh 2;

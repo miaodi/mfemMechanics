@@ -8,6 +8,7 @@
 #include <autodiff/forward/real.hpp>
 #include <autodiff/forward/real/eigen.hpp>
 #include <cmath>
+#include <iomanip>
 #include <unsupported/Eigen/KroneckerProduct>
 using namespace autodiff;
 
@@ -56,5 +57,8 @@ int main()
     autodiff::dual2nd u;
     auto T = autodiff::gradient( f, autodiff::wrt( x ), autodiff::at( x, p ), u );
     std::cout << T.transpose() << std::endl;
+    autodiff::VectorXdual g;
+    auto H = autodiff::hessian( f, autodiff::wrt( x ), autodiff::at( x, p ), u, g );
+    std::cout << std::setprecision( 16 ) << H << std::endl;
     return 0;
 }

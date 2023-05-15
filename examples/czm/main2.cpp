@@ -205,7 +205,7 @@ int main( int argc, char* argv[] )
     // Set up the Jacobian solver
     auto j_gmres = new UMFPackSolver();
 
-    auto newton_solver = new plugin::MultiNewtonAdaptive();
+    auto newton_solver = new plugin::Crisfield();
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -218,13 +218,13 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .01 );
-    // newton_solver->SetPhi( 1 );
-    // newton_solver->SetMaxDelta( 10 );
-    // newton_solver->SetMinDelta( 1e-12 );
+    newton_solver->SetPhi( 1 );
+    newton_solver->SetMaxDelta( 10 );
+    newton_solver->SetMinDelta( 1e-12 );
     newton_solver->SetMaxStep( 200000 );
 
     nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( mm, 324E5, 755.4E5, 1E-5, 1E-5, 35, 35 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( mm, 324E5, 755.4E5, 5E-6, 5E-6, 35, 35 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;
