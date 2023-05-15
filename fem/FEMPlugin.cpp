@@ -831,12 +831,12 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
         // Set the integration point in the face and the neighboring element
-        // const mfem::IntegrationPoint& ip = ir->IntPoint( i );
-        // Tr.SetAllIntPoints( &ip );
-        // mfem::Vector phy;
-        // Tr.Transform( ip, phy );
-        // if ( std::abs( phy( 1 ) ) > 1e-10 )
-        //     continue;
+        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+        Tr.SetAllIntPoints( &ip );
+        mfem::Vector phy;
+        Tr.Transform( ip, phy );
+        if ( std::abs( phy( 1 ) ) > 1e-10 )
+            continue;
 
         const mfem::Vector& shape1 = mMemo.GetFace1Shape( i );
         const mfem::Vector& shape2 = mMemo.GetFace2Shape( i );

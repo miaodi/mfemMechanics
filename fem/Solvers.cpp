@@ -111,7 +111,6 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     // x_{i+1} = x_i - [DF(x_i)]^{-1} [F(x_i)-b]
     for ( it = 0; true; it++ )
     {
-        MFEM_ASSERT( IsFinite( norm ), "norm = " << norm );
         if ( print_options.iterations )
         {
             mfem::out << "Newton iteration " << std::setw( 2 ) << it << " : ||r|| = " << norm;
@@ -123,6 +122,11 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         }
         Monitor( it, norm, r, x );
 
+        if ( !mfem::IsFinite( norm ) )
+        {
+            converged = false;
+            break;
+        }
         if ( norm <= norm_goal )
         {
             converged = true;
@@ -494,7 +498,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             Delta_lambda_prev = Delta_lambda;
             Delta_u_prev = Delta_u;
             step++;
-
+            std::cout << lambda << std::endl;
             final_iter = it;
             final_norm = norm;
             if ( print_options.summary || ( !converged && print_options.warnings ) || print_options.first_and_last )
@@ -576,6 +580,9 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             else
                 delta_lambda *= std::pow( .7 * this->max_iter / GetNumIterations(), .6 );
         }
+        // MFEM_VERIFY( delta_lambda > min_delta, "Required step size is smaller than the minimal bound." );
+
+        util::mfemOut( "L: ", delta_lambda, "\n", util::Color::RESET );
         delta_lambda = std::min( delta_lambda, 1. - cur_lambda );
         SetLambdaToIntegrators( oper, delta_lambda + cur_lambda );
 

@@ -7,6 +7,10 @@ add_executable(${PROJECT_NAME}2 main2.cpp)
 target_include_directories(${PROJECT_NAME}2 PUBLIC ${INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME}2 PRIVATE ${LIBS})
 
+add_executable(${PROJECT_NAME}2p main2p.cpp)
+target_include_directories(${PROJECT_NAME}2p PUBLIC ${INCLUDE_DIRS})
+target_link_libraries(${PROJECT_NAME}2p PRIVATE ${LIBS})
+
 add_executable(${PROJECT_NAME}3D main3D.cpp)
 target_include_directories(${PROJECT_NAME}3D PUBLIC ${INCLUDE_DIRS})
 target_link_libraries(${PROJECT_NAME}3D PRIVATE ${LIBS})
