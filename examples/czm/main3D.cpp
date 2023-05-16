@@ -225,7 +225,7 @@ int main( int argc, char* argv[] )
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
     nlf->AddInteriorFaceIntegrator(
-        new plugin::CZMIntegrator( mm, 324E5, 755.4E5, 0.0001807127079438664, 0.0004213576978754349, 2.8e5, 2.8e5 ) );
+        new plugin::ExponentialCZMIntegrator( mm, 324E5, 755.4E5, 0.0001807127079438664, 0.0004213576978754349 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;

@@ -228,7 +228,7 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxStep( 200000 );
 
     nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7, 35, 35 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialCZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;

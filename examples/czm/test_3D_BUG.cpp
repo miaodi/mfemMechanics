@@ -246,7 +246,7 @@ int main( int argc, char* argv[] )
     hevi.Set( 1, new PWConstCoefficient( activeBCY ) );
     hevi.Set( 2, new PWConstCoefficient( activeBCX ) );
     nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e16 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( mm, 5.7E8, 5.7E8, 1E-3, 5E-3 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialCZMIntegrator( mm, 5.7E8, 5.7E8, 1E-3, 5E-3 ) );
 
     auto penalty = new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi );
     penalty->SetIntRule( &GLIntRules.Get( mfem::Geometry::SQUARE, -1 ) );

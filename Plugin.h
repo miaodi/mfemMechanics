@@ -1,6 +1,7 @@
 # pragma once
 
 #include "FEMPlugin.h"
+#include "CZM.h"
 #include "Solvers.h"
 #include "PostProc.h"
 

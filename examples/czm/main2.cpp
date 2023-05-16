@@ -224,7 +224,7 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxStep( 200000 );
 
     nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( mm, 324E5, 755.4E5, 5E-6, 5E-6, 35, 35 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialADCZMIntegrator( mm, 324E6, 755.4E6, 1E-4, 1E-4 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;
@@ -240,7 +240,7 @@ int main( int argc, char* argv[] )
     {
         Vector pull_force( mesh->bdr_attributes.Max() );
         pull_force = 0.0;
-        pull_force( 11 ) = 2e5;
+        pull_force( 11 ) = 5e6;
         f.Set( dim - 1, new PWConstCoefficient( pull_force ) );
     }
 

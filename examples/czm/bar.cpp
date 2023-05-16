@@ -206,7 +206,7 @@ int main( int argc, char* argv[] )
     force( 1 ) = 50000000;
     f1.Set( 1, new PWConstCoefficient( force ) );
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f1 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::CZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialCZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7 ) );
 
     VectorArrayCoefficient d( dim );
     for ( int i = 0; i < dim; i++ )

@@ -102,7 +102,7 @@ int main( int argc, char* argv[] )
             {
                 const int vi = eles[i]->GetVertices()[j];
                 node = mesh->GetVertex( vi );
-                if ( std::abs( node[1] ) < 1e-10 && node[0] + 1e-10 > 0 )
+                if ( node[1] > -0.005 && node[1] < 0.025 && node[0] + 1e-10 > 0 && node[0] < .05 )
                 {
                     refinements.Append( i );
                     break;
@@ -152,15 +152,9 @@ int main( int argc, char* argv[] )
         d.Set( i, new ConstantCoefficient( 0.0 ) );
     }
 
-    Vector topDisp( mesh->bdr_attributes.Max() );
-    topDisp = .0;
-    topDisp( 1 ) = 5e-2;
-    d.Set( 1, new PWConstCoefficient( topDisp ) );
-
     Vector activeBC( mesh->bdr_attributes.Max() );
     activeBC = 0.0;
-    activeBC( 0 ) = 1e15;
-    activeBC( 1 ) = 1e15;
+    activeBC( 3 ) = 1e15;
 
     VectorArrayCoefficient hevi( dim );
     for ( int i = 0; i < dim; i++ )
@@ -180,7 +174,7 @@ int main( int argc, char* argv[] )
     PWConstCoefficient nu_func( Nu );
 
     Vector E( mesh->attributes.Max() );
-    E = 324e7;
+    E = 324e8;
     PWConstCoefficient E_func( E );
 
     IsotropicElasticMaterial iem( E_func, nu_func );
@@ -209,39 +203,39 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-9 );
+    newton_solver->SetRelTol( 1e-7 );
     newton_solver->SetAbsTol( 1e-20 );
     newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( .001 );
+    newton_solver->SetDelta( .1 );
+    newton_solver->SetPhi( 0. );
     newton_solver->SetMaxDelta( 1. );
     newton_solver->SetMinDelta( 1e-14 );
-    newton_solver->SetMaxStep( 1000 );
-    newton_solver->SetPhi( 0. );
+    newton_solver->SetMaxStep( 10000 );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7, 35, 35 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 1E-4, 1E-4 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;
 
     GridFunction u( fespace );
     u = 0.;
-    std::cout << u.Size() << std::endl;
 
-    // VectorArrayCoefficient f( dim );
-    // for ( int i = 0; i < dim - 1; i++ )
-    // {
-    //     f.Set( i, new ConstantCoefficient( 0.0 ) );
-    // }
-    // {
-    //     Vector pull_force( mesh->bdr_attributes.Max() );
-    //     pull_force = 0.0;
-    //     pull_force( 1 ) = 5.e13;
-    //     f.Set( dim - 1, new PWConstCoefficient( pull_force ) );
-    // }
+    VectorArrayCoefficient f( dim );
+    for ( int i = 0; i < dim - 1; i++ )
+    {
+        f.Set( i, new ConstantCoefficient( 0.0 ) );
+    }
+    {
+        Vector pull_force( mesh->bdr_attributes.Max() );
+        pull_force = 0.0;
+        pull_force( 4 ) = -0.e8;
+        pull_force( 5 ) = 5.e8;
+        f.Set( dim - 1, new PWConstCoefficient( pull_force ) );
+    }
 
-    // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
+    nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
     // 15. Save data in the ParaView format
     ParaViewDataCollection paraview_dc( "czm_square", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
