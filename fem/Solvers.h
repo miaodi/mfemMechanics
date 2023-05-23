@@ -124,6 +124,15 @@ public:
         data = dc;
     }
 
+    virtual bool updateStep( const mfem::Vector& delta_u_bar,
+                             const mfem::Vector& delta_u_t,
+                             const mfem::Vector& Delta_u,
+                             const double Delta_lambda,
+                             const int it,
+                             const int step,
+                             mfem::Vector& delta_u,
+                             double& delta_lambda ) const;
+
 protected:
     mutable mfem::Vector r, Delta_u, delta_u, u_cur, q, delta_u_bar, delta_u_t, Delta_u_prev;
     mutable mfem::Operator* grad;
@@ -135,6 +144,29 @@ protected:
 
     int max_steps{ 100 };
     mutable mfem::DataCollection* data{ nullptr };
+};
+
+class ArcLengthLinearize : public Crisfield
+{
+public:
+    ArcLengthLinearize() : Crisfield()
+    {
+    }
+
+#ifdef MFEM_USE_MPI
+    ArcLengthLinearize( MPI_Comm comm_ ) : Crisfield( comm_ )
+    {
+    }
+#endif
+
+    virtual bool updateStep( const mfem::Vector& delta_u_bar,
+                             const mfem::Vector& delta_u_t,
+                             const mfem::Vector& Delta_u,
+                             const double Delta_lambda,
+                             const int it,
+                             const int step,
+                             mfem::Vector& delta_u,
+                             double& delta_lambda ) const;
 };
 
 class MultiNewtonAdaptive : public NewtonLineSearch

@@ -26,3 +26,7 @@ target_link_libraries(bar_3D PRIVATE ${LIBS})
 add_executable(test_3D_BUG test_3D_BUG.cpp)
 target_include_directories(test_3D_BUG PUBLIC ${INCLUDE_DIRS})
 target_link_libraries(test_3D_BUG PRIVATE ${LIBS})
+
+add_executable(dynamic_czm dynamic_czm.cpp)
+target_include_directories(dynamic_czm PUBLIC ${INCLUDE_DIRS})
+target_link_libraries(dynamic_czm PRIVATE ${LIBS})

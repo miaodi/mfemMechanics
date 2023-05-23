@@ -205,7 +205,7 @@ int main( int argc, char* argv[] )
     // Set up the Jacobian solver
     auto j_gmres = new UMFPackSolver();
 
-    auto newton_solver = new plugin::Crisfield();
+    auto newton_solver = new plugin::ArcLengthLinearize();
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
