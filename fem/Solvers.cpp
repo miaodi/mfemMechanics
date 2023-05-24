@@ -253,13 +253,15 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     {
         u = &x;
     }
+
+    const double convergence_rate = std::pow( rel_tol, 1. / max_iter );
     // mfem::PetscSolver* petscPrec = nullptr;
     // if ( dynamic_cast<mfem::PetscSolver*>( prec ) )
     // {
     //     petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
     // }
     int step = 0;
-    double norm{ 0 }, norm_goal{ 0 };
+    double norm{ 0 }, norm_goal{ 0 }, norm0{ 0 };
     const bool have_b = ( b.Size() == Height() );
     lambda = 0.;
 
@@ -359,7 +361,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
             if ( it == 0 )
             {
-                norm = std::sqrt( InnerProduct( delta_u, delta_lambda, delta_u, delta_lambda ) );
+                norm0 = norm = std::sqrt( InnerProduct( delta_u, delta_lambda, delta_u, delta_lambda ) );
                 Monitor( it, norm, r, *u );
                 norm_goal = std::max( rel_tol * norm, abs_tol );
             }
@@ -377,6 +379,15 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             if ( norm <= norm_goal )
             {
                 converged = true;
+                break;
+            }
+
+            // filter out slow convergence case
+            if ( it >= max_iter * 1. / 2 && norm / norm0 > std::pow( convergence_rate, max_iter * 1. / 2 ) )
+            {
+                mfem::out << "Current relative error: " << norm / norm0 << " fails to achieve the target relative error: "
+                          << std::pow( convergence_rate, max_iter * 1. / 2 ) << " compute with smaller arc length. " << '\n';
+                converged = false;
                 break;
             }
 
@@ -533,7 +544,7 @@ bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem
         {
             Delta_u = delta_u_t;
             Delta_u *= 1. / delta_u_t.Norml2() * L * frac;
-            Delta_lambda = L * frac / std::sqrt( phi );
+            // Delta_lambda = L * frac / std::sqrt( phi );
             mfem::out << "predict!\n";
         }
         else

@@ -49,7 +49,7 @@ void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector&
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/tensile.mesh";
+    const char* mesh_file = "../../data/crack_square2d.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -102,7 +102,7 @@ int main( int argc, char* argv[] )
             {
                 const int vi = eles[i]->GetVertices()[j];
                 node = mesh->GetVertex( vi );
-                if ( node[1] > -0.00000001 && node[1] < 0.000005 && node[0] > -0.00000001 && node[0] < .000005 )
+                if ( node[1] > -0.00000001 && node[1] < 0.0005 && node[0] > -0.00000001 && node[0] < .0005 )
                 {
                     refinements.Append( i );
                     break;
@@ -151,10 +151,16 @@ int main( int argc, char* argv[] )
     {
         d.Set( i, new ConstantCoefficient( 0.0 ) );
     }
+    Vector topDisp( mesh->bdr_attributes.Max() );
+    topDisp = .0;
+    topDisp( 10 ) = 2e-3;
+    topDisp( 11 ) = 0;
+    d.Set( 0, new PWConstCoefficient( topDisp ) );
 
     Vector activeBC( mesh->bdr_attributes.Max() );
     activeBC = 0.0;
-    activeBC( 3 ) = 1e15;
+    activeBC( 10 ) = 1e17;
+    activeBC( 11 ) = 1e17;
 
     VectorArrayCoefficient hevi( dim );
     for ( int i = 0; i < dim; i++ )
@@ -182,7 +188,7 @@ int main( int argc, char* argv[] )
     plugin::Memorize mm( mesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
-    intg->setNonlinear( true );
+    intg->setNonlinear( false );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
@@ -195,7 +201,7 @@ int main( int argc, char* argv[] )
     // Set up the Jacobian solver
     auto j_gmres = new UMFPackSolver();
 
-    auto newton_solver = new plugin::Crisfield();
+    auto newton_solver = new plugin::ArcLengthLinearize();
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -203,18 +209,18 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-8 );
-    newton_solver->SetAbsTol( 1e-20 );
-    newton_solver->SetMaxIter( 7 );
+    newton_solver->SetRelTol( 1e-7 );
+    newton_solver->SetAbsTol( 1e-14 );
+    newton_solver->SetMaxIter( 13 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .0001 );
     newton_solver->SetPhi( 0 );
-    newton_solver->SetMaxDelta( 1. );
+    newton_solver->SetMaxDelta( 1e-2 );
     newton_solver->SetMinDelta( 1e-14 );
     newton_solver->SetMaxStep( 10000 );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 1E-5, 1E-5 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;
@@ -222,20 +228,20 @@ int main( int argc, char* argv[] )
     GridFunction u( fespace );
     u = 0.;
 
-    VectorArrayCoefficient f( dim );
-    for ( int i = 0; i < dim - 1; i++ )
-    {
-        f.Set( i, new ConstantCoefficient( 0.0 ) );
-    }
-    {
-        Vector pull_force( mesh->bdr_attributes.Max() );
-        pull_force = 0.0;
-        pull_force( 4 ) = -0.e8;
-        pull_force( 5 ) = 5.e8;
-        f.Set( dim - 1, new PWConstCoefficient( pull_force ) );
-    }
+    // VectorArrayCoefficient f( dim );
+    // for ( int i = 0; i < dim - 1; i++ )
+    // {
+    //     f.Set( i, new ConstantCoefficient( 0.0 ) );
+    // }
+    // {
+    //     Vector pull_force( mesh->bdr_attributes.Max() );
+    //     pull_force = 0.0;
+    //     pull_force( 13 ) = -0.e8;
+    //     pull_force( 14 ) = 1.e8;
+    //     f.Set( dim - 1, new PWConstCoefficient( pull_force ) );
+    // }
 
-    nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
+    // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
     // 15. Save data in the ParaView format
     ParaViewDataCollection paraview_dc( "czm_square", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
