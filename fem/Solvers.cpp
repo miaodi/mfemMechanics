@@ -259,7 +259,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     //     petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
     // }
     int step = 0;
-    double norm0{ 0 }, norm{ 0 }, norm_goal{ 0 };
+    double norm{ 0 }, norm_goal{ 0 };
     const bool have_b = ( b.Size() == Height() );
     lambda = 0.;
 
@@ -292,14 +292,14 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         }
         else if ( step )
         {
-            L *= std::pow( .7 * max_iter / final_iter, .6 );
+            L *= std::pow( .9 * max_iter / final_iter, .6 );
             L = std::min( L, max_delta );
         }
 
         MFEM_VERIFY( L > min_delta, "Required step size is smaller than the minimal bound." );
 
-        // if ( step )
-        //     phi = std::abs( Dot( Delta_u_prev, Delta_u_prev ) / Delta_lambda_prev / Delta_lambda_prev );
+        if ( step )
+            phi = std::abs( Delta_u_prev.Normlinf() / Delta_lambda_prev );
 
         util::mfemOut( "L: ", L, ", phi: ", phi, "\n", util::Color::RESET );
 
@@ -347,7 +347,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             // MatIsSymmetric( ( mfem::petsc::Mat )( *gradHandle.As<mfem::PetscParMatrix>() ), 0., &isSymmetric );
             prec->Mult( r, delta_u_bar );
 
-            if ( !updateStep( delta_u_bar, delta_u_t, Delta_u, Delta_lambda, it, step, delta_u, delta_lambda ) )
+            if ( !updateStep( delta_u_bar, delta_u_t, it, step ) )
             {
                 converged = false;
                 break;
@@ -359,37 +359,20 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
             if ( it == 0 )
             {
-                norm0 = norm = std::sqrt( InnerProduct( delta_u, delta_lambda, delta_u, delta_lambda ) );
-                if ( !mfem::IsFinite( norm0 ) )
-                {
-                    converged = false;
-                    break;
-                }
-                if ( print_options.first_and_last && !print_options.iterations )
-                {
-                    mfem::out << "Newton iteration " << std::setw( 2 ) << 0 << " : ||r|| = " << norm << "...\n";
-                }
+                norm = std::sqrt( InnerProduct( delta_u, delta_lambda, delta_u, delta_lambda ) );
+                Monitor( it, norm, r, *u );
                 norm_goal = std::max( rel_tol * norm, abs_tol );
             }
             else
             {
                 norm = std::sqrt( InnerProduct( delta_u, delta_lambda, delta_u, delta_lambda ) );
+                Monitor( it, norm, r, *u );
                 if ( !mfem::IsFinite( norm ) )
                 {
                     converged = false;
                     break;
                 }
-                if ( print_options.iterations )
-                {
-                    mfem::out << "Newton iteration " << std::setw( 2 ) << it << " : ||r|| = " << norm;
-                    if ( it > 0 )
-                    {
-                        mfem::out << ", ||r||/||r_0|| = " << norm / norm0;
-                    }
-                    mfem::out << '\n';
-                }
             }
-            Monitor( it, norm, r, *u );
 
             if ( norm <= norm_goal )
             {
@@ -418,8 +401,8 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             *u += Delta_u;
             Delta_lambda_prev = Delta_lambda;
             Delta_u_prev = Delta_u;
+            L_prev = L;
             step++;
-            std::cout << lambda << std::endl;
             final_iter = it;
             final_norm = norm;
             if ( print_options.summary || ( !converged && print_options.warnings ) || print_options.first_and_last )
@@ -434,7 +417,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
             if ( data )
             {
-                if ( step % 1 == 0 )
+                if ( step % 2 == 0 )
                 {
                     if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
                     {
@@ -455,14 +438,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     }
 }
 
-bool Crisfield::updateStep( const mfem::Vector& delta_u_bar,
-                            const mfem::Vector& delta_u_t,
-                            const mfem::Vector& Delta_u,
-                            const double Delta_lambda,
-                            const int it,
-                            const int step,
-                            mfem::Vector& delta_u,
-                            double& delta_lambda ) const
+bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const
 {
     const double delta_u_bar_dot_delta_u_t = Dot( delta_u_bar, delta_u_t );
     const double delta_u_bar_dot_delta_u_bar = Dot( delta_u_bar, delta_u_bar );
@@ -546,22 +522,33 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar,
     return true;
 }
 
-bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar,
-                                     const mfem::Vector& delta_u_t,
-                                     const mfem::Vector& Delta_u,
-                                     const double Delta_lambda,
-                                     const int it,
-                                     const int step,
-                                     mfem::Vector& delta_u,
-                                     double& delta_lambda ) const
+bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const
 {
+    const double frac = 0.1;
+    const double tol = 1e-9;
+    // predictor
+    if ( it == 0 )
+    {
+        if ( Delta_u_prev.Norml2() < tol && std::abs( Delta_lambda_prev ) < tol )
+        {
+            Delta_u = delta_u_t;
+            Delta_u *= 1. / delta_u_t.Norml2() * L * frac;
+            Delta_lambda = L * frac / std::sqrt( phi );
+            mfem::out << "predict!\n";
+        }
+        else
+        {
+            Delta_u = Delta_u_prev;
+            Delta_u *= L / L_prev * frac;
+            Delta_lambda = Delta_lambda_prev * L / L_prev * frac;
+        }
+    }
     const double Delta_u_dot_delta_u_t = Dot( Delta_u, delta_u_t );
     const double Delta_u_dot_delta_u_bar = Dot( Delta_u, delta_u_bar );
     const double Delta_u_dot_Delta_u = Dot( Delta_u, Delta_u );
 
-    delta_lambda = ( L * L - Delta_u_dot_Delta_u - phi * Delta_lambda * Delta_lambda - Delta_u_dot_delta_u_bar ) /
-                   ( Delta_u_dot_delta_u_t + phi * Delta_lambda );
-    std::cout<<"( L * L - Delta_u_dot_Delta_u - phi * Delta_lambda * Delta_lambda - Delta_u_dot_delta_u_bar ) : "<<( L * L - Delta_u_dot_Delta_u - phi * Delta_lambda * Delta_lambda - Delta_u_dot_delta_u_bar ) <<"( Delta_u_dot_delta_u_t + phi * Delta_lambda ): "<<( Delta_u_dot_delta_u_t + phi * Delta_lambda )<<std::endl;
+    delta_lambda = ( L * L - Delta_u_dot_Delta_u - phi * Delta_lambda * Delta_lambda - 2 * Delta_u_dot_delta_u_bar ) /
+                   ( 2 * Delta_u_dot_delta_u_t + 2 * phi * Delta_lambda );
 
     add( 1., delta_u_bar, delta_lambda, delta_u_t, delta_u );
     return true;

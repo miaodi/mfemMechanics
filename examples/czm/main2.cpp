@@ -205,7 +205,11 @@ int main( int argc, char* argv[] )
     // Set up the Jacobian solver
     auto j_gmres = new UMFPackSolver();
 
+<<<<<<< Updated upstream
     auto newton_solver = new plugin::ArcLengthLinearize();
+=======
+    auto newton_solver = new plugin::MultiNewtonAdaptive();
+>>>>>>> Stashed changes
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -213,18 +217,18 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-8 );
+    newton_solver->SetRelTol( 1e-4 );
     newton_solver->SetAbsTol( 1e-14 );
     newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .01 );
-    newton_solver->SetPhi( 1 );
-    newton_solver->SetMaxDelta( 10 );
-    newton_solver->SetMinDelta( 1e-12 );
+    // newton_solver->SetPhi( 1 );
+    // newton_solver->SetMaxDelta( 10 );
+    // newton_solver->SetMinDelta( 1e-12 );
     newton_solver->SetMaxStep( 200000 );
 
     nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialADCZMIntegrator( mm, 324E6, 755.4E6, 1E-4, 1E-4 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialADCZMIntegrator( mm, 324E5, 755.4E5, 4E-4, 4E-4 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;
@@ -240,7 +244,7 @@ int main( int argc, char* argv[] )
     {
         Vector pull_force( mesh->bdr_attributes.Max() );
         pull_force = 0.0;
-        pull_force( 11 ) = 5e6;
+        pull_force( 11 ) = 1e7;
         f.Set( dim - 1, new PWConstCoefficient( pull_force ) );
     }
 

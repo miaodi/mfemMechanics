@@ -125,22 +125,15 @@ public:
     }
 
     virtual bool updateStep( const mfem::Vector& delta_u_bar,
-                             const mfem::Vector& delta_u_t,
-                             const mfem::Vector& Delta_u,
-                             const double Delta_lambda,
-                             const int it,
-                             const int step,
-                             mfem::Vector& delta_u,
-                             double& delta_lambda ) const;
+                                     const mfem::Vector& delta_u_t,
+                                     const int it,
+                                     const int step  ) const;
 
 protected:
     mutable mfem::Vector r, Delta_u, delta_u, u_cur, q, delta_u_bar, delta_u_t, Delta_u_prev;
     mutable mfem::Operator* grad;
 
-    mutable double lambda, Delta_lambda, delta_lambda, Delta_lambda_prev, max_delta{ 1. }, min_delta{ 1. };
-
-    mutable double L{ 1 };
-    mutable double phi{ 1 };
+    mutable double lambda, Delta_lambda, delta_lambda, Delta_lambda_prev, max_delta{ 1. }, min_delta{ 1. }, L{ 1 }, phi{ 1 }, L_prev;
 
     int max_steps{ 100 };
     mutable mfem::DataCollection* data{ nullptr };
@@ -159,14 +152,10 @@ public:
     }
 #endif
 
-    virtual bool updateStep( const mfem::Vector& delta_u_bar,
-                             const mfem::Vector& delta_u_t,
-                             const mfem::Vector& Delta_u,
-                             const double Delta_lambda,
-                             const int it,
-                             const int step,
-                             mfem::Vector& delta_u,
-                             double& delta_lambda ) const;
+    virtual bool updateStep(const mfem::Vector& delta_u_bar,
+                                     const mfem::Vector& delta_u_t,
+                                     const int it,
+                                     const int step  ) const;
 };
 
 class MultiNewtonAdaptive : public NewtonLineSearch

@@ -23,7 +23,7 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
     {
-        int intorder = el1.GetOrder();
+        int intorder = 2 * el1.GetOrder();
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
 
@@ -72,7 +72,7 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
     {
-        int intorder = el1.GetOrder();
+        int intorder = 2 * el1.GetOrder();
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
     mMemo.InitializeFace( el1, el2, Tr, *ir );

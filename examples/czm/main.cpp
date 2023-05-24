@@ -102,7 +102,7 @@ int main( int argc, char* argv[] )
             {
                 const int vi = eles[i]->GetVertices()[j];
                 node = mesh->GetVertex( vi );
-                if ( node[1] > -0.005 && node[1] < 0.025 && node[0] + 1e-10 > 0 && node[0] < .05 )
+                if ( node[1] > -0.00000001 && node[1] < 0.000005 && node[0] > -0.00000001 && node[0] < .000005 )
                 {
                     refinements.Append( i );
                     break;
@@ -174,7 +174,7 @@ int main( int argc, char* argv[] )
     PWConstCoefficient nu_func( Nu );
 
     Vector E( mesh->attributes.Max() );
-    E = 324e8;
+    E = 324e7;
     PWConstCoefficient E_func( E );
 
     IsotropicElasticMaterial iem( E_func, nu_func );
@@ -182,7 +182,7 @@ int main( int argc, char* argv[] )
     plugin::Memorize mm( mesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
-    intg->setNonlinear( false );
+    intg->setNonlinear( true );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
@@ -203,18 +203,18 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-7 );
+    newton_solver->SetRelTol( 1e-8 );
     newton_solver->SetAbsTol( 1e-20 );
     newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( .1 );
-    newton_solver->SetPhi( 0. );
+    newton_solver->SetDelta( .0001 );
+    newton_solver->SetPhi( 0 );
     newton_solver->SetMaxDelta( 1. );
     newton_solver->SetMinDelta( 1e-14 );
     newton_solver->SetMaxStep( 10000 );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 1E-4, 1E-4 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;
