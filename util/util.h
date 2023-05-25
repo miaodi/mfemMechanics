@@ -43,4 +43,6 @@ void symmetricIdentityTensor( const Eigen::Matrix3d& C, Eigen::Matrix6d& CC );
 void tensorProduct( const Eigen::Matrix3d& A, const Eigen::Matrix3d& B, Eigen::Matrix6d& CC );
 
 Eigen::Matrix6d TransformationVoigtForm( const Eigen::Matrix3d& transformation );
+
+double ConvergenceRate( const double cur, const double prev, const double prevprev );
 } // namespace util

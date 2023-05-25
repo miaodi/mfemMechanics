@@ -254,14 +254,13 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         u = &x;
     }
 
-    const double convergence_rate = std::pow( rel_tol, 1. / max_iter );
     // mfem::PetscSolver* petscPrec = nullptr;
     // if ( dynamic_cast<mfem::PetscSolver*>( prec ) )
     // {
     //     petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
     // }
     int step = 0;
-    double norm{ 0 }, norm_goal{ 0 }, norm0{ 0 };
+    double norm{ 0 }, norm_goal{ 0 }, normPrev{ 0 }, normPrevPrev{ 0 };
     const bool have_b = ( b.Size() == Height() );
     lambda = 0.;
 
@@ -359,22 +358,20 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             Delta_u += delta_u;
             Delta_lambda += delta_lambda;
 
+            // convergence check
+            normPrevPrev = normPrev;
+            normPrev = norm;
+            norm = std::sqrt( InnerProduct( delta_u, delta_lambda, delta_u, delta_lambda ) );
             if ( it == 0 )
             {
-                norm0 = norm = std::sqrt( InnerProduct( delta_u, delta_lambda, delta_u, delta_lambda ) );
-                Monitor( it, norm, r, *u );
                 norm_goal = std::max( rel_tol * norm, abs_tol );
             }
-            else
+            if ( !mfem::IsFinite( norm ) )
             {
-                norm = std::sqrt( InnerProduct( delta_u, delta_lambda, delta_u, delta_lambda ) );
-                Monitor( it, norm, r, *u );
-                if ( !mfem::IsFinite( norm ) )
-                {
-                    converged = false;
-                    break;
-                }
+                converged = false;
+                break;
             }
+            Monitor( it, norm, r, *u );
 
             if ( norm <= norm_goal )
             {
@@ -383,10 +380,10 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
 
             // filter out slow convergence case
-            if ( it >= max_iter * 1. / 2 && norm / norm0 > std::pow( convergence_rate, max_iter * 1. / 2 ) )
+            if ( it >= std::max( 2, max_iter / 2 ) && util::ConvergenceRate( norm, normPrev, normPrevPrev ) < 1.2 )
             {
-                mfem::out << "Current relative error: " << norm / norm0 << " fails to achieve the target relative error: "
-                          << std::pow( convergence_rate, max_iter * 1. / 2 ) << " compute with smaller arc length. " << '\n';
+                mfem::out << "Convergence rate "
+                          << util::ConvergenceRate( norm, normPrev, normPrevPrev ) << " is too small!\n";
                 converged = false;
                 break;
             }

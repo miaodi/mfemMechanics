@@ -6,15 +6,15 @@ Eigen::Vector6d Voigt( const Eigen::Matrix3d& tensor, const bool isStrain )
 {
     if ( isStrain )
     {
-        return Eigen::Vector6d{{tensor( Voigt( 0, 0 ), Voigt( 0, 1 ) ), tensor( Voigt( 1, 0 ), Voigt( 1, 1 ) ),
-                                tensor( Voigt( 2, 0 ), Voigt( 2, 1 ) ), 2 * tensor( Voigt( 3, 0 ), Voigt( 3, 1 ) ),
-                                2 * tensor( Voigt( 4, 0 ), Voigt( 4, 1 ) ), 2 * tensor( Voigt( 5, 0 ), Voigt( 5, 1 ) )}};
+        return Eigen::Vector6d{ { tensor( Voigt( 0, 0 ), Voigt( 0, 1 ) ), tensor( Voigt( 1, 0 ), Voigt( 1, 1 ) ),
+                                  tensor( Voigt( 2, 0 ), Voigt( 2, 1 ) ), 2 * tensor( Voigt( 3, 0 ), Voigt( 3, 1 ) ),
+                                  2 * tensor( Voigt( 4, 0 ), Voigt( 4, 1 ) ), 2 * tensor( Voigt( 5, 0 ), Voigt( 5, 1 ) ) } };
     }
     else
     {
-        return Eigen::Vector6d{{tensor( Voigt( 0, 0 ), Voigt( 0, 1 ) ), tensor( Voigt( 1, 0 ), Voigt( 1, 1 ) ),
-                                tensor( Voigt( 2, 0 ), Voigt( 2, 1 ) ), tensor( Voigt( 3, 0 ), Voigt( 3, 1 ) ),
-                                tensor( Voigt( 4, 0 ), Voigt( 4, 1 ) ), tensor( Voigt( 5, 0 ), Voigt( 5, 1 ) )}};
+        return Eigen::Vector6d{ { tensor( Voigt( 0, 0 ), Voigt( 0, 1 ) ), tensor( Voigt( 1, 0 ), Voigt( 1, 1 ) ),
+                                  tensor( Voigt( 2, 0 ), Voigt( 2, 1 ) ), tensor( Voigt( 3, 0 ), Voigt( 3, 1 ) ),
+                                  tensor( Voigt( 4, 0 ), Voigt( 4, 1 ) ), tensor( Voigt( 5, 0 ), Voigt( 5, 1 ) ) } };
     }
 }
 
@@ -22,15 +22,15 @@ Eigen::Matrix3d InverseVoigt( const Eigen::Vector6d& vector, const bool isStrain
 {
     if ( isStrain )
     {
-        return Eigen::Matrix3d{{vector( 0 ), vector( 3 ) / 2, vector( 5 ) / 2},
-                               {vector( 3 ) / 2, vector( 1 ), vector( 4 ) / 2},
-                               {vector( 6 ) / 2, vector( 4 ) / 2, vector( 2 )}};
+        return Eigen::Matrix3d{ { vector( 0 ), vector( 3 ) / 2, vector( 5 ) / 2 },
+                                { vector( 3 ) / 2, vector( 1 ), vector( 4 ) / 2 },
+                                { vector( 6 ) / 2, vector( 4 ) / 2, vector( 2 ) } };
     }
     else
     {
-        return Eigen::Matrix3d{{vector( 0 ), vector( 3 ), vector( 5 )},
-                               {vector( 3 ), vector( 1 ), vector( 4 )},
-                               {vector( 5 ), vector( 4 ), vector( 2 )}};
+        return Eigen::Matrix3d{ { vector( 0 ), vector( 3 ), vector( 5 ) },
+                                { vector( 3 ), vector( 1 ), vector( 4 ) },
+                                { vector( 5 ), vector( 4 ), vector( 2 ) } };
     }
 }
 
@@ -101,5 +101,10 @@ Eigen::Matrix6d TransformationVoigtForm( const Eigen::Matrix3d& t )
             T( 5, 4 ) = t( 0, 1 ) * t( 2, 2 ) + t( 0, 2 ) * t( 2, 1 ),
             T( 5, 5 ) = t( 0, 0 ) * t( 2, 2 ) + t( 0, 2 ) * t( 2, 0 );
     return T;
+}
+
+double ConvergenceRate( const double cur, const double prev, const double prevprev )
+{
+    return ( std::log( cur ) - std::log( prev ) ) / ( std::log( prev ) - std::log( prevprev ) );
 }
 } // namespace util
