@@ -238,16 +238,16 @@ int main( int argc, char* argv[] )
 
     // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "czm2Dp", pmesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &u );
-    newton_solver->SetDataCollection( &paraview_dc );
-    paraview_dc.Save();
+    // ParaViewDataCollection paraview_dc( "czm2Dp", pmesh );
+    // paraview_dc.SetPrefixPath( "ParaView" );
+    // paraview_dc.SetLevelsOfDetail( order );
+    // paraview_dc.SetCycle( 0 );
+    // paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    // paraview_dc.SetHighOrderOutput( true );
+    // paraview_dc.SetTime( 0.0 ); // set the time
+    // paraview_dc.RegisterField( "Displace", &u );
+    // newton_solver->SetDataCollection( &paraview_dc );
+    // paraview_dc.Save();
 
     newton_solver->Mult( zero, u );
 

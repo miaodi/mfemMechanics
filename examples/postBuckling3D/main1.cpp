@@ -257,22 +257,23 @@ int main( int argc, char* argv[] )
     newton_solver->SetPhi( .0 );
     newton_solver->SetMaxStep( 1 );
 
+    ParGridFunction u( fespace );
+
     // 15. Save data in the ParaView format
 
-    Vector X( fespace->GetTrueVSize() );
-    X = 0.;
-    ParaViewDataCollection paraview_dc( "buckling1", pmesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetFormat( 1 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    ParGridFunction u( fespace );
-    u.Distribute( X );
-    paraview_dc.RegisterField( "Displace", &u );
-    newton_solver->SetDataCollection( &paraview_dc );
-    paraview_dc.Save();
+    // Vector X( fespace->GetTrueVSize() );
+    // X = 0.;
+    // ParaViewDataCollection paraview_dc( "buckling1", pmesh );
+    // paraview_dc.SetPrefixPath( "ParaView" );
+    // paraview_dc.SetLevelsOfDetail( order );
+    // paraview_dc.SetCycle( 0 );
+    // paraview_dc.SetFormat( 1 );
+    // paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    // paraview_dc.SetTime( 0.0 ); // set the time
+    // u.Distribute( X );
+    // paraview_dc.RegisterField( "Displace", &u );
+    // newton_solver->SetDataCollection( &paraview_dc );
+    // paraview_dc.Save();
 
     Vector zero;
     newton_solver->Mult( zero, u );

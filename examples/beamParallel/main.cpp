@@ -221,15 +221,15 @@ int main( int argc, char* argv[] )
     newton_solver->Mult( zero, u );
 
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "beamParallel", pmesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &u );
-    paraview_dc.Save();
+    // ParaViewDataCollection paraview_dc( "beamParallel", pmesh );
+    // paraview_dc.SetPrefixPath( "ParaView" );
+    // paraview_dc.SetLevelsOfDetail( order );
+    // paraview_dc.SetCycle( 0 );
+    // paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    // paraview_dc.SetHighOrderOutput( true );
+    // paraview_dc.SetTime( 0.0 ); // set the time
+    // paraview_dc.RegisterField( "Displace", &u );
+    // paraview_dc.Save();
     if ( fec )
     {
         delete fespace;

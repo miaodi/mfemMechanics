@@ -319,7 +319,6 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 break;
             }
 
-            // TODO: do not understand.
             add( *u, Delta_u, u_cur );
 
             // compute q
@@ -423,19 +422,15 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 mfem::out << "Newton: No convergence!\n";
             }
 
-            if ( data )
+            if ( data_collect_func )
             {
-                if ( step % 2 == 0 )
+                if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
                 {
-                    if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
-                    {
-                        par_grid_x->Distribute( *u );
-                    }
-                    data->SetCycle( count );
-                    data->SetTime( count++ );
-                    data->Save();
+                    par_grid_x->Distribute( *u );
                 }
+                ( *data_collect_func )( step, count, count );
             }
+            count++;
         }
         util::mfemOut( util::ProgressBar( lambda, converged ), '\n' );
     }
@@ -533,7 +528,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
 bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const
 {
     const double frac = 0.1;
-    const double tol = 1e-9;
+    const double tol = 1e-8;
     // predictor
     if ( it == 0 )
     {

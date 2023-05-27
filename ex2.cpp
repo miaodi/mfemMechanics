@@ -240,20 +240,20 @@ int main( int argc, char* argv[] )
     paraview_dc.SetHighOrderOutput( true );
     paraview_dc.SetTime( 0.0 ); // set the time
     paraview_dc.RegisterField( "Displace", &x );
-    for ( int i = 0; i < dim; i++ )
-    {
-        for ( int j = 0; j < dim; j++ )
-        {
-            stress_c.SetComponent( i, j );
-            auto stress = new GridFunction( &scalar_space );
-            stress->ProjectCoefficient( stress_c );
-            string x( 1, c[i] );
-            string y( 1, c[j] );
-            string name = "S" + x + y;
+    // for ( int i = 0; i < dim; i++ )
+    // {
+    //     for ( int j = 0; j < dim; j++ )
+    //     {
+    //         stress_c.SetComponent( i, j );
+    //         auto stress = new GridFunction( &scalar_space );
+    //         stress->ProjectCoefficient( stress_c );
+    //         string x( 1, c[i] );
+    //         string y( 1, c[j] );
+    //         string name = "S" + x + y;
 
-            paraview_dc.RegisterField( name, stress );
-        }
-    }
+    //         paraview_dc.RegisterField( name, stress );
+    //     }
+    // }
     paraview_dc.Save();
     if ( fec )
     {

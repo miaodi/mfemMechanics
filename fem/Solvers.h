@@ -2,6 +2,7 @@
 #include "Material.h"
 #include "mfem.hpp"
 #include <Eigen/Dense>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -119,15 +120,12 @@ public:
         min_delta = delta;
     }
 
-    void SetDataCollection( mfem::DataCollection* dc )
+    void SetDataCollectionFunc( std::function<void( int, int, double )>* dcf )
     {
-        data = dc;
+        data_collect_func = dcf;
     }
 
-    virtual bool updateStep( const mfem::Vector& delta_u_bar,
-                                     const mfem::Vector& delta_u_t,
-                                     const int it,
-                                     const int step  ) const;
+    virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const;
 
 protected:
     mutable mfem::Vector r, Delta_u, delta_u, u_cur, q, delta_u_bar, delta_u_t, Delta_u_prev;
@@ -136,7 +134,8 @@ protected:
     mutable double lambda, Delta_lambda, delta_lambda, Delta_lambda_prev, max_delta{ 1. }, min_delta{ 1. }, L{ 1 }, phi{ 1 }, L_prev;
 
     int max_steps{ 100 };
-    mutable mfem::DataCollection* data{ nullptr };
+
+    mutable std::function<void( int, int, double )>* data_collect_func{ nullptr };
 };
 
 class ArcLengthLinearize : public Crisfield
@@ -152,10 +151,7 @@ public:
     }
 #endif
 
-    virtual bool updateStep(const mfem::Vector& delta_u_bar,
-                                     const mfem::Vector& delta_u_t,
-                                     const int it,
-                                     const int step  ) const;
+    virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const;
 };
 
 class MultiNewtonAdaptive : public NewtonLineSearch

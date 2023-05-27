@@ -205,11 +205,7 @@ int main( int argc, char* argv[] )
     // Set up the Jacobian solver
     auto j_gmres = new UMFPackSolver();
 
-<<<<<<< Updated upstream
     auto newton_solver = new plugin::ArcLengthLinearize();
-=======
-    auto newton_solver = new plugin::MultiNewtonAdaptive();
->>>>>>> Stashed changes
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -217,14 +213,14 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-4 );
-    newton_solver->SetAbsTol( 1e-14 );
-    newton_solver->SetMaxIter( 7 );
+    newton_solver->SetRelTol( 1e-7 );
+    newton_solver->SetAbsTol( 1e-16 );
+    newton_solver->SetMaxIter( 16 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .01 );
-    // newton_solver->SetPhi( 1 );
-    // newton_solver->SetMaxDelta( 10 );
-    // newton_solver->SetMinDelta( 1e-12 );
+    newton_solver->SetPhi( 1 );
+    newton_solver->SetMaxDelta( 10 );
+    newton_solver->SetMinDelta( 1e-12 );
     newton_solver->SetMaxStep( 200000 );
 
     nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
@@ -251,16 +247,14 @@ int main( int argc, char* argv[] )
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
 
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "czm2D", mesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &u );
-    newton_solver->SetDataCollection( &paraview_dc );
-    paraview_dc.Save();
+    // ParaViewDataCollection paraview_dc( "czm2D", mesh );
+    // paraview_dc.SetPrefixPath( "ParaView" );
+    // paraview_dc.SetLevelsOfDetail( order );
+    // paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    // paraview_dc.SetHighOrderOutput( true );
+    // paraview_dc.RegisterField( "Displace", &u );
+    // newton_solver->SetDataCollection( &paraview_dc );
+    // paraview_dc.Save();
 
     newton_solver->Mult( zero, u );
 

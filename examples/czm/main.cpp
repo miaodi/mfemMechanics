@@ -102,7 +102,7 @@ int main( int argc, char* argv[] )
             {
                 const int vi = eles[i]->GetVertices()[j];
                 node = mesh->GetVertex( vi );
-                if ( node[1] > -0.00000001 && node[1] < 0.0005 && node[0] > -0.00000001 && node[0] < .0005 )
+                if ( node[1] > -0.00000001 && node[1] < 0.0008 && node[0] > -0.00000001 && node[0] < .0006 )
                 {
                     refinements.Append( i );
                     break;
@@ -161,7 +161,6 @@ int main( int argc, char* argv[] )
     activeBC = 0.0;
     activeBC( 10 ) = 1e17;
     activeBC( 11 ) = 1e17;
-
     VectorArrayCoefficient hevi( dim );
     for ( int i = 0; i < dim; i++ )
     {
@@ -188,7 +187,7 @@ int main( int argc, char* argv[] )
     plugin::Memorize mm( mesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
-    intg->setNonlinear( false );
+    intg->setNonlinear( true );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
@@ -220,14 +219,16 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxStep( 10000 );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 1E-5, 1E-5 ) );
+    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 1E-5, 1E-5 );
+    nlf->AddInteriorFaceIntegrator( czm_intg );
+    mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
+    czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SQUARE, -1 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;
 
     GridFunction u( fespace );
     u = 0.;
-
     // VectorArrayCoefficient f( dim );
     // for ( int i = 0; i < dim - 1; i++ )
     // {
@@ -240,10 +241,10 @@ int main( int argc, char* argv[] )
     //     pull_force( 14 ) = 1.e8;
     //     f.Set( dim - 1, new PWConstCoefficient( pull_force ) );
     // }
-
     // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
+
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "czm_square", mesh );
+    ParaViewDataCollection paraview_dc( "czm_square_test", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );
@@ -251,9 +252,29 @@ int main( int argc, char* argv[] )
     paraview_dc.SetHighOrderOutput( true );
     paraview_dc.SetTime( 0.0 ); // set the time
     paraview_dc.RegisterField( "Displace", &u );
-    newton_solver->SetDataCollection( &paraview_dc );
+
+    auto stress_fec = new H1_FECollection( order, dim );
+
+    auto stress_fespace = new FiniteElementSpace( mesh, stress_fec, 7 );
+    GridFunction stress_grid( stress_fespace );
+    plugin::StressCoefficient sc( dim, iem );
+    sc.SetDisplacement( u );
+    paraview_dc.RegisterField( "Stress", &stress_grid );
+    stress_grid.ProjectCoefficient( sc );
     paraview_dc.Save();
 
+    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc]( int step, int count, double time )
+    {
+        if ( step % 2 == 0 )
+        {
+            paraview_dc.SetCycle( count );
+            paraview_dc.SetTime( count );
+            stress_grid.ProjectCoefficient( sc );
+            paraview_dc.Save();
+        }
+    };
+
+    newton_solver->SetDataCollectionFunc( &func );
     newton_solver->Mult( zero, u );
 
     return 0;
