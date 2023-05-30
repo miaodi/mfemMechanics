@@ -192,23 +192,6 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     }
 }
 
-void Crisfield::SetOperator( const mfem::Operator& op )
-{
-    oper = &op;
-    height = op.Height();
-    width = op.Width();
-    MFEM_ASSERT( height == width, "square Operator is required." );
-
-    r.SetSize( width );
-    Delta_u.SetSize( width );
-    delta_u.SetSize( width );
-    u_cur.SetSize( width );
-    q.SetSize( width );
-    delta_u_bar.SetSize( width );
-    delta_u_t.SetSize( width );
-    Delta_u_prev.SetSize( width );
-}
-
 void SetLambdaToIntegrators( const mfem::Operator* oper, const double l )
 {
     if ( auto nonlinearform = dynamic_cast<mfem::NonlinearForm*>( const_cast<mfem::Operator*>( oper ) ) )
@@ -238,6 +221,30 @@ double Crisfield::InnerProduct( const mfem::Vector& a, const double la, const mf
     return Dot( a, b ) + la * lb * phi;
 }
 
+void Crisfield::ResizeVectors( const int size ) const
+{
+    r.SetSize( size );
+    delta_u.SetSize( size );
+    u_cur.SetSize( size );
+    q.SetSize( size );
+    delta_u_bar.SetSize( size );
+    delta_u_t.SetSize( size );
+    Delta_u.SetSize( size );
+}
+
+void Crisfield::InitializeVariables( mfem::GridFunction& u ) const
+{
+    ResizeVectors( u.Size() );
+    Delta_u_prev.SetSpace( u.FESpace() );
+}
+
+void Crisfield::SetOperator( const mfem::Operator& op )
+{
+    oper = &op;
+    height = op.Height();
+    width = op.Width();
+    MFEM_ASSERT( height == width, "square Operator is required." );
+}
 void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 {
     MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
@@ -270,6 +277,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     {
         *u = 0.0;
     }
+    InitializeVariables( static_cast<mfem::GridFunction&>( x ) );
     Delta_u_prev = 0.;
     Delta_lambda_prev = 0.;
 
@@ -381,8 +389,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             // filter out slow convergence case
             if ( it >= std::max( 2, max_iter / 2 ) && util::ConvergenceRate( norm, normPrev, normPrevPrev ) < 1.2 )
             {
-                mfem::out << "Convergence rate "
-                          << util::ConvergenceRate( norm, normPrev, normPrevPrev ) << " is too small!\n";
+                mfem::out << "Convergence rate " << util::ConvergenceRate( norm, normPrev, normPrevPrev ) << " is too small!\n";
                 converged = false;
                 break;
             }
@@ -404,6 +411,22 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             {
                 util::mfemOut( "alert !!! buckled!!\n" );
             }
+
+            if ( adaptive_mesh_refine_func )
+            {
+                if ( !( *adaptive_mesh_refine_func )( Delta_u ) )
+                {
+                    mfem::out << "Refine mesh. Redo nonlinear step\n";
+                    ResizeVectors( x.Size() );
+                    Delta_u_prev.Update();
+                    continue;
+                }
+                else
+                {
+                    mfem::out << "Stopping criterion satisfied. Stop refining.\n";
+                }
+            }
+
             lambda += Delta_lambda;
             *u += Delta_u;
             Delta_lambda_prev = Delta_lambda;
@@ -412,15 +435,6 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             step++;
             final_iter = it;
             final_norm = norm;
-            if ( print_options.summary || ( !converged && print_options.warnings ) || print_options.first_and_last )
-            {
-                mfem::out << "Newton: Number of iterations: " << final_iter << '\n'
-                          << "   ||r|| = " << final_norm << '\n';
-            }
-            if ( !converged && ( print_options.summary || print_options.warnings ) )
-            {
-                mfem::out << "Newton: No convergence!\n";
-            }
 
             if ( data_collect_func )
             {

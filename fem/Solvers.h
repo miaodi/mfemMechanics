@@ -61,6 +61,10 @@ class Crisfield : public mfem::IterativeSolver
 protected:
     double InnerProduct( const mfem::Vector& a, const double la, const mfem::Vector& b, const double lb ) const;
 
+    void ResizeVectors( const int size ) const;
+
+    void InitializeVariables( mfem::GridFunction& u ) const;
+
 public:
     Crisfield()
     {
@@ -120,22 +124,30 @@ public:
         min_delta = delta;
     }
 
-    void SetDataCollectionFunc( std::function<void( int, int, double )>* dcf )
+    void SetDataCollectionFunc( std::function<void( int, int, double )>& dcf )
     {
-        data_collect_func = dcf;
+        data_collect_func = &dcf;
+    }
+
+    void SetAMRFunc( std::function<bool( const mfem::Vector& )>& f )
+    {
+        adaptive_mesh_refine_func = &f;
     }
 
     virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const;
 
 protected:
-    mutable mfem::Vector r, Delta_u, delta_u, u_cur, q, delta_u_bar, delta_u_t, Delta_u_prev;
+    mutable mfem::Vector r, delta_u, u_cur, q, delta_u_bar, delta_u_t, Delta_u;
     mutable mfem::Operator* grad;
+
+    mutable mfem::GridFunction Delta_u_prev;
 
     mutable double lambda, Delta_lambda, delta_lambda, Delta_lambda_prev, max_delta{ 1. }, min_delta{ 1. }, L{ 1 }, phi{ 1 }, L_prev;
 
     int max_steps{ 100 };
 
     mutable std::function<void( int, int, double )>* data_collect_func{ nullptr };
+    mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{ nullptr };
 };
 
 class ArcLengthLinearize : public Crisfield

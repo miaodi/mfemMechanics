@@ -51,6 +51,12 @@ public:
     double GetFaceWeight( const int gauss ) const;
     const mfem::DenseMatrix& GetFaceJacobian( const int gauss ) const;
 
+    void Reset( mfem::Mesh* m )
+    {
+        mEleStorage = std::vector<std::unique_ptr<std::vector<GaussPointStorage>>>( m->GetNE() );
+        mFaceStorage = std::vector<std::unique_ptr<std::vector<CZMGaussPointStorage>>>( m->GetNumFaces() );
+    }
+
 private:
     std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mEleStorage;
     std::vector<std::unique_ptr<std::vector<CZMGaussPointStorage>>> mFaceStorage;

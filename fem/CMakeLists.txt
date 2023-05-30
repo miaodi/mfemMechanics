@@ -1,6 +1,6 @@
 project(plugin)
 
-set(pluginSrc FEMPlugin.cpp PostProc.cpp Solvers.cpp CZM.cpp)
+set(pluginSrc FEMPlugin.cpp PostProc.cpp Solvers.cpp CZM.cpp AMR.cpp)
 
 
 set(PLUGIN_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} PARENT_SCOPE)

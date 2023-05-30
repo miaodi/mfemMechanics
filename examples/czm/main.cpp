@@ -187,7 +187,7 @@ int main( int argc, char* argv[] )
     plugin::Memorize mm( mesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
-    intg->setNonlinear( true );
+    intg->setNonlinear( false );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
@@ -274,7 +274,47 @@ int main( int argc, char* argv[] )
         }
     };
 
-    newton_solver->SetDataCollectionFunc( &func );
+    // adaptive refinement
+    const int tdim = dim * ( dim + 1 ) / 2;
+    auto flux_fes = new FiniteElementSpace( mesh, stress_fec, tdim );
+    Vector lambda( mesh->attributes.Max() );
+    lambda = 0.;
+    PWConstCoefficient lambda_func( lambda );
+    Vector mu( mesh->attributes.Max() );
+    mu = 324.0e7 / 2;
+    PWConstCoefficient mu_func( mu );
+    BilinearFormIntegrator* integ = new ElasticityIntegrator( lambda_func, mu_func );
+
+    GridFunction ue( fespace );
+    ue = 0.;
+    ErrorEstimator* estimator = new ZienkiewiczZhuEstimator( *integ, ue, flux_fes );
+    ThresholdRefiner refiner( *estimator );
+
+    refiner.SetTotalErrorFraction( 0.85 );
+
+    std::function<bool( const Vector& )> func2 =
+        [&ue, mesh, &refiner, fespace, &u, nlf, &mm, stress_fespace, &stress_grid, estimator]( const Vector& du )
+    {
+        ue = du;
+        std::cout << "Total Error: " << ( estimator->GetLocalErrors() ).Max() << std::endl;
+        std::cout << "threshold: " << refiner.GetThreshold() << std::endl;
+        refiner.Apply( *mesh );
+        if ( refiner.Stop() )
+        {
+            return true;
+        }
+        fespace->Update();
+        stress_fespace->Update();
+        u.Update();
+        ue.Update();
+        nlf->Update();
+        stress_grid.Update();
+        mm.Reset( mesh );
+        return false;
+    };
+
+    newton_solver->SetDataCollectionFunc( func );
+    newton_solver->SetAMRFunc( func2 );
     newton_solver->Mult( zero, u );
 
     return 0;
