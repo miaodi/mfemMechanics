@@ -1,29 +1,51 @@
 #pragma once
 
+#include "PostProc.h"
 #include <mfem.hpp>
 
 namespace plugin
 {
-class CriticalVMStressEstimator : public mfem::ZienkiewiczZhuEstimator
+class CriticalVMRefiner : public mfem::MeshOperator
 {
-    /// Compute the element error estimates.
-    void ComputeVMStress();
-    double critial_size{ 0 };
+protected:
+    StressCoefficient& sc;
+    mfem::Array<mfem::Refinement> marked_elements;
+    double critical_vm{ 0 };
+    double critical_h{ 0 };
+    long long num_marked_elements{ 0 };
+
+    /** @brief Apply the operator to the mesh.
+        @return STOP if a stopping criterion is satisfied or no elements were
+        marked for refinement; REFINED + CONTINUE otherwise. */
+    virtual int ApplyImpl( mfem::Mesh& mesh );
 
 public:
-    CriticalVMStressEstimator( mfem::BilinearFormIntegrator& integ, mfem::GridFunction& sol, mfem::FiniteElementSpace* flux_fes )
-        : ZienkiewiczZhuEstimator( integ, sol, flux_fes )
+    /// Construct a ThresholdRefiner using the given ErrorEstimator.
+    CriticalVMRefiner( StressCoefficient& s );
+
+    void SetCriticalVM( const double v )
     {
+        critical_vm = v;
     }
 
-    /// Get a Vector with all element errors.
-    virtual const mfem::Vector& GetLocalErrors() override
+    void SetCriticalH( const double h )
     {
-        if ( MeshIsModified() )
-        {
-            ComputeVMStress();
-        }
-        return error_estimates;
+        critical_h = h;
     }
+
+    /// Get the number of marked elements in the last Apply() call.
+    long long GetNumMarkedElements() const
+    {
+        return num_marked_elements;
+    }
+
+    /// Get the threshold used in the last Apply() call.
+    double GetCriticalVM() const
+    {
+        return critical_vm;
+    }
+
+    /// Reset the associated estimator.
+    virtual void Reset();
 };
 } // namespace plugin

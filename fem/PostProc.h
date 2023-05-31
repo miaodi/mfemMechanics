@@ -22,6 +22,11 @@ public:
     {
         u = &u_;
     }
+    
+    mfem::GridFunction* GetDisplacement()
+    {
+        return u;
+    }
 
     virtual void Eval( mfem::Vector& V, mfem::ElementTransformation& T, const mfem::IntegrationPoint& ip ) override;
 };

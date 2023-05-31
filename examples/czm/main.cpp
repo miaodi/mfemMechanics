@@ -255,10 +255,12 @@ int main( int argc, char* argv[] )
 
     auto stress_fec = new H1_FECollection( order, dim );
 
+    GridFunction ue( fespace );
+    ue = 0.;
     auto stress_fespace = new FiniteElementSpace( mesh, stress_fec, 7 );
     GridFunction stress_grid( stress_fespace );
     plugin::StressCoefficient sc( dim, iem );
-    sc.SetDisplacement( u );
+    sc.SetDisplacement( ue );
     paraview_dc.RegisterField( "Stress", &stress_grid );
     stress_grid.ProjectCoefficient( sc );
     paraview_dc.Save();
@@ -275,29 +277,14 @@ int main( int argc, char* argv[] )
     };
 
     // adaptive refinement
-    const int tdim = dim * ( dim + 1 ) / 2;
-    auto flux_fes = new FiniteElementSpace( mesh, stress_fec, tdim );
-    Vector lambda( mesh->attributes.Max() );
-    lambda = 0.;
-    PWConstCoefficient lambda_func( lambda );
-    Vector mu( mesh->attributes.Max() );
-    mu = 324.0e7 / 2;
-    PWConstCoefficient mu_func( mu );
-    BilinearFormIntegrator* integ = new ElasticityIntegrator( lambda_func, mu_func );
-
-    GridFunction ue( fespace );
-    ue = 0.;
-    ErrorEstimator* estimator = new ZienkiewiczZhuEstimator( *integ, ue, flux_fes );
-    ThresholdRefiner refiner( *estimator );
-
-    refiner.SetTotalErrorFraction( 0.85 );
+    plugin::CriticalVMRefiner refiner( sc );
+    refiner.SetCriticalVM( 1e7 );
+    refiner.SetCriticalH( 1e-2 );
 
     std::function<bool( const Vector& )> func2 =
-        [&ue, mesh, &refiner, fespace, &u, nlf, &mm, stress_fespace, &stress_grid, estimator]( const Vector& du )
+        [&ue, mesh, &refiner, fespace, &u, nlf, &mm, stress_fespace, &stress_grid]( const Vector& du )
     {
-        ue = du;
-        std::cout << "Total Error: " << ( estimator->GetLocalErrors() ).Max() << std::endl;
-        std::cout << "threshold: " << refiner.GetThreshold() << std::endl;
+        add( u, du, ue );
         refiner.Apply( *mesh );
         if ( refiner.Stop() )
         {
@@ -306,8 +293,8 @@ int main( int argc, char* argv[] )
         fespace->Update();
         stress_fespace->Update();
         u.Update();
-        ue.Update();
         nlf->Update();
+        ue.Update();
         stress_grid.Update();
         mm.Reset( mesh );
         return false;
