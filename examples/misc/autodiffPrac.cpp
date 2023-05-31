@@ -2,6 +2,7 @@
 #include <iostream>
 
 // autodiff include
+#include "Plugin.h"
 #include <Eigen/Dense>
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/dual/eigen.hpp>
@@ -60,5 +61,12 @@ int main()
     autodiff::VectorXdual g;
     auto H = autodiff::hessian( f, autodiff::wrt( x ), autodiff::at( x, p ), u, g );
     std::cout << std::setprecision( 16 ) << H << std::endl;
+
+    mfem::IntegrationRule ir( 4 );
+    ir.IntPoint( 1 ).x = 1;
+    ir.IntPoint( 2 ).y = 1;
+    ir.IntPoint( 3 ).y = 5;
+    ir.IntPoint( 3 ).x = 1;
+    std::cout << util::SmallestCircle( ir, 2 ) << std::endl;
     return 0;
 }

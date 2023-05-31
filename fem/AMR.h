@@ -8,6 +8,7 @@ class CriticalVMStressEstimator : public mfem::ZienkiewiczZhuEstimator
 {
     /// Compute the element error estimates.
     void ComputeVMStress();
+    double critial_size{ 0 };
 
 public:
     CriticalVMStressEstimator( mfem::BilinearFormIntegrator& integ, mfem::GridFunction& sol, mfem::FiniteElementSpace* flux_fes )

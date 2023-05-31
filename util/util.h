@@ -45,4 +45,6 @@ void tensorProduct( const Eigen::Matrix3d& A, const Eigen::Matrix3d& B, Eigen::M
 Eigen::Matrix6d TransformationVoigtForm( const Eigen::Matrix3d& transformation );
 
 double ConvergenceRate( const double cur, const double prev, const double prevprev );
+
+double SmallestCircle( const mfem::IntegrationRule& nodes, const int dim );
 } // namespace util

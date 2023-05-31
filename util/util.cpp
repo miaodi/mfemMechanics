@@ -1,4 +1,5 @@
 #include "util.h"
+#include <vector>
 
 namespace util
 {
@@ -106,5 +107,66 @@ Eigen::Matrix6d TransformationVoigtForm( const Eigen::Matrix3d& t )
 double ConvergenceRate( const double cur, const double prev, const double prevprev )
 {
     return ( std::log( cur ) - std::log( prev ) ) / ( std::log( prev ) - std::log( prevprev ) );
+}
+
+// Welzl's algorithm
+double SmallestCircle( const mfem::IntegrationRule& nodes, const int dim )
+{
+    static auto dist = []( const mfem::IntegrationPoint& a, const mfem::IntegrationPoint& b )
+    { return std::sqrt( std::pow( a.x - b.x, 2 ) + std::pow( a.y - b.y, 2 ) + std::pow( a.z - b.z, 2 ) ); };
+    struct Circle
+    {
+        mfem::IntegrationPoint center;
+        double radius;
+        Circle( const mfem::IntegrationPoint& c, const double r ) : center( c ), radius( r )
+        {
+        }
+        Circle( const double cx, const double cy, const double r ) : radius( r )
+        {
+            center.x = cx;
+            center.y = cy;
+            center.z = 0;
+        }
+
+        bool isInside( const mfem::IntegrationPoint& p ) const
+        {
+            return dist( center, p ) <= radius;
+        }
+    };
+
+    if ( dim == 3 )
+        MFEM_ABORT( "smallest bound sphere is not implemented yet." );
+
+    const int size = nodes.GetNPoints();
+    if ( size <= 1 )
+        return 0;
+    if ( size == 2 )
+        return dist( nodes.IntPoint( 0 ), nodes.IntPoint( 1 ) );
+    auto formCircle = []( const mfem::IntegrationPoint& a, const mfem::IntegrationPoint& b, const mfem::IntegrationPoint& c )
+    {
+        Eigen::Matrix3d m;
+        m << 2 * a.x, 2 * a.y, 1, 2 * b.x, 2 * b.y, 1, 2 * c.x, 2 * c.y, 1;
+        Eigen::Vector3d rhs;
+        rhs << a.x * a.x + a.y * a.y, b.x * b.x + b.y * b.y, c.x * c.x + c.y * c.y;
+        Eigen::Vector3d sol = m.fullPivLu().solve( rhs );
+        const double r = std::sqrt( sol( 2 ) + sol( 0 ) * sol( 0 ) + sol( 1 ) * sol( 1 ) );
+        return Circle( sol( 0 ), sol( 1 ), r );
+    };
+    std::vector<int> index;
+    std::function<Circle( const mfem::IntegrationRule&, std::vector<int>&, int )> recursive_helper =
+        [&recursive_helper, &formCircle]( const mfem::IntegrationRule& nodes, std::vector<int>& index, int pos )
+    {
+        if ( nodes.GetNPoints() - pos == 3 )
+            return formCircle( nodes.IntPoint( pos + 0 ), nodes.IntPoint( pos + 1 ), nodes.IntPoint( pos + 2 ) );
+        if ( index.size() == 3 )
+            return formCircle( nodes.IntPoint( index[0] ), nodes.IntPoint( index[1] ), nodes.IntPoint( index[2] ) );
+
+        auto d = recursive_helper( nodes, index, pos + 1 );
+        if ( d.isInside( nodes.IntPoint( pos ) ) )
+            return d;
+        index.push_back( pos );
+        return recursive_helper( nodes, index, pos + 1 );
+    };
+    return recursive_helper( nodes, index, 0 ).radius * 2;
 }
 } // namespace util
