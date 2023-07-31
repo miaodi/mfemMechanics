@@ -1,5 +1,5 @@
 // 0 for triangles, 1 for quads
-tri_or_quad = 1;
+tri_or_quad = 0;
 dt = 0.5 ;
 Point(1) = {0, 0, 0, dt};
 Point(2) = {1, 0, 0, dt};
@@ -21,8 +21,8 @@ If (tri_or_quad == 1)
 EndIf
 
 Physical Surface("surf") = {1};
-Physical Curve("left") = {4};
-Physical Curve("right") = {2};
+Physical Curve("left", 11) = {4};
+Physical Curve("right", 12) = {2};
 
 Mesh.MshFileVersion = 2.2;
 Mesh 2;
