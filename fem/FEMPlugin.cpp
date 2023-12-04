@@ -1,8 +1,8 @@
 #include "FEMPlugin.h"
+#include "util.h"
 #include <Eigen/Dense>
 #include <iostream>
 #include <unsupported/Eigen/KroneckerProduct>
-#include "util.h"
 
 namespace plugin
 {
@@ -99,7 +99,7 @@ void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el,
 {
     int dof = el.GetDof();
     int dim = el.GetDim();
-    double w{0};
+    double w{ 0 };
 
     MFEM_ASSERT( dim == Trans.GetSpaceDim(), "" );
 
@@ -153,7 +153,6 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
                                                          const mfem::Vector& elfun,
                                                          mfem::DenseMatrix& elmat )
 {
-    double w;
     int dof = el.GetDof(), dim = el.GetDim();
 
     mGeomStiff.resize( dof, dof );
@@ -172,6 +171,8 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
         ir = &( mfem::IntRules.Get( el.GetGeomType(), 2 * el.GetOrder() + 1 ) ); // <---
     }
     mMemo.InitializeElement( el, Ttr, *ir );
+    // Eigen::VectorXd thermalB = Eigen::VectorXd::Zero( dof * dim );
+    // double thermalM = 0.;
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
         const mfem::IntegrationPoint& ip = ir->IntPoint( i );
@@ -186,19 +187,33 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
         mMaterialModel->setDeformationGradient( mdxdX );
         mMaterialModel->updateRefModuli();
 
-        w = ip.weight * mMemo.GetDetdXdXi( i );
+        mW = ip.weight * mMemo.GetDetdXdXi( i );
         if ( !onlyGeomStiff() )
-            eigenMat += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
+            eigenMat += mW * mB.transpose() * mMaterialModel->getRefModuli() * mB;
         if ( isNonlinear() || onlyGeomStiff() )
         {
             mGeomStiff =
-                ( w * gShape * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) * gShape.transpose() ).eval();
+                ( mW * gShape * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) * gShape.transpose() ).eval();
             for ( int j = 0; j < dim; j++ )
             {
                 eigenMat.block( j * dof, j * dof, dof, dof ) += mGeomStiff;
             }
         }
+        // if ( auto iet = dynamic_cast<IsotropicElasticThermalMaterial*>( mMaterialModel ) )
+        // {
+        //     Eigen::Vector6d tmp;
+        //     tmp << -iet->CTE(), -iet->CTE(), -iet->CTE(), 0., 0., 0.;
+        //     thermalB += w * mB.transpose() * mMaterialModel->getRefModuli() * tmp;
+        //     thermalM += w * tmp.transpose() * mMaterialModel->getRefModuli() * tmp;
+        // }
+        ExtraAssembleElementGrad();
     }
+    // if ( dynamic_cast<IsotropicElasticThermalMaterial*>( mMaterialModel ) )
+    // {
+    //     eigenMat -= 1. / thermalM * thermalB * thermalB.transpose();
+    // }
+
+    // std::cout<<eigenMat<<std::endl<<std::endl;
 }
 
 void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteElement& el,
@@ -206,7 +221,6 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
                                                            const mfem::Vector& elfun,
                                                            mfem::Vector& elvect )
 {
-    double w;
     int dof = el.GetDof(), dim = el.GetDim();
 
     Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, dim );
@@ -223,6 +237,10 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
 
     const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
     mMemo.InitializeElement( el, Ttr, *ir );
+
+    Eigen::VectorXd thermalB = Eigen::VectorXd::Zero( dof * dim );
+    double thermalM = 0.;
+    double thermalR = 0.;
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
         const mfem::IntegrationPoint& ip = ir->IntPoint( i );
@@ -238,10 +256,23 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
         mMaterialModel->setDeformationGradient( mdxdX );
         mMaterialModel->updateRefModuli();
 
-        w = ip.weight * mMemo.GetDetdXdXi( i );
-        eigenVec += w * ( mB.transpose() * mMaterialModel->getPK2StressVector() );
+        mW = ip.weight * mMemo.GetDetdXdXi( i );
+        eigenVec += mW * ( mB.transpose() * mMaterialModel->getPK2StressVector() );
+        // if ( auto iet = dynamic_cast<IsotropicElasticThermalMaterial*>( mMaterialModel ) )
+        // {
+        //     Eigen::Vector6d tmp;
+        //     tmp << -iet->CTE(), -iet->CTE(), -iet->CTE(), 0., 0., 0.;
+        //     thermalB += w * mB.transpose() * mMaterialModel->getRefModuli() * tmp;
+        //     thermalM += w * tmp.transpose() * mMaterialModel->getRefModuli() * tmp;
+        //     thermalR += w * tmp.transpose() * mMaterialModel->getPK2StressVector();
+        // }
+        ExtraAssembleElementVector();
     }
-    // std::cout<<eigenVec.transpose()<<std::endl;
+    // if ( dynamic_cast<IsotropicElasticThermalMaterial*>( mMaterialModel ) )
+    // {
+    //     eigenVec -= 1. / thermalM * thermalB * thermalR;
+    // }
+    // std::cout<<eigenVec<<std::endl<<std::endl;
 }
 
 void NonlinearElasticityIntegrator::matrixB( const int dof, const int dim, const Eigen::MatrixXd& gshape )
@@ -529,7 +560,8 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
     mStiffModuli = mMaterialModel->getRefModuli();
     const Eigen::Matrix3d orthonormalBasis = Eigen::Matrix3d::Identity();
 
-    auto preprocessColl = [&]( Eigen::Matrix<double, 3, 3>& g, Eigen::Matrix<double, 8, 3>& DShape ) {
+    auto preprocessColl = [&]( Eigen::Matrix<double, 3, 3>& g, Eigen::Matrix<double, 8, 3>& DShape )
+    {
         mat.UseExternalData( mGCovariant.data(), mGCovariant.rows(), mGCovariant.cols() );
         mat = Ttr.Jacobian();
         mat.UseExternalData( DShape.data(), DShape.rows(), DShape.cols() );
@@ -705,4 +737,27 @@ void NonlinearCompositeSolidShellIntegrator::matrixB( const int dof, const int d
     }
 }
 
+void TempDependentNonlinearElasticityIntegrator::AssembleElementGrad( const mfem::Array<const mfem::FiniteElement*>& el,
+                                                                      mfem::ElementTransformation& Tr,
+                                                                      const mfem::Array<const mfem::Vector*>& elfun,
+                                                                      const mfem::Array2D<mfem::DenseMatrix*>& elmats )
+{
+    mElmats = &elmats;
+    int dof_u = el[0]->GetDof();
+    int dof_t = el[1]->GetDof();
+
+    int dim = el[0]->GetDim();
+
+    elmats( 0, 0 )->SetSize( dof_u * dim, dof_u * dim );
+    elmats( 0, 1 )->SetSize( dof_u * dim, dof_t );
+    elmats( 1, 0 )->SetSize( dof_t, dof_u * dim );
+    elmats( 1, 1 )->SetSize( dof_t, dof_t );
+
+    *elmats( 0, 0 ) = 0.0;
+    *elmats( 0, 1 ) = 0.0;
+    *elmats( 1, 0 ) = 0.0;
+    *elmats( 1, 1 ) = 0.0;
+
+    NonlinearElasticityIntegrator::AssembleElementGrad( *el[0], Tr, *elfun[0], *elmats( 0, 0 ) );
+}
 } // namespace plugin

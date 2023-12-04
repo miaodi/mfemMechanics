@@ -68,7 +68,7 @@ int main( int argc, char* argv[] )
     MPI_Comm_rank( MPI_COMM_WORLD, &myid );
 
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/3DBeamBuckle.msh";
+    const char* mesh_file = "../../data/ref-cube.mesh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -161,20 +161,20 @@ int main( int argc, char* argv[] )
     //    boundary attribute 1 from the mesh as essential and converting it to a
     //    list of true dofs.
     Array<int> ess_tdof_list, ess_bdr( pmesh->bdr_attributes.Max() ), temp_list;
-    ess_bdr = 0;
-    ess_bdr[28] = 1; // left
-    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 0 );
-    ess_tdof_list.Append( temp_list );
 
+    std::cout<<" pmesh->bdr_attributes.Max(): "<< pmesh->bdr_attributes.Max()<<std::endl;
     ess_bdr = 0;
-    ess_bdr[29] = 1; // right
-    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 0 );
-    ess_tdof_list.Append( temp_list );
-
-    ess_bdr = 0;
-    ess_bdr[27] = 1; // bottom
+    ess_bdr[1] = 1; // left
     fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 1 );
     ess_tdof_list.Append( temp_list );
+
+    ess_bdr = 0;
+    ess_bdr[4] = 1; // back
+    fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 0 );
+    ess_tdof_list.Append( temp_list );
+
+    ess_bdr = 0;
+    ess_bdr[0] = 1; // bottom
     fespace->GetEssentialTrueDofs( ess_bdr, temp_list, 2 );
     ess_tdof_list.Append( temp_list );
 
@@ -195,15 +195,15 @@ int main( int argc, char* argv[] )
     x_ref.ProjectCoefficient( refconfig );
 
     Vector Nu( pmesh->attributes.Max() );
-    Nu = .0;
+    Nu = 0.;
     PWConstCoefficient nu_func( Nu );
 
     Vector E( pmesh->attributes.Max() );
-    E = 12.8e9;
+    E = 1;
     PWConstCoefficient E_func( E );
 
     Vector CTE( pmesh->attributes.Max() );
-    CTE = 23.1e-6;
+    CTE = 1000000;
     PWConstCoefficient CTE_func( CTE );
 
     IsotropicElasticThermalMaterial ietm( E_func, nu_func, CTE_func );
@@ -213,7 +213,7 @@ int main( int argc, char* argv[] )
     plugin::Memorize mm( pmesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( ietm, mm );
-    intg->setNonlinear( true );
+    // intg->setNonlinear( true );
     auto* nlf = new ParNonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
     nlf->SetEssentialTrueDofs( ess_tdof_list );
@@ -240,7 +240,7 @@ int main( int argc, char* argv[] )
     // Set up the Jacobian solver
     PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
 
-    auto newton_solver = new plugin::Crisfield( fespace->GetComm() );
+    auto newton_solver = new plugin::MultiNewtonAdaptive( fespace->GetComm() );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -249,13 +249,13 @@ int main( int argc, char* argv[] )
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-6 );
-    newton_solver->SetAbsTol( 1e-10 );
+    newton_solver->SetAbsTol( 1e-11);
     newton_solver->SetMaxIter( 6 );
-    newton_solver->SetDelta( .01 );
-    newton_solver->SetMaxDelta( 15 );
-    newton_solver->SetMinDelta( 1e-5 );
-    newton_solver->SetPhi( 1. );
-    newton_solver->SetMaxStep( 10000 );
+    newton_solver->SetDelta( .001 );
+    // newton_solver->SetMaxDelta( 15 );
+    // newton_solver->SetMinDelta( 1e-5 );
+    // newton_solver->SetPhi( 1. );
+    newton_solver->SetMaxStep( 5 );
 
     // 15. Save data in the ParaView format
 
@@ -271,11 +271,14 @@ int main( int argc, char* argv[] )
     ParGridFunction u( fespace );
     u.Distribute( X );
     paraview_dc.RegisterField( "Displace", &u );
-    newton_solver->SetDataCollection( &paraview_dc );
+    // newton_solver->SetDataCollection( &paraview_dc );
     paraview_dc.Save();
 
     Vector zero;
     newton_solver->Mult( zero, u );
+    paraview_dc.SetCycle( 1 );
+    paraview_dc.SetTime( 1 );
+    paraview_dc.Save();
     if ( fec )
     {
         delete fespace;

@@ -32,7 +32,7 @@ public:
 private:
     std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mStorage;
     mfem::DenseMatrix mDShape, mGShape;
-    int mElementNo{0};
+    int mElementNo{ 0 };
 };
 
 class ElasticityIntegrator : public mfem::BilinearFormIntegrator
@@ -49,13 +49,13 @@ public:
 protected:
     mfem::DenseMatrix mDShape, mGShape;
 
-    ElasticMaterial* mMaterialModel{nullptr};
+    ElasticMaterial* mMaterialModel{ nullptr };
 };
 
 class NonlinearFormIntegratorLambda : public mfem::NonlinearFormIntegrator
 {
 public:
-    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator(), mLambda{1.}
+    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator(), mLambda{ 1. }
     {
     }
 
@@ -80,7 +80,7 @@ protected:
 class NonlinearFormMaterialIntegratorLambda : public NonlinearFormIntegratorLambda
 {
 public:
-    NonlinearFormMaterialIntegratorLambda( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{&m}
+    NonlinearFormMaterialIntegratorLambda( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{ &m }
     {
     }
 
@@ -105,15 +105,15 @@ public:
     }
 
 protected:
-    ElasticMaterial* mMaterialModel{nullptr};
-    bool mNonlinear{true};
+    ElasticMaterial* mMaterialModel{ nullptr };
+    bool mNonlinear{ true };
 };
 
 class NonlinearElasticityIntegrator : public NonlinearFormMaterialIntegratorLambda
 {
 public:
     NonlinearElasticityIntegrator( ElasticMaterial& m, Memorize& memo )
-        : NonlinearFormMaterialIntegratorLambda( m ), mMemo{memo}
+        : NonlinearFormMaterialIntegratorLambda( m ), mMemo{ memo }
     {
     }
 
@@ -136,6 +136,14 @@ public:
                                       const mfem::Vector& elfun,
                                       mfem::DenseMatrix& elmat );
 
+    virtual void ExtraAssembleElementGrad()
+    {
+    }
+
+    virtual void ExtraAssembleElementVector()
+    {
+    }
+
     void matrixB( const int dof, const int dim, const Eigen::MatrixXd& gshape );
 
     void setGeomStiff( const bool flg )
@@ -152,8 +160,9 @@ protected:
     Eigen::Matrix<double, 3, 3> mdxdX;
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
     Eigen::MatrixXd mGeomStiff;
+    double mW;
     Memorize& mMemo;
-    bool mOnlyGeomStiff{false};
+    bool mOnlyGeomStiff{ false };
 };
 
 class NonlinearVectorBoundaryLFIntegrator : public NonlinearFormIntegratorLambda
@@ -248,4 +257,39 @@ protected:
     Eigen::MatrixXd mL, mH;
     Eigen::VectorXd mAlpha;
 };
+
+class TempDependentNonlinearElasticityIntegrator : public mfem::BlockNonlinearFormIntegrator, public NonlinearElasticityIntegrator
+{
+private:
+    const mfem::Array2D<mfem::DenseMatrix*>* mElmats;
+
+public:
+    TempDependentNonlinearElasticityIntegrator( ElasticMaterial& m, Memorize& memo )
+        : mfem::BlockNonlinearFormIntegrator(), NonlinearElasticityIntegrator( m, memo )
+    {
+    }
+
+    // virtual double GetElementEnergy( const Array<const FiniteElement*>& el, ElementTransformation& Tr, const Array<const Vector*>& elfun );
+
+    // /// Perform the local action of the NonlinearFormIntegrator
+    // virtual void AssembleElementVector( const Array<const FiniteElement*>& el,
+    //                                     ElementTransformation& Tr,
+    //                                     const Array<const Vector*>& elfun,
+    //                                     const Array<Vector*>& elvec );
+
+    /// Assemble the local gradient matrix
+    virtual void AssembleElementGrad( const mfem::Array<const mfem::FiniteElement*>& el,
+                                      mfem::ElementTransformation& Tr,
+                                      const mfem::Array<const mfem::Vector*>& elfun,
+                                      const mfem::Array2D<mfem::DenseMatrix*>& elmats );
+
+    virtual void ExtraAssembleElementGrad()
+    {
+    }
+
+    virtual void ExtraAssembleElementVector()
+    {
+    }
+};
+
 } // namespace plugin
