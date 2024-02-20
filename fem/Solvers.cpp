@@ -216,12 +216,12 @@ void SetLambdaToIntegrators( const mfem::Operator* oper, const double l )
     }
 }
 
-double Crisfield::InnerProduct( const mfem::Vector& a, const double la, const mfem::Vector& b, const double lb ) const
+double ALMBase::InnerProduct( const mfem::Vector& a, const double la, const mfem::Vector& b, const double lb ) const
 {
     return Dot( a, b ) + la * lb * phi;
 }
 
-void Crisfield::ResizeVectors( const int size ) const
+void ALMBase::ResizeVectors( const int size ) const
 {
     r.SetSize( size );
     delta_u.SetSize( size );
@@ -232,20 +232,21 @@ void Crisfield::ResizeVectors( const int size ) const
     Delta_u.SetSize( size );
 }
 
-void Crisfield::InitializeVariables( mfem::GridFunction& u ) const
+void ALMBase::InitializeVariables( mfem::GridFunction& u ) const
 {
     ResizeVectors( u.Size() );
     Delta_u_prev.SetSpace( u.FESpace() );
 }
 
-void Crisfield::SetOperator( const mfem::Operator& op )
+void ALMBase::SetOperator( const mfem::Operator& op )
 {
     oper = &op;
     height = op.Height();
     width = op.Width();
     MFEM_ASSERT( height == width, "square Operator is required." );
 }
-void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
+
+void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 {
     MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
     MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
@@ -387,7 +388,7 @@ void Crisfield::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
 
             // filter out slow convergence case
-            if ( it >= std::max( 2, max_iter / 2 ) && util::ConvergenceRate( norm, normPrev, normPrevPrev ) < 1.2 )
+            if ( check_conv_ratio && it >= std::max( 2, max_iter / 2 ) && util::ConvergenceRate( norm, normPrev, normPrevPrev ) < 1.2 )
             {
                 mfem::out << "Convergence rate " << util::ConvergenceRate( norm, normPrev, normPrevPrev ) << " is too small!\n";
                 converged = false;
@@ -464,38 +465,62 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
     const double Delta_u_dot_delta_u_bar = Dot( Delta_u, delta_u_bar );
     const double Delta_u_dot_Delta_u = Dot( Delta_u, Delta_u );
 
-    double ds = 1.;
-    const double as = std::pow( delta_u_bar_dot_delta_u_t, 2 ) - phi * delta_u_bar_dot_delta_u_bar -
-                      delta_u_bar_dot_delta_u_bar * delta_u_t_dot_delta_u_t;
-    const double bs = 2 * ( Delta_lambda * phi + Delta_u_dot_delta_u_t ) * delta_u_bar_dot_delta_u_t -
-                      2 * Delta_u_dot_delta_u_bar * ( phi + delta_u_t_dot_delta_u_t );
-    const double cs = ( it == 0 ) ? std::pow( Delta_lambda * phi + Delta_u_dot_delta_u_t, 2 ) +
-                                        ( L * L - Delta_lambda * Delta_lambda * phi - Delta_u_dot_Delta_u ) * ( phi + delta_u_t_dot_delta_u_t )
-                                  : std::pow( Delta_lambda * phi + Delta_u_dot_delta_u_t, 2 );
-
-    auto func = [as, bs, cs]( const double ds ) { return as * ds * ds + bs * ds + cs; };
-    if ( func( ds ) < 0 )
-    {
-        util::mfemOut( util::Color::YELLOW, "Complex root detected, adaptive step size (ds) is activated!\n", util::Color::RESET );
-        const double beta1 = ( -bs + std::sqrt( bs * bs - 4 * as * cs ) ) / ( 2 * as );
-        const double beta2 = ( -bs - std::sqrt( bs * bs - 4 * as * cs ) ) / ( 2 * as );
-        util::mfemOut( util::Color::YELLOW, "beta1: ", beta1, ", beta2: ", beta2, '\n', util::Color::RESET );
-        const double xi = beta2 - beta1;
-        ds = std::min( beta2 - xi * .05, ds );
-        util::mfemOut( util::Color::YELLOW, "ds=: ", ds, util::Color::RESET );
-        if ( ds < .1 )
-        {
-            util::mfemOut( util::Color::YELLOW, ", which is smaller than ds_min, restart!\n ", util::Color::RESET );
-            return false;
-        }
-        util::mfemOut( "func(ds)= ", func( ds ), '\n' );
-    }
+    // Ritto-Correa et al. 2008
     const double a0 = delta_u_t_dot_delta_u_t + phi;
-    const double b0 = 2 * Delta_u_dot_delta_u_t + 2 * phi * Delta_lambda;
+    const double b0 = 2 * ( Delta_u_dot_delta_u_t + phi * Delta_lambda );
     const double b1 = 2 * delta_u_bar_dot_delta_u_t;
     const double c0 = Delta_u_dot_Delta_u + phi * Delta_lambda * Delta_lambda - L * L;
     const double c1 = 2 * Delta_u_dot_delta_u_bar;
     const double c2 = delta_u_bar_dot_delta_u_bar;
+
+    double ds = 1.;
+
+    const double as = b1 * b1 - 4 * a0 * c2;
+    const double bs = 2 * b0 * b1 - 4 * a0 * c1;
+    const double cs = b0 * b0 - 4 * a0 * c0;
+
+    auto func = [as, bs, cs]( const double ds ) { return as * ds * ds + bs * ds + cs; };
+
+    if ( func( ds ) < 0 )
+    {
+        util::mfemOut( util::Color::YELLOW, "Complex root detected, adaptive step size (ds) is activated!\n", util::Color::RESET );
+        const double det = bs * bs - 4 * as * cs;
+        if ( det < 0 )
+        {
+            util::mfemOut( "bs^2 - 4 * as * cs < 0\n" );
+            return false;
+        }
+        double beta1 = ( -bs + std::sqrt( det ) ) / ( 2 * as );
+        double beta2 = ( -bs - std::sqrt( det ) ) / ( 2 * as );
+        if ( beta1 > beta2 )
+            std::swap( beta1, beta2 );
+        util::mfemOut( util::Color::YELLOW, "beta1: ", beta1, ", beta2: ", beta2, '\n', util::Color::RESET );
+        const double xi = beta2 - beta1;
+
+        // Zhou 1995
+        // ds = std::min( beta2 - xi * .05, ds );
+        // util::mfemOut( util::Color::YELLOW, "ds=: ", ds, util::Color::RESET );
+        // if ( ds < .1 )
+        // {
+        //     util::mfemOut( util::Color::YELLOW, ", which is smaller than ds_min, restart!\n ", util::Color::RESET );
+        //     return false;
+        // }
+
+        // Lam and Morley 1992
+        if ( beta2 < 1.0 )
+            ds = beta2 - xi;
+        else if ( ( beta2 > 1.0 ) && ( -bs / as < 1.0 ) )
+            ds = beta2 + xi;
+        else if ( ( beta2 < 1.0 ) && ( -bs / as > 1.0 ) )
+            ds = beta2 - xi;
+        else if ( beta2 > 1.0 )
+            ds = beta2 + xi;
+        else{
+            util::mfemOut( "Could not find an appropriate adaptive step size ds ", '\n' );
+            return false;
+        }
+        util::mfemOut( "func(ds)= ", func( ds ), '\n' );
+    }
 
     const double a = a0;
     const double b = b0 + b1 * ds;

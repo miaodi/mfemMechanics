@@ -56,7 +56,7 @@ public:
 
 void SetLambdaToIntegrators( const mfem::Operator*, const double l );
 
-class Crisfield : public mfem::IterativeSolver
+class ALMBase : public mfem::IterativeSolver
 {
 protected:
     double InnerProduct( const mfem::Vector& a, const double la, const mfem::Vector& b, const double lb ) const;
@@ -66,13 +66,13 @@ protected:
     void InitializeVariables( mfem::GridFunction& u ) const;
 
 public:
-    Crisfield()
+    ALMBase()
     {
         converged = true;
     }
 
 #ifdef MFEM_USE_MPI
-    Crisfield( MPI_Comm comm_ ) : mfem::IterativeSolver( comm_ )
+    ALMBase( MPI_Comm comm_ ) : mfem::IterativeSolver( comm_ )
     {
         converged = true;
     }
@@ -134,7 +134,12 @@ public:
         adaptive_mesh_refine_func = &f;
     }
 
-    virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const;
+    virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const = 0;
+
+    void SetCheckConvRatio( const bool check )
+    {
+        check_conv_ratio = check;
+    }
 
 protected:
     mutable mfem::Vector r, delta_u, u_cur, q, delta_u_bar, delta_u_t, Delta_u;
@@ -146,19 +151,36 @@ protected:
 
     int max_steps{ 100 };
 
+    bool check_conv_ratio{ false };
     mutable std::function<void( int, int, double )>* data_collect_func{ nullptr };
     mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{ nullptr };
 };
 
-class ArcLengthLinearize : public Crisfield
+class Crisfield : public ALMBase
 {
 public:
-    ArcLengthLinearize() : Crisfield()
+    Crisfield() : ALMBase()
     {
     }
 
 #ifdef MFEM_USE_MPI
-    ArcLengthLinearize( MPI_Comm comm_ ) : Crisfield( comm_ )
+    Crisfield( MPI_Comm comm_ ) : ALMBase( comm_ )
+    {
+    }
+#endif
+
+    virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const;
+};
+
+class ArcLengthLinearize : public ALMBase
+{
+public:
+    ArcLengthLinearize() : ALMBase()
+    {
+    }
+
+#ifdef MFEM_USE_MPI
+    ArcLengthLinearize( MPI_Comm comm_ ) : ALMBase( comm_ )
     {
     }
 #endif

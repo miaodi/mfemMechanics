@@ -301,7 +301,7 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-7 );
+    newton_solver->SetRelTol( 1e-9 );
     newton_solver->SetAbsTol( 1e-13 );
     newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
@@ -349,16 +349,38 @@ int main( int argc, char* argv[] )
 
     // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
     // 15. Save data in the ParaView format
-    // ParaViewDataCollection paraview_dc( "bar_3D", mesh );
-    // paraview_dc.SetPrefixPath( "ParaView" );
-    // paraview_dc.SetLevelsOfDetail( order );
-    // paraview_dc.SetCycle( 0 );
-    // paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    // paraview_dc.SetHighOrderOutput( true );
-    // paraview_dc.SetTime( 0.0 ); // set the time
-    // paraview_dc.RegisterField( "Displace", &u );
-    // newton_solver->SetDataCollection( &paraview_dc );
-    // paraview_dc.Save();
+    ParaViewDataCollection paraview_dc( "bar_3D", mesh );
+    paraview_dc.SetPrefixPath( "ParaView" );
+    paraview_dc.SetLevelsOfDetail( order );
+    paraview_dc.SetCycle( 0 );
+    paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    paraview_dc.SetHighOrderOutput( true );
+    paraview_dc.SetTime( 0.0 ); // set the time
+    paraview_dc.RegisterField( "Displace", &u );
+
+    auto stress_fec = new H1_FECollection( order, dim );
+
+    auto stress_fespace = new FiniteElementSpace( mesh, stress_fec, 7 );
+    GridFunction stress_grid( stress_fespace );
+    plugin::StressCoefficient sc( dim, iem );
+    sc.SetDisplacement( u );
+    paraview_dc.RegisterField( "Stress", &stress_grid );
+    stress_grid.ProjectCoefficient( sc );
+    paraview_dc.Save();
+
+    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc]( int step, int count, double time )
+    {
+        if ( step % 5 == 0 )
+        {
+            mfem::out << "Write to Paraview.\n";
+            paraview_dc.SetCycle( count );
+            paraview_dc.SetTime( count );
+            stress_grid.ProjectCoefficient( sc );
+            paraview_dc.Save();
+        }
+    };
+
+    newton_solver->SetDataCollectionFunc( func );
 
     newton_solver->Mult( zero, u );
 
