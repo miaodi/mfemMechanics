@@ -141,19 +141,26 @@ public:
         check_conv_ratio = check;
     }
 
+    void SetRelaxFactor( const double relax )
+    {
+        relaxation_factor = relax;
+    }
+
 protected:
     mutable mfem::Vector r, delta_u, u_cur, q, delta_u_bar, delta_u_t, Delta_u;
     mutable mfem::Operator* grad;
 
     mutable mfem::GridFunction Delta_u_prev;
 
-    mutable double lambda, Delta_lambda, delta_lambda, Delta_lambda_prev, max_delta{ 1. }, min_delta{ 1. }, L{ 1 }, phi{ 1 }, L_prev;
+    mutable double lambda, Delta_lambda, delta_lambda, delta_lambda_prev, Delta_lambda_prev, max_delta{ 1. },
+        min_delta{ 1. }, L{ 1 }, phi{ 1 }, L_prev;
 
     int max_steps{ 100 };
 
     bool check_conv_ratio{ false };
     mutable std::function<void( int, int, double )>* data_collect_func{ nullptr };
     mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{ nullptr };
+    double relaxation_factor{ 1.0 };
 };
 
 class Crisfield : public ALMBase

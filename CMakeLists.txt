@@ -28,11 +28,13 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/autodiff/autodiff.git
   GIT_TAG main
 )
-# set(BUILD_TESTING OFF)
+set(BUILD_TESTING OFF)
 set(EIGEN_BUILD_DOC OFF)
 set(EIGEN_BUILD_PKGCONFIG OFF)
 set(AUTODIFF_BUILD_TESTS OFF)
 set(AUTODIFF_BUILD_PYTHON OFF)
+set(AUTODIFF_BUILD_TESTS OFF)
+set(AUTODIFF_BUILD_EXAMPLES OFF)
 
 FetchContent_MakeAvailable(Eigen autodiff)
 

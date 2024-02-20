@@ -309,13 +309,14 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         MFEM_VERIFY( L > min_delta, "Required step size is smaller than the minimal bound." );
 
         if ( step )
-            phi = std::abs( Delta_u_prev.Normlinf() / Delta_lambda_prev );
+            phi = std::abs( Delta_u_prev.Norml2() / Delta_lambda_prev );
 
         util::mfemOut( "L: ", L, ", phi: ", phi, "\n", util::Color::RESET );
 
         delta_u = 0.;
         Delta_u = 0.;
         delta_lambda = 0.;
+        delta_lambda_prev = 0.;
         Delta_lambda = 0.;
         int it = 0;
 
@@ -329,12 +330,50 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
 
             add( *u, Delta_u, u_cur );
+            delta_lambda_prev = delta_lambda;//needed for relaxation
+
+            // compute r
+            SetLambdaToIntegrators( oper, lambda + Delta_lambda );
+            oper->Mult( u_cur, r );
+
+            if ( it > 0 )
+            {
+                // convergence check
+                normPrevPrev = normPrev;
+                normPrev = norm;
+                norm = r.Norml2();
+                if ( it == 1 )
+                {
+                    norm_goal = std::max( rel_tol * norm, abs_tol );
+                }
+                if ( !mfem::IsFinite( norm ) )
+                {
+                    converged = false;
+                    break;
+                }
+                Monitor( it, norm, r, *u );
+
+                if ( norm <= norm_goal )
+                {
+                    converged = true;
+                    break;
+                }
+
+                // filter out slow convergence case
+                if ( check_conv_ratio && it >= std::max( 3, max_iter * 2 / 3 ) &&
+                     util::ConvergenceRate( norm, normPrev, normPrevPrev ) < 1.2 )
+                {
+                    mfem::out << "Convergence rate " << util::ConvergenceRate( norm, normPrev, normPrevPrev ) << " is too small!\n";
+                    converged = false;
+                    break;
+                }
+            }
 
             // compute q
             SetLambdaToIntegrators( oper, .0001 + lambda + Delta_lambda );
             oper->Mult( u_cur, q );
-            SetLambdaToIntegrators( oper, lambda + Delta_lambda );
-            oper->Mult( u_cur, r );
+
+
             q -= r;
             q.Neg();
             q *= 10000;
@@ -362,38 +401,16 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 break;
             }
 
+            // relaxation Schweizerhof and Wriggers 1986
+            if ( relaxation_factor < 1 && delta_lambda_prev * delta_lambda < 0 && std::abs( delta_lambda ) <= std::abs( delta_lambda_prev ) )
+            {
+                delta_lambda *= relaxation_factor;
+                delta_u *= relaxation_factor;
+            }
+
             // update
             Delta_u += delta_u;
             Delta_lambda += delta_lambda;
-
-            // convergence check
-            normPrevPrev = normPrev;
-            normPrev = norm;
-            norm = std::sqrt( InnerProduct( delta_u, delta_lambda, delta_u, delta_lambda ) );
-            if ( it == 0 )
-            {
-                norm_goal = std::max( rel_tol * norm, abs_tol );
-            }
-            if ( !mfem::IsFinite( norm ) )
-            {
-                converged = false;
-                break;
-            }
-            Monitor( it, norm, r, *u );
-
-            if ( norm <= norm_goal )
-            {
-                converged = true;
-                break;
-            }
-
-            // filter out slow convergence case
-            if ( check_conv_ratio && it >= std::max( 2, max_iter / 2 ) && util::ConvergenceRate( norm, normPrev, normPrevPrev ) < 1.2 )
-            {
-                mfem::out << "Convergence rate " << util::ConvergenceRate( norm, normPrev, normPrevPrev ) << " is too small!\n";
-                converged = false;
-                break;
-            }
 
             // delta_u.Print();
             // if(it==0){
@@ -474,6 +491,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
     const double c2 = delta_u_bar_dot_delta_u_bar;
 
     double ds = 1.;
+    double delta_lambda1{ 0. }, delta_lambda2{ 0. };
 
     const double as = b1 * b1 - 4 * a0 * c2;
     const double bs = 2 * b0 * b1 - 4 * a0 * c1;
@@ -515,21 +533,33 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
             ds = beta2 - xi;
         else if ( beta2 > 1.0 )
             ds = beta2 + xi;
-        else{
+        else
+        {
             util::mfemOut( "Could not find an appropriate adaptive step size ds ", '\n' );
             return false;
         }
-        util::mfemOut( "func(ds)= ", func( ds ), '\n' );
+        // util::mfemOut( "func(ds)= ", func( ds ), '\n' );
+
+        const double a = a0;
+        const double b = b0 + b1 * ds;
+
+        delta_lambda1 = -1. * b / ( 2. * a );
+        delta_lambda2 = -1. * b / ( 2. * a );
+    }
+    else
+    {
+        const double a = a0;
+        const double b = b0 + b1 * ds;
+        const double c = c0 + c1 * ds + c2 * ds * ds;
+
+        delta_lambda1 = ( -1. * b + std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
+        delta_lambda2 = ( -1. * b - std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
     }
 
-    const double a = a0;
-    const double b = b0 + b1 * ds;
-    const double c = c0 + c1 * ds + c2 * ds * ds;
-    const double delta_lambda1 = ( -1. * b + std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
-    const double delta_lambda2 = ( -1. * b - std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
     util::mfemOut( "delta_lambda1: ", delta_lambda1, ", delta_lambda2: ", delta_lambda2, "\n", util::Color::RESET );
     if ( it == 0 )
     {
+        // predictor
         if ( step == 0 )
         {
             delta_lambda = delta_lambda1;
@@ -548,6 +578,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
     }
     else
     {
+        // corrector
         const double t = InnerProduct( Delta_u, Delta_lambda, delta_u_t, 1 );
         if ( t * delta_lambda1 > t * delta_lambda2 )
         {
@@ -566,33 +597,37 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
 
 bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const
 {
-    const double frac = 0.1;
+    const double frac = 1.;
     const double tol = 1e-8;
-    // predictor
     if ( it == 0 )
     {
+        // predictor
         if ( Delta_u_prev.Norml2() < tol && std::abs( Delta_lambda_prev ) < tol )
         {
-            Delta_u = delta_u_t;
-            Delta_u *= 1. / delta_u_t.Norml2() * L * frac;
-            // Delta_lambda = L * frac / std::sqrt( phi );
-            mfem::out << "predict!\n";
+            delta_u = delta_u_t;
+            const double L_pred = InnerProduct( delta_u, 1, delta_u, 1 );
+            delta_u *= frac / L_pred;
+            delta_lambda = frac / L_pred;
         }
         else
         {
-            Delta_u = Delta_u_prev;
-            Delta_u *= L / L_prev * frac;
-            Delta_lambda = Delta_lambda_prev * L / L_prev * frac;
+            delta_u = Delta_u_prev;
+            delta_u *= L / L_prev * frac;
+            delta_lambda = Delta_lambda_prev * L / L_prev * frac;
         }
     }
-    const double Delta_u_dot_delta_u_t = Dot( Delta_u, delta_u_t );
-    const double Delta_u_dot_delta_u_bar = Dot( Delta_u, delta_u_bar );
-    const double Delta_u_dot_Delta_u = Dot( Delta_u, Delta_u );
+    else
+    {
+        // corrector
+        const double Delta_u_dot_delta_u_t = Dot( Delta_u, delta_u_t );
+        const double Delta_u_dot_delta_u_bar = Dot( Delta_u, delta_u_bar );
+        const double Delta_u_dot_Delta_u = Dot( Delta_u, Delta_u );
 
-    delta_lambda = ( L * L - Delta_u_dot_Delta_u - phi * Delta_lambda * Delta_lambda - 2 * Delta_u_dot_delta_u_bar ) /
-                   ( 2 * Delta_u_dot_delta_u_t + 2 * phi * Delta_lambda );
+        delta_lambda = ( L * L - Delta_u_dot_Delta_u - phi * Delta_lambda * Delta_lambda - 2 * Delta_u_dot_delta_u_bar ) /
+                       ( 2 * Delta_u_dot_delta_u_t + 2 * phi * Delta_lambda );
 
-    add( 1., delta_u_bar, delta_lambda, delta_u_t, delta_u );
+        add( 1., delta_u_bar, delta_lambda, delta_u_t, delta_u );
+    }
     return true;
 }
 

@@ -34,7 +34,7 @@ void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector&
     if ( print_level == 1 || ( print_level == 3 && ( final || it == 0 ) ) )
     {
         mfem::out << prefix << " iteration " << setw( 2 ) << it << " : ||r|| = " << norm;
-        if ( it > 0 )
+        if ( it > 1 )
         {
             mfem::out << ",  ||r||/||r_0|| = " << norm / norm0;
         }
@@ -192,7 +192,7 @@ int main( int argc, char* argv[] )
     plugin::Memorize mm( mesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
-    intg->setNonlinear( false );
+    intg->setNonlinear( true );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
@@ -215,16 +215,18 @@ int main( int argc, char* argv[] )
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-7 );
     newton_solver->SetAbsTol( 1e-16 );
-    newton_solver->SetMaxIter( 16 );
+    newton_solver->SetMaxIter( 10 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( .01 );
+    newton_solver->SetDelta( .001 );
     newton_solver->SetPhi( 1 );
     newton_solver->SetMaxDelta( 10 );
     newton_solver->SetMinDelta( 1e-12 );
     newton_solver->SetMaxStep( 200000 );
+    newton_solver->SetCheckConvRatio( true );
+    newton_solver->SetRelaxFactor( .5 );
 
     nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialADCZMIntegrator( mm, 324E5, 755.4E5, 4E-4, 4E-4 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialRotADCZMIntegrator( mm, 324E5, 755.4E5, 4E-4, 4E-4 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;
@@ -240,22 +242,43 @@ int main( int argc, char* argv[] )
     {
         Vector pull_force( mesh->bdr_attributes.Max() );
         pull_force = 0.0;
-        pull_force( 11 ) = 1e7;
+        pull_force( 11 ) = 1e8;
         f.Set( dim - 1, new PWConstCoefficient( pull_force ) );
     }
 
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
 
     // 15. Save data in the ParaView format
-    // ParaViewDataCollection paraview_dc( "czm2D", mesh );
-    // paraview_dc.SetPrefixPath( "ParaView" );
-    // paraview_dc.SetLevelsOfDetail( order );
-    // paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    // paraview_dc.SetHighOrderOutput( true );
-    // paraview_dc.RegisterField( "Displace", &u );
-    // newton_solver->SetDataCollection( &paraview_dc );
-    // paraview_dc.Save();
+    ParaViewDataCollection paraview_dc( "czm2D", mesh );
+    paraview_dc.SetPrefixPath( "ParaView" );
+    paraview_dc.SetLevelsOfDetail( order );
+    paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    paraview_dc.SetHighOrderOutput( true );
+    paraview_dc.RegisterField( "Displace", &u );
 
+    auto stress_fec = new DG_FECollection( order, dim, mfem::BasisType::GaussLobatto );
+
+    auto stress_fespace = new FiniteElementSpace( mesh, stress_fec, 7 );
+    GridFunction stress_grid( stress_fespace );
+    plugin::StressCoefficient sc( dim, iem );
+    sc.SetDisplacement( u );
+    paraview_dc.RegisterField( "Stress", &stress_grid );
+    stress_grid.ProjectCoefficient( sc );
+    paraview_dc.Save();
+
+    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc]( int step, int count, double time )
+    {
+        if ( step % 5 == 0 )
+        {
+            mfem::out << "Write to Paraview.\n";
+            paraview_dc.SetCycle( count );
+            paraview_dc.SetTime( count );
+            stress_grid.ProjectCoefficient( sc );
+            paraview_dc.Save();
+        }
+    };
+
+    newton_solver->SetDataCollectionFunc( func );
     newton_solver->Mult( zero, u );
 
     return 0;
