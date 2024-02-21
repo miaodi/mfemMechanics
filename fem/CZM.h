@@ -17,26 +17,19 @@ class Memorize;
 class CZMIntegrator : public mfem::NonlinearFormIntegrator
 {
 public:
-    CZMIntegrator( Memorize& memo ) : mfem::NonlinearFormIntegrator(), mMemo{ memo }
+    CZMIntegrator( Memorize& memo ) : mfem::NonlinearFormIntegrator(), mMemo{memo}
     {
     }
 
     CZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT )
-        : mfem::NonlinearFormIntegrator(), mMemo{ memo }, mSigmaMax{ sigmaMax }, mTauMax{ tauMax }, mDeltaN{ deltaN }, mDeltaT{ deltaT }
+        : mfem::NonlinearFormIntegrator(), mMemo{memo}, mSigmaMax{sigmaMax}, mTauMax{tauMax}, mDeltaN{deltaN}, mDeltaT{deltaT}
     {
         mPhiN = std::exp( 1. ) * mSigmaMax * mDeltaN;
         mPhiT = std::sqrt( std::exp( 1. ) / 2 ) * mTauMax * mDeltaT;
     }
 
     CZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT, const double phiN, const double phiT )
-        : mfem::NonlinearFormIntegrator(),
-          mMemo{ memo },
-          mSigmaMax{ sigmaMax },
-          mTauMax{ tauMax },
-          mDeltaN{ deltaN },
-          mDeltaT{ deltaT },
-          mPhiN{ phiN },
-          mPhiT{ phiT }
+        : mfem::NonlinearFormIntegrator(), mMemo{memo}, mSigmaMax{sigmaMax}, mTauMax{tauMax}, mDeltaN{deltaN}, mDeltaT{deltaT}, mPhiN{phiN}, mPhiT{phiT}
     {
     }
 
@@ -69,35 +62,16 @@ public:
 
 protected:
     Memorize& mMemo;
-    double mSigmaMax{ 0. };
-    double mTauMax{ 0. };
-    double mDeltaN{ 0. };
-    double mDeltaT{ 0. };
-    double mPhiN{ 0. };
-    double mPhiT{ 0. };
+    double mSigmaMax{0.};
+    double mTauMax{0.};
+    double mDeltaN{0.};
+    double mDeltaT{0.};
+    double mPhiN{0.};
+    double mPhiT{0.};
     mfem::Vector shape1, shape2;
 
     Eigen::MatrixXd mB;
     Eigen::VectorXd u;
-};
-
-class ADCZMIntegrator : public CZMIntegrator
-{
-public:
-    ADCZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT, const double phiN, const double phiT )
-        : CZMIntegrator( memo, sigmaMax, tauMax, deltaN, deltaT, phiN, phiT )
-    {
-    }
-
-    virtual void Traction( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::VectorXd& T ) const override;
-
-    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta,
-                                       const mfem::DenseMatrix& Jacobian,
-                                       const int dim,
-                                       Eigen::MatrixXd& H ) const override;
-
-protected:
-    std::function<autodiff::dual2nd( const autodiff::VectorXdual2nd&, const autodiff::VectorXdual2nd& )> potential;
 };
 
 class ExponentialCZMIntegrator : public CZMIntegrator
@@ -120,43 +94,29 @@ protected:
     void DeltaToTNMat( const mfem::DenseMatrix& Jacobian, const int dim, Eigen::MatrixXd& DeltaToTN ) const;
 };
 
+class ADCZMIntegrator : public CZMIntegrator
+{
+public:
+    ADCZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT, const double phiN, const double phiT )
+        : CZMIntegrator( memo, sigmaMax, tauMax, deltaN, deltaT, phiN, phiT )
+    {
+    }
+
+    virtual void Traction( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::VectorXd& T ) const override;
+
+    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta,
+                                       const mfem::DenseMatrix& Jacobian,
+                                       const int dim,
+                                       Eigen::MatrixXd& H ) const override;
+
+protected:
+    std::function<autodiff::dual2nd( const autodiff::VectorXdual2nd&, const autodiff::VectorXdual2nd& )> potential;
+};
+
 class ExponentialADCZMIntegrator : public ADCZMIntegrator
 {
 public:
-    ExponentialADCZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT )
-        : ADCZMIntegrator(
-              memo, sigmaMax, tauMax, deltaN, deltaT, std::exp( 1. ) * sigmaMax * deltaN, std::sqrt( std::exp( 1. ) / 2 ) * tauMax * deltaT )
-    {
-        // x: diffX, diffY
-        // p: deltaT, deltaN, phiT, phiN, dA1x, dA1y, dA2x, dA2y
-        potential = []( const autodiff::VectorXdual2nd& x, const autodiff::VectorXdual2nd& p )
-        {
-            const autodiff::dual2nd& deltaT = p( 0 );
-            const autodiff::dual2nd& deltaN = p( 1 );
-            const autodiff::dual2nd& phiT = p( 2 );
-            const autodiff::dual2nd& phiN = p( 3 );
-
-            Eigen::Map<const autodiff::VectorXdual2nd> dA1( p.data() + 4, 2 );
-            Eigen::Map<const autodiff::VectorXdual2nd> dA2( p.data() + 6, 2 );
-            const autodiff::dual2nd q = phiT / phiN;
-            const autodiff::dual2nd r = 0.;
-
-            autodiff::VectorXdual2nd directionT = dA1;
-            directionT.normalize();
-
-            static Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
-            autodiff::VectorXdual2nd directionN = rot.toRotationMatrix() * directionT;
-            const autodiff::dual2nd DeltaT = directionT.dot( x );
-            const autodiff::dual2nd DeltaN = directionN.dot( x );
-
-            autodiff::dual2nd res = phiN + phiN * autodiff::detail::exp( -DeltaN / deltaN ) *
-                                               ( ( autodiff::dual2nd( 1. ) - r + DeltaN / deltaN ) *
-                                                     ( autodiff::dual2nd( 1. ) - q ) / ( r - autodiff::dual2nd( 1. ) ) -
-                                                 ( q + ( r - q ) / ( r - autodiff::dual2nd( 1. ) ) * DeltaN / deltaN ) *
-                                                     autodiff::detail::exp( -DeltaT * DeltaT / deltaT / deltaT ) );
-            return res;
-        };
-    }
+    ExponentialADCZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT );
 
     // virtual void matrixB( const int dof1,
     //                       const int dof2,
@@ -170,46 +130,7 @@ public:
 class ExponentialRotADCZMIntegrator : public ADCZMIntegrator
 {
 public:
-    ExponentialRotADCZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT )
-        : ADCZMIntegrator(
-              memo, sigmaMax, tauMax, deltaN, deltaT, std::exp( 1. ) * sigmaMax * deltaN, std::sqrt( std::exp( 1. ) / 2 ) * tauMax * deltaT )
-    {
-        // x: u1x, u1y, u2x, u2y, du1x, du1y, du2x, du2y
-        // p: deltaT, deltaN, phiT, phiN, dA1x, dA1y, dA2x, dA2y
-        potential = []( const autodiff::VectorXdual2nd& x, const autodiff::VectorXdual2nd& p )
-        {
-            Eigen::Map<const autodiff::VectorXdual2nd> U1( x.data(), 2 );
-            Eigen::Map<const autodiff::VectorXdual2nd> U2( x.data() + 2, 2 );
-            Eigen::Map<const autodiff::VectorXdual2nd> dU1( x.data() + 4, 2 );
-            Eigen::Map<const autodiff::VectorXdual2nd> dU2( x.data() + 6, 2 );
-
-            const autodiff::dual2nd& deltaT = p( 0 );
-            const autodiff::dual2nd& deltaN = p( 1 );
-            const autodiff::dual2nd& phiT = p( 2 );
-            const autodiff::dual2nd& phiN = p( 3 );
-
-            Eigen::Map<const autodiff::VectorXdual2nd> dA1( p.data() + 4, 2 );
-            Eigen::Map<const autodiff::VectorXdual2nd> dA2( p.data() + 6, 2 );
-            const autodiff::dual2nd q = phiT / phiN;
-            const autodiff::dual2nd r = 0.;
-
-            autodiff::VectorXdual2nd diff = U1 - U2;
-            autodiff::VectorXdual2nd directionT = dA1 + dA2 + dU1 + dU2;
-            directionT.normalize();
-
-            static Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
-            autodiff::VectorXdual2nd directionN = rot.toRotationMatrix() * directionT;
-            const autodiff::dual2nd DeltaT = directionT.dot( diff );
-            const autodiff::dual2nd DeltaN = directionN.dot( diff );
-
-            autodiff::dual2nd res = phiN + phiN * autodiff::detail::exp( -DeltaN / deltaN ) *
-                                               ( ( autodiff::dual2nd( 1. ) - r + DeltaN / deltaN ) *
-                                                     ( autodiff::dual2nd( 1. ) - q ) / ( r - autodiff::dual2nd( 1. ) ) -
-                                                 ( q + ( r - q ) / ( r - autodiff::dual2nd( 1. ) ) * DeltaN / deltaN ) *
-                                                     autodiff::detail::exp( -DeltaT * DeltaT / deltaT / deltaT ) );
-            return res;
-        };
-    }
+    ExponentialRotADCZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT );
 
     virtual void matrixB( const int dof1,
                           const int dof2,
@@ -397,7 +318,7 @@ public:
     virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::MatrixXd& H ) const;
 
 protected:
-    double mDeltaNMax{ 0. };
-    double mDeltaTMax{ 0. };
+    double mDeltaNMax{0.};
+    double mDeltaTMax{0.};
 };
 } // namespace plugin
