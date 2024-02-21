@@ -140,6 +140,10 @@ public:
     {
         check_conv_ratio = check;
     }
+    void SetAdaptiveL( const bool adapt )
+    {
+        adaptive_l = adapt;
+    }
 
     void SetRelaxFactor( const double relax )
     {
@@ -158,6 +162,7 @@ protected:
     int max_steps{ 100 };
 
     bool check_conv_ratio{ false };
+    bool adaptive_l{ false };
     mutable std::function<void( int, int, double )>* data_collect_func{ nullptr };
     mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{ nullptr };
     double relaxation_factor{ 1.0 };

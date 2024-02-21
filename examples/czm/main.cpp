@@ -3,6 +3,8 @@
 #include "mfem.hpp"
 #include <fstream>
 #include <iostream>
+#include <omp.h>
+
 
 using namespace std;
 using namespace mfem;
@@ -34,7 +36,7 @@ void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector&
     if ( print_level == 1 || ( print_level == 3 && ( final || it == 0 ) ) )
     {
         mfem::out << prefix << " iteration " << setw( 2 ) << it << " : ||r|| = " << norm;
-        if ( it > 0 )
+        if ( it > 1 )
         {
             mfem::out << ",  ||r||/||r_0|| = " << norm / norm0;
         }
@@ -187,7 +189,7 @@ int main( int argc, char* argv[] )
     plugin::Memorize mm( mesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
-    intg->setNonlinear( false );
+    intg->setNonlinear( true );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
@@ -198,9 +200,10 @@ int main( int argc, char* argv[] )
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
 
     // Set up the Jacobian solver
+    omp_set_num_threads( 10 );
     auto j_gmres = new UMFPackSolver();
 
-    auto newton_solver = new plugin::ArcLengthLinearize();
+    auto newton_solver = new plugin::Crisfield();
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -210,20 +213,21 @@ int main( int argc, char* argv[] )
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-7 );
     newton_solver->SetAbsTol( 1e-14 );
-    newton_solver->SetMaxIter( 13 );
+    newton_solver->SetMaxIter( 8 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( .0001 );
-    newton_solver->SetPhi( 0 );
-    newton_solver->SetMaxDelta( 1e-2 );
+    newton_solver->SetDelta( .001 );
+    newton_solver->SetPhi( 1 );
+    newton_solver->SetMaxDelta( 1e-3 );
     newton_solver->SetMinDelta( 1e-14 );
     newton_solver->SetMaxStep( 10000 );
+    newton_solver->SetAdaptiveL( true );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
     auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 1E-5, 1E-5 );
     nlf->AddInteriorFaceIntegrator( czm_intg );
-    mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
-    czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SQUARE, -1 ) );
-    // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
+    // mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
+    // czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SQUARE, -1 ) );
+    // nlf->AddInteriorFaceIntegrator( new plugin::ExponentialCZMIntegrator( mm, 324E5, 755.4E5, 4E-4, 4E-4 ) );
 
     Vector zero;
 
@@ -255,12 +259,12 @@ int main( int argc, char* argv[] )
 
     auto stress_fec = new H1_FECollection( order, dim );
 
-    GridFunction ue( fespace );
-    ue = 0.;
+    // GridFunction ue( fespace );
+    // ue = 0.;
     auto stress_fespace = new FiniteElementSpace( mesh, stress_fec, 7 );
     GridFunction stress_grid( stress_fespace );
     plugin::StressCoefficient sc( dim, iem );
-    sc.SetDisplacement( ue );
+    sc.SetDisplacement( u );
     paraview_dc.RegisterField( "Stress", &stress_grid );
     stress_grid.ProjectCoefficient( sc );
     paraview_dc.Save();
@@ -281,27 +285,27 @@ int main( int argc, char* argv[] )
     refiner.SetCriticalVM( 1e7 );
     refiner.SetCriticalH( 1e-2 );
 
-    std::function<bool( const Vector& )> func2 =
-        [&ue, mesh, &refiner, fespace, &u, nlf, &mm, stress_fespace, &stress_grid]( const Vector& du )
-    {
-        add( u, du, ue );
-        refiner.Apply( *mesh );
-        if ( refiner.Stop() )
-        {
-            return true;
-        }
-        fespace->Update();
-        stress_fespace->Update();
-        u.Update();
-        nlf->Update();
-        ue.Update();
-        stress_grid.Update();
-        mm.Reset( mesh );
-        return false;
-    };
+    // std::function<bool( const Vector& )> func2 =
+    //     [&ue, mesh, &refiner, fespace, &u, nlf, &mm, stress_fespace, &stress_grid]( const Vector& du )
+    // {
+    //     add( u, du, ue );
+    //     refiner.Apply( *mesh );
+    //     if ( refiner.Stop() )
+    //     {
+    //         return true;
+    //     }
+    //     fespace->Update();
+    //     stress_fespace->Update();
+    //     u.Update();
+    //     nlf->Update();
+    //     ue.Update();
+    //     stress_grid.Update();
+    //     mm.Reset( mesh );
+    //     return false;
+    // };
 
     newton_solver->SetDataCollectionFunc( func );
-    newton_solver->SetAMRFunc( func2 );
+    // newton_solver->SetAMRFunc( func2 );
     newton_solver->Mult( zero, u );
 
     return 0;

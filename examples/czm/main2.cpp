@@ -3,6 +3,7 @@
 #include "mfem.hpp"
 #include <fstream>
 #include <iostream>
+#include <omp.h>
 
 using namespace std;
 using namespace mfem;
@@ -201,11 +202,11 @@ int main( int argc, char* argv[] )
 
     GeneralResidualMonitor newton_monitor( "Newton", 1 );
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
-
+    omp_set_num_threads( 10 );
     // Set up the Jacobian solver
     auto j_gmres = new UMFPackSolver();
 
-    auto newton_solver = new plugin::ArcLengthLinearize();
+    auto newton_solver = new plugin::Crisfield();
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -222,7 +223,7 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxDelta( 10 );
     newton_solver->SetMinDelta( 1e-12 );
     newton_solver->SetMaxStep( 200000 );
-    newton_solver->SetCheckConvRatio( true );
+    // newton_solver->SetCheckConvRatio( true );
     newton_solver->SetRelaxFactor( .5 );
 
     nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );

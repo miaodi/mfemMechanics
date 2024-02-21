@@ -308,7 +308,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
         MFEM_VERIFY( L > min_delta, "Required step size is smaller than the minimal bound." );
 
-        if ( step )
+        if ( step && adaptive_l )
             phi = std::abs( Delta_u_prev.Norml2() / Delta_lambda_prev );
 
         util::mfemOut( "L: ", L, ", phi: ", phi, "\n", util::Color::RESET );
@@ -341,7 +341,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 // convergence check
                 normPrevPrev = normPrev;
                 normPrev = norm;
-                norm = r.Norml2();
+                norm = delta_u.Norml2();
                 if ( it == 1 )
                 {
                     norm_goal = std::max( rel_tol * norm, abs_tol );
@@ -501,6 +501,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
 
     if ( func( ds ) < 0 )
     {
+        return false;
         util::mfemOut( util::Color::YELLOW, "Complex root detected, adaptive step size (ds) is activated!\n", util::Color::RESET );
         const double det = bs * bs - 4 * as * cs;
         if ( det < 0 )
@@ -597,7 +598,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
 
 bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const
 {
-    const double frac = 1.;
+    const double frac = .2;
     const double tol = 1e-8;
     if ( it == 0 )
     {
