@@ -23,8 +23,7 @@ double NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, const mfem
     const bool have_b = ( b.Size() == Height() );
     double sL, sR, s;
     double etaL = 0., etaR = 1., eta = 1., ratio = 1.;
-    auto CalcS = [&b, &x, have_b, this]( const double eta )
-    {
+    auto CalcS = [&b, &x, have_b, this]( const double eta ) {
         add( x, -eta, c, this->u_cur );
         this->oper->Mult( this->u_cur, this->r );
         if ( have_b )
@@ -268,7 +267,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     //     petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
     // }
     int step = 0;
-    double norm{ 0 }, norm_goal{ 0 }, normPrev{ 0 }, normPrevPrev{ 0 };
+    double norm{0}, norm_goal{0}, normPrev{0}, normPrevPrev{0};
     const bool have_b = ( b.Size() == Height() );
     lambda = 0.;
 
@@ -298,7 +297,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         // initialize
         if ( converged == false )
         {
-            L /= goldenRatio;
+            L /= 10;
         }
         else if ( step )
         {
@@ -330,7 +329,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
 
             add( *u, Delta_u, u_cur );
-            delta_lambda_prev = delta_lambda;//needed for relaxation
+            delta_lambda_prev = delta_lambda; // needed for relaxation
 
             // compute r
             SetLambdaToIntegrators( oper, lambda + Delta_lambda );
@@ -361,7 +360,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
                 // filter out slow convergence case
                 if ( check_conv_ratio && it >= std::max( 3, max_iter * 2 / 3 ) &&
-                     util::ConvergenceRate( norm, normPrev, normPrevPrev ) < 1.2 )
+                     util::ConvergenceRate( norm, normPrev, normPrevPrev ) < .8 )
                 {
                     mfem::out << "Convergence rate " << util::ConvergenceRate( norm, normPrev, normPrevPrev ) << " is too small!\n";
                     converged = false;
@@ -372,7 +371,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             // compute q
             SetLambdaToIntegrators( oper, .0001 + lambda + Delta_lambda );
             oper->Mult( u_cur, q );
-
 
             q -= r;
             q.Neg();
@@ -491,7 +489,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
     const double c2 = delta_u_bar_dot_delta_u_bar;
 
     double ds = 1.;
-    double delta_lambda1{ 0. }, delta_lambda2{ 0. };
+    double delta_lambda1{0.}, delta_lambda2{0.};
 
     const double as = b1 * b1 - 4 * a0 * c2;
     const double bs = 2 * b0 * b1 - 4 * a0 * c1;
@@ -598,7 +596,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
 
 bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const
 {
-    const double frac = .2;
+    const double frac = 1;
     const double tol = 1e-8;
     if ( it == 0 )
     {
@@ -607,8 +605,8 @@ bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem
         {
             delta_u = delta_u_t;
             const double L_pred = InnerProduct( delta_u, 1, delta_u, 1 );
-            delta_u *= frac / L_pred;
-            delta_lambda = frac / L_pred;
+            delta_u *= frac * L / L_pred;
+            delta_lambda = frac * L / L_pred;
         }
         else
         {

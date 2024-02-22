@@ -29,6 +29,8 @@ void StressCoefficient::Eval( mfem::Vector& V, mfem::ElementTransformation& T, c
     V( 3 ) = vector( 3 );
     V( 4 ) = vector( 4 );
     V( 5 ) = vector( 5 );
-    V( 6 ) = std::sqrt( 3. / 2 * vector.dot( vector ) );
+    V( 6 ) = std::sqrt( 1. / 2 *
+                        ( std::pow( V( 0 ) - V( 1 ), 2 ) + std::pow( V( 1 ) - V( 2 ), 2 ) + std::pow( V( 2 ) - V( 0 ), 2 ) +
+                          6 * ( std::pow( V( 3 ), 2 ), std::pow( V( 4 ), 2 ), std::pow( V( 5 ), 2 ) ) ) ); // Von mises srtess
 }
 } // namespace plugin

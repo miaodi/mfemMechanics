@@ -1,5 +1,6 @@
 /build
 /debug
+/build-*
 /release
 /.vscode
 .DS_Store

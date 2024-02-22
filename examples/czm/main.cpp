@@ -104,7 +104,7 @@ int main( int argc, char* argv[] )
             {
                 const int vi = eles[i]->GetVertices()[j];
                 node = mesh->GetVertex( vi );
-                if ( node[1] > -0.00000001 && node[1] < 0.0008 && node[0] > -0.00000001 && node[0] < .0006 )
+                if ( node[1] > -0.00001 && node[1] < 0.0008 && node[0] > -0.00001 && node[0] < .0006 )
                 {
                     refinements.Append( i );
                     break;
@@ -200,10 +200,10 @@ int main( int argc, char* argv[] )
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
 
     // Set up the Jacobian solver
-    omp_set_num_threads( 10 );
+    omp_set_num_threads( 12 );
     auto j_gmres = new UMFPackSolver();
 
-    auto newton_solver = new plugin::Crisfield();
+    auto newton_solver = new plugin::ArcLengthLinearize();
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -211,19 +211,21 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-7 );
-    newton_solver->SetAbsTol( 1e-14 );
-    newton_solver->SetMaxIter( 8 );
+    newton_solver->SetRelTol( 1e-8 );
+    newton_solver->SetAbsTol( 0 );
+    newton_solver->SetMaxIter( 20 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( .001 );
+    newton_solver->SetDelta( 1e-8 );
     newton_solver->SetPhi( 1 );
-    newton_solver->SetMaxDelta( 1e-3 );
+    newton_solver->SetMaxDelta( 1e-1 );
     newton_solver->SetMinDelta( 1e-14 );
-    newton_solver->SetMaxStep( 10000 );
+    newton_solver->SetMaxStep( 1000 );
     newton_solver->SetAdaptiveL( true );
+    // newton_solver->SetCheckConvRatio( true );
+    // newton_solver->SetRelaxFactor( .5 );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
-    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 1E-5, 1E-5 );
+    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E5, 755.4E5, 1E-4, 1E-4 );
     nlf->AddInteriorFaceIntegrator( czm_intg );
     // mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
     // czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SQUARE, -1 ) );
@@ -281,9 +283,9 @@ int main( int argc, char* argv[] )
     };
 
     // adaptive refinement
-    plugin::CriticalVMRefiner refiner( sc );
-    refiner.SetCriticalVM( 1e7 );
-    refiner.SetCriticalH( 1e-2 );
+    // plugin::CriticalVMRefiner refiner( sc );
+    // refiner.SetCriticalVM( 1e7 );
+    // refiner.SetCriticalH( 1e-2 );
 
     // std::function<bool( const Vector& )> func2 =
     //     [&ue, mesh, &refiner, fespace, &u, nlf, &mm, stress_fespace, &stress_grid]( const Vector& du )
