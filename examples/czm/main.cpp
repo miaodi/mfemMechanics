@@ -212,23 +212,23 @@ int main( int argc, char* argv[] )
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-8 );
     newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 20 );
+    newton_solver->SetMaxIter( 12 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( 1e-8 );
     newton_solver->SetPhi( 1 );
     newton_solver->SetMaxDelta( 1e-1 );
     newton_solver->SetMinDelta( 1e-14 );
-    newton_solver->SetMaxStep( 10 );
+    newton_solver->SetMaxStep( 10000 );
     newton_solver->SetAdaptiveL( true );
     // newton_solver->SetCheckConvRatio( true );
     // newton_solver->SetRelaxFactor( .5 );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
-    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E5, 755.4E5, 1E-4, 1E-4 );
+    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 1E-4, 1E-4 );
     nlf->AddInteriorFaceIntegrator( czm_intg );
     czm_intg->SetIterAux( newton_solver );
     // mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
-    // czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SQUARE, -1 ) );
+    // czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::ExponentialCZMIntegrator( mm, 324E5, 755.4E5, 4E-4, 4E-4 ) );
 
     Vector zero;
@@ -273,7 +273,7 @@ int main( int argc, char* argv[] )
 
     std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc]( int step, int count, double time )
     {
-        if ( step % 2 == 0 )
+        if ( step % 10 == 0 )
         {
             paraview_dc.SetCycle( count );
             paraview_dc.SetTime( count );
