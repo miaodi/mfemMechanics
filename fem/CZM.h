@@ -3,7 +3,7 @@
 #include <Eigen/Dense>
 #include <mfem.hpp>
 
-// autodiff include
+#include "FEMPlugin.h"
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/dual/eigen.hpp>
 #include <autodiff/forward/real.hpp>
@@ -14,22 +14,10 @@ namespace plugin
 {
 class Memorize;
 
-class CZMIntegrator : public mfem::NonlinearFormIntegrator
+class CZMIntegrator : public NonlinearFormIntegratorLambda
 {
 public:
-    CZMIntegrator( Memorize& memo ) : mfem::NonlinearFormIntegrator(), mMemo{memo}
-    {
-    }
-
-    CZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT )
-        : mfem::NonlinearFormIntegrator(), mMemo{memo}, mSigmaMax{sigmaMax}, mTauMax{tauMax}, mDeltaN{deltaN}, mDeltaT{deltaT}
-    {
-        mPhiN = std::exp( 1. ) * mSigmaMax * mDeltaN;
-        mPhiT = std::sqrt( std::exp( 1. ) / 2 ) * mTauMax * mDeltaT;
-    }
-
-    CZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT, const double phiN, const double phiT )
-        : mfem::NonlinearFormIntegrator(), mMemo{memo}, mSigmaMax{sigmaMax}, mTauMax{tauMax}, mDeltaN{deltaN}, mDeltaT{deltaT}, mPhiN{phiN}, mPhiT{phiT}
+    CZMIntegrator( Memorize& memo ) : NonlinearFormIntegratorLambda(), mMemo{ memo }
     {
     }
 
@@ -60,26 +48,64 @@ public:
                                        const int dim,
                                        Eigen::MatrixXd& H ) const = 0;
 
+    virtual void UpdateMemo( const int ind )
+    {
+    }
+
 protected:
     Memorize& mMemo;
-    double mSigmaMax{0.};
-    double mTauMax{0.};
-    double mDeltaN{0.};
-    double mDeltaT{0.};
-    double mPhiN{0.};
-    double mPhiT{0.};
     mfem::Vector shape1, shape2;
 
     Eigen::MatrixXd mB;
     Eigen::VectorXd u;
 };
 
+class LinearCZMIntegrator : public CZMIntegrator
+{
+public:
+    LinearCZMIntegrator( Memorize& memo ) : CZMIntegrator( memo )
+    {
+    }
+
+    LinearCZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT, const double phiN, const double phiT )
+        : CZMIntegrator( memo )
+    {
+        mPhiN = std::exp( 1. ) * sigmaMax * deltaN;
+        mPhiT = std::sqrt( std::exp( 1. ) / 2 ) * tauMax * deltaT;
+        mDeltaNMax = 2 * phiN / sigmaMax;
+        mDeltaTMax = 2 * phiT / tauMax;
+        mDeltaN = deltaN;
+        mDeltaT = deltaT;
+        mSigmaMax = sigmaMax;
+        mTauMax = tauMax;
+    }
+
+    virtual void Traction( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::VectorXd& T ) const;
+
+    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::MatrixXd& H ) const;
+
+protected:
+    double mDeltaNMax{ 0. };
+    double mDeltaTMax{ 0. };
+    double mPhiN{ 0. };
+    double mPhiT{ 0. };
+    double mDeltaN{ 0. };
+    double mDeltaT{ 0. };
+    double mSigmaMax{ 0. };
+    double mTauMax{ 0. };
+};
+
 class ExponentialCZMIntegrator : public CZMIntegrator
 {
 public:
     ExponentialCZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT )
-        : CZMIntegrator(
-              memo, sigmaMax, tauMax, deltaN, deltaT, std::exp( 1. ) * sigmaMax * deltaN, std::sqrt( std::exp( 1. ) / 2 ) * tauMax * deltaT )
+        : CZMIntegrator( memo ),
+          mSigmaMax{ sigmaMax },
+          mTauMax{ tauMax },
+          mDeltaN{ deltaN },
+          mDeltaT{ deltaT },
+          mPhiN{ std::exp( 1. ) * sigmaMax * deltaN },
+          mPhiT{ std::sqrt( std::exp( 1. ) / 2 ) * tauMax * deltaT }
     {
     }
 
@@ -92,13 +118,19 @@ public:
 
 protected:
     void DeltaToTNMat( const mfem::DenseMatrix& Jacobian, const int dim, Eigen::MatrixXd& DeltaToTN ) const;
+
+    double mSigmaMax{ 0. };
+    double mTauMax{ 0. };
+    double mDeltaN{ 0. };
+    double mDeltaT{ 0. };
+    double mPhiN{ 0. };
+    double mPhiT{ 0. };
 };
 
 class ADCZMIntegrator : public CZMIntegrator
 {
 public:
-    ADCZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT, const double phiN, const double phiT )
-        : CZMIntegrator( memo, sigmaMax, tauMax, deltaN, deltaT, phiN, phiT )
+    ADCZMIntegrator( Memorize& memo ) : CZMIntegrator( memo )
     {
     }
 
@@ -108,6 +140,8 @@ public:
                                        const mfem::DenseMatrix& Jacobian,
                                        const int dim,
                                        Eigen::MatrixXd& H ) const override;
+
+    virtual autodiff::VectorXdual2nd Parameters( const mfem::DenseMatrix& Jacobian ) const = 0;
 
 protected:
     std::function<autodiff::dual2nd( const autodiff::VectorXdual2nd&, const autodiff::VectorXdual2nd& )> potential;
@@ -125,9 +159,31 @@ public:
     //                       const mfem::DenseMatrix& gshape1,
     //                       const mfem::DenseMatrix& gshape2,
     //                       const int dim );
+
+    virtual autodiff::VectorXdual2nd Parameters( const mfem::DenseMatrix& Jacobian ) const override;
+
+protected:
+    double mSigmaMax{ 0. };
+    double mTauMax{ 0. };
+    double mDeltaN{ 0. };
+    double mDeltaT{ 0. };
+    double mPhiN{ 0. };
+    double mPhiT{ 0. };
 };
 
-class ExponentialRotADCZMIntegrator : public ADCZMIntegrator
+class OrtizIrreversibleADCZMIntegrator : public ADCZMIntegrator
+{
+public:
+    OrtizIrreversibleADCZMIntegrator( Memorize& memo );
+    virtual void UpdateMemo( const int ind ) override;
+
+protected:
+    double mBeta{ .2 };
+    double mDeltaC{ 0. };
+    double mSgimaC{ 0. };
+};
+
+class ExponentialRotADCZMIntegrator : public ExponentialADCZMIntegrator
 {
 public:
     ExponentialRotADCZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT );
@@ -140,6 +196,12 @@ public:
                           const mfem::DenseMatrix& gshape2,
                           const int dim );
 };
+
+// class OrtizIrreversible : public ExponentialRotADCZMIntegrator
+// {
+// public:
+//     OrtizIrreversible( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT );
+// };
 
 // class CZMIntegrator : public mfem::NonlinearFormIntegrator
 // {
@@ -298,27 +360,4 @@ public:
 //     Eigen::MatrixXd mB;
 //     Eigen::VectorXd u;
 // };
-
-class LinearCZMIntegrator : public CZMIntegrator
-{
-public:
-    LinearCZMIntegrator( Memorize& memo ) : CZMIntegrator( memo )
-    {
-    }
-
-    LinearCZMIntegrator( Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT, const double phiN, const double phiT )
-        : CZMIntegrator( memo, sigmaMax, tauMax, deltaN, deltaT, phiN, phiT )
-    {
-        mDeltaNMax = 2 * phiN / sigmaMax;
-        mDeltaTMax = 2 * phiT / tauMax;
-    }
-
-    virtual void Traction( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::VectorXd& T ) const;
-
-    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::MatrixXd& H ) const;
-
-protected:
-    double mDeltaNMax{0.};
-    double mDeltaTMax{0.};
-};
 } // namespace plugin

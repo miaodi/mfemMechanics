@@ -66,7 +66,7 @@ add_subdirectory(material)
 add_subdirectory(fem)
 
 set (INCLUDE_DIRS ${MFEM_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR})
-set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX autodiff::autodiff)
+set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX autodiff::autodiff Eigen3::Eigen)
 
 add_subdirectory(examples)
 
@@ -122,3 +122,7 @@ target_link_libraries(block PRIVATE ${LIBS})
 add_executable(pblock pblock.cpp)
 target_include_directories(pblock PUBLIC ${INCLUDE_DIRS})
 target_link_libraries(pblock PRIVATE ${LIBS})
+
+
+enable_testing()
+add_subdirectory(tests)

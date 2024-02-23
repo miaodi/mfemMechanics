@@ -786,7 +786,6 @@ void NonlinearCompositeSolidShellIntegrator::matrixB( const int dof, const int d
     }
 }
 
-
 void NonlinearDirichletPenaltyIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
                                                               const mfem::FiniteElement& el2,
                                                               mfem::FaceElementTransformations& Tr,

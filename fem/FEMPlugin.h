@@ -8,6 +8,8 @@
 
 namespace plugin
 {
+class IterAuxilliary;
+
 Eigen::MatrixXd mapper( const int dim, const int dof );
 
 void smallDeformMatrixB( const int, const int, const Eigen::MatrixXd&, Eigen::Matrix<double, 6, Eigen::Dynamic>& );
@@ -25,6 +27,9 @@ struct CZMGaussPointStorage
     mfem::Vector Shape1, Shape2;
     mfem::DenseMatrix GShapeFace1, GShapeFace2;
     mfem::DenseMatrix Jacobian;
+
+    double Lambda{ 0. };    // effective opening displacement            Ortiz and Pandolfi 1999
+    double CurLambda{ 0. }; // current effective opening displacement
 };
 
 class Memorize
@@ -55,6 +60,16 @@ public:
     {
         mEleStorage = std::vector<std::unique_ptr<std::vector<GaussPointStorage>>>( m->GetNE() );
         mFaceStorage = std::vector<std::unique_ptr<std::vector<CZMGaussPointStorage>>>( m->GetNumFaces() );
+    }
+
+    const CZMGaussPointStorage& GetCZMPointStorage( const int gauss ) const
+    {
+        return ( *mFaceStorage[mElementNo] )[gauss];
+    }
+
+    CZMGaussPointStorage& GetCZMPointStorage( const int gauss )
+    {
+        return ( *mFaceStorage[mElementNo] )[gauss];
     }
 
 private:
@@ -102,8 +117,14 @@ public:
     {
     }
 
+    void SetIterAux( IterAuxilliary const* ptr )
+    {
+        mIterAux = ptr;
+    }
+
 protected:
     mutable double mLambda;
+    IterAuxilliary const* mIterAux{ nullptr };
 };
 
 class NonlinearFormMaterialIntegratorLambda : public NonlinearFormIntegratorLambda

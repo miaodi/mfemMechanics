@@ -8,7 +8,23 @@
 
 namespace plugin
 {
-class NewtonLineSearch : public mfem::NewtonSolver
+class IterAuxilliary
+{
+public:
+    IterAuxilliary()
+    {
+    }
+    int IterNumber() const
+    {
+        return it;
+    }
+    virtual bool Convergence() const = 0;
+
+protected:
+    mutable int it = 0;
+};
+
+class NewtonLineSearch : public mfem::NewtonSolver, public IterAuxilliary
 {
 protected:
     mutable mfem::Vector u_cur;
@@ -20,7 +36,7 @@ protected:
     bool line_search{ false };
 
 public:
-    NewtonLineSearch()
+    NewtonLineSearch() : IterAuxilliary()
     {
     }
 
@@ -43,6 +59,11 @@ public:
         return this->max_iter;
     }
 
+    virtual bool Convergence() const
+    {
+        return converged;
+    }
+
 #ifdef MFEM_USE_MPI
     NewtonLineSearch( MPI_Comm comm_ ) : NewtonSolver( comm_ )
     {
@@ -55,8 +76,9 @@ public:
 };
 
 void SetLambdaToIntegrators( const mfem::Operator*, const double l );
+// void UpdateIntegrators( const mfem::Operator* );
 
-class ALMBase : public mfem::IterativeSolver
+class ALMBase : public mfem::IterativeSolver, public IterAuxilliary
 {
 protected:
     double InnerProduct( const mfem::Vector& a, const double la, const mfem::Vector& b, const double lb ) const;
@@ -66,7 +88,7 @@ protected:
     void InitializeVariables( mfem::GridFunction& u ) const;
 
 public:
-    ALMBase()
+    ALMBase() : IterAuxilliary()
     {
         converged = true;
     }
@@ -148,6 +170,11 @@ public:
     void SetRelaxFactor( const double relax )
     {
         relaxation_factor = relax;
+    }
+
+    virtual bool Convergence() const
+    {
+        return converged;
     }
 
 protected:

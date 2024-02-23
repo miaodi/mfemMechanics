@@ -5,7 +5,6 @@
 #include <iostream>
 #include <omp.h>
 
-
 using namespace std;
 using namespace mfem;
 
@@ -219,7 +218,7 @@ int main( int argc, char* argv[] )
     newton_solver->SetPhi( 1 );
     newton_solver->SetMaxDelta( 1e-1 );
     newton_solver->SetMinDelta( 1e-14 );
-    newton_solver->SetMaxStep( 1000 );
+    newton_solver->SetMaxStep( 10 );
     newton_solver->SetAdaptiveL( true );
     // newton_solver->SetCheckConvRatio( true );
     // newton_solver->SetRelaxFactor( .5 );
@@ -227,6 +226,7 @@ int main( int argc, char* argv[] )
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
     auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E5, 755.4E5, 1E-4, 1E-4 );
     nlf->AddInteriorFaceIntegrator( czm_intg );
+    czm_intg->SetIterAux( newton_solver );
     // mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
     // czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SQUARE, -1 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::ExponentialCZMIntegrator( mm, 324E5, 755.4E5, 4E-4, 4E-4 ) );

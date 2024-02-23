@@ -23,7 +23,8 @@ double NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, const mfem
     const bool have_b = ( b.Size() == Height() );
     double sL, sR, s;
     double etaL = 0., etaR = 1., eta = 1., ratio = 1.;
-    auto CalcS = [&b, &x, have_b, this]( const double eta ) {
+    auto CalcS = [&b, &x, have_b, this]( const double eta )
+    {
         add( x, -eta, c, this->u_cur );
         this->oper->Mult( this->u_cur, this->r );
         if ( have_b )
@@ -50,8 +51,8 @@ double NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, const mfem
         sR = CalcS( etaR );
     }
 
-    int it = 0;
-    while ( sL * sR < 0 && ratio > tol && it++ < max_line_search_iter && eta > min_eta )
+    int iter = 0;
+    while ( sL * sR < 0 && ratio > tol && iter++ < max_line_search_iter && eta > min_eta )
     {
         eta = .5 * ( etaL + etaR );
         s = CalcS( eta );
@@ -81,7 +82,6 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
     MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
 
-    int it;
     double norm0, norm, norm_goal;
     const bool have_b = ( b.Size() == Height() );
 
@@ -215,6 +215,39 @@ void SetLambdaToIntegrators( const mfem::Operator* oper, const double l )
     }
 }
 
+// void UpdateIntegrators( const mfem::Operator* oper )
+// {
+//     if ( auto nonlinearform = dynamic_cast<mfem::NonlinearForm*>( const_cast<mfem::Operator*>( oper ) ) )
+//     {
+//         auto bfnfi = nonlinearform->GetBdrFaceIntegrators();
+//         for ( int i = 0; i < bfnfi.Size(); i++ )
+//         {
+//             if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( bfnfi[i] ) )
+//             {
+//                 with_lambda->Update();
+//             }
+//         }
+
+//         auto& dnfi = *nonlinearform->GetDNFI();
+//         for ( int i = 0; i < dnfi.Size(); i++ )
+//         {
+//             if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( dnfi[i] ) )
+//             {
+//                 with_lambda->Update();
+//             }
+//         }
+
+//         const auto& fnfi = nonlinearform->GetInteriorFaceIntegrators();
+//         for ( int i = 0; i < fnfi.Size(); i++ )
+//         {
+//             if ( auto with_lambda = dynamic_cast<const NonlinearFormIntegratorLambda*>( fnfi[i] ) )
+//             {
+//                 with_lambda->Update();
+//             }
+//         }
+//     }
+// }
+
 double ALMBase::InnerProduct( const mfem::Vector& a, const double la, const mfem::Vector& b, const double lb ) const
 {
     return Dot( a, b ) + la * lb * phi;
@@ -249,6 +282,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 {
     MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
     MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
+
     const double goldenRatio = ( 1. + std::sqrt( 5 ) ) / 2;
     mfem::Vector* u;
     if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
@@ -267,7 +301,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     //     petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
     // }
     int step = 0;
-    double norm{0}, norm_goal{0}, normPrev{0}, normPrevPrev{0};
+    double norm{ 0 }, norm_goal{ 0 }, normPrev{ 0 }, normPrevPrev{ 0 };
     const bool have_b = ( b.Size() == Height() );
     lambda = 0.;
 
@@ -317,7 +351,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         delta_lambda = 0.;
         delta_lambda_prev = 0.;
         Delta_lambda = 0.;
-        int it = 0;
+        it = 0;
 
         // mfem::out << std::setprecision( 16 ) << "time: " << lambda << std::endl;
         for ( ; true; it++ )
@@ -421,7 +455,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         }
         // std::exit(0);
         // update
-        if ( converged )
+        if ( GetConverged() )
         {
             if ( Delta_lambda < 0 )
             {
@@ -489,7 +523,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
     const double c2 = delta_u_bar_dot_delta_u_bar;
 
     double ds = 1.;
-    double delta_lambda1{0.}, delta_lambda2{0.};
+    double delta_lambda1{ 0. }, delta_lambda2{ 0. };
 
     const double as = b1 * b1 - 4 * a0 * c2;
     const double bs = 2 * b0 * b1 - 4 * a0 * c1;
@@ -687,7 +721,6 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         {
             cur_lambda += delta_lambda;
             u_cur = *u;
-
             if ( data )
             {
                 if ( step % 5 == 0 )
