@@ -721,19 +721,16 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         {
             cur_lambda += delta_lambda;
             u_cur = *u;
-            if ( data )
+
+            if ( data_collect_func )
             {
-                if ( step % 5 == 0 )
+                if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
                 {
-                    if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
-                    {
-                        par_grid_x->Distribute( *u );
-                    }
-                    data->SetCycle( count );
-                    data->SetTime( count++ );
-                    data->Save();
+                    par_grid_x->Distribute( *u );
                 }
+                ( *data_collect_func )( step, count, count );
             }
+            count++;
         }
         else
         {

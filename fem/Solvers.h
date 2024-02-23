@@ -20,8 +20,15 @@ public:
     }
     virtual bool Convergence() const = 0;
 
+    void SetDataCollectionFunc( std::function<void( int, int, double )>& dcf )
+    {
+        data_collect_func = &dcf;
+    }
+
 protected:
     mutable int it = 0;
+
+    mutable std::function<void( int, int, double )>* data_collect_func{ nullptr };
 };
 
 class NewtonLineSearch : public mfem::NewtonSolver, public IterAuxilliary
@@ -146,11 +153,6 @@ public:
         min_delta = delta;
     }
 
-    void SetDataCollectionFunc( std::function<void( int, int, double )>& dcf )
-    {
-        data_collect_func = &dcf;
-    }
-
     void SetAMRFunc( std::function<bool( const mfem::Vector& )>& f )
     {
         adaptive_mesh_refine_func = &f;
@@ -190,7 +192,6 @@ protected:
 
     bool check_conv_ratio{ false };
     bool adaptive_l{ false };
-    mutable std::function<void( int, int, double )>* data_collect_func{ nullptr };
     mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{ nullptr };
     double relaxation_factor{ 1.0 };
 };
@@ -254,17 +255,11 @@ public:
     virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;
     virtual void SetOperator( const mfem::Operator& op );
 
-    void SetDataCollection( mfem::DataCollection* dc )
-    {
-        data = dc;
-    }
-
 protected:
     int max_steps{ 100 };
     mutable double delta_lambda{ 1. };
     mutable mfem::IterativeSolver* prec{ nullptr };
     mutable mfem::Vector u_cur;
     const mfem::Operator* oper{ nullptr };
-    mutable mfem::DataCollection* data{ nullptr };
 };
 } // namespace plugin
