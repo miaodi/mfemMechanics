@@ -19,22 +19,6 @@ Eigen::Vector6d Voigt( const Eigen::Matrix3d& tensor, const bool isStrain )
     }
 }
 
-Eigen::Matrix3d InverseVoigt( const Eigen::Vector6d& vector, const bool isStrain )
-{
-    if ( isStrain )
-    {
-        return Eigen::Matrix3d{ { vector( 0 ), vector( 3 ) / 2, vector( 5 ) / 2 },
-                                { vector( 3 ) / 2, vector( 1 ), vector( 4 ) / 2 },
-                                { vector( 6 ) / 2, vector( 4 ) / 2, vector( 2 ) } };
-    }
-    else
-    {
-        return Eigen::Matrix3d{ { vector( 0 ), vector( 3 ), vector( 5 ) },
-                                { vector( 3 ), vector( 1 ), vector( 4 ) },
-                                { vector( 5 ), vector( 4 ), vector( 2 ) } };
-    }
-}
-
 short Voigt( const short i, const short pos )
 {
     bool even = pos % 2;
