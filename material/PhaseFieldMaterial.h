@@ -34,6 +34,28 @@ public:
 
     virtual const Eigen::Vector6d& getPK2StressVector() const override;
 
+    void setPhaseField( const double val )
+    {
+        mPhi = val;
+    }
+
+    double getPsiPos() const;
+
+    const double& getGc() const
+    {
+        return mGc;
+    }
+
+    const double& getK() const
+    {
+        return mK;
+    }
+
+    const double& getL0() const
+    {
+        return mL0;
+    }
+
 protected:
     std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::VectorXd& )> StrainEnergyFactory( const StrainEnergyType set ) const;
 
@@ -41,8 +63,10 @@ protected:
     mfem::Coefficient* mE{ nullptr };
     mfem::Coefficient* mNu{ nullptr };
 
+    double mPhi{ 0. };
     double mK{ 0. };    // prevent from 0 elasticity
     double mGc{ 1e-3 }; // Grifﬁth-type critical energy release rate
+    double mL0{ 1e-3 }; // length scale
     StrainEnergyType mSET;
 
     std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::VectorXd& )> mStrainEnergyFunc;

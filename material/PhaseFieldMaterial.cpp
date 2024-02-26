@@ -61,7 +61,7 @@ void PhaseFieldElasticMaterial::updateRefModuli()
     autodiff::VectorXdual g;
 
     mParams[0] = 2;
-    mParams[1] = 1.4; // TODO: fix later
+    mParams[1] = mPhi;
 
     mRefModuli = autodiff::hessian( mStrainEnergyFunc, autodiff::wrt( mStrainVecDual ),
                                     autodiff::at( mStrainVecDual, mParams ), u, g );
@@ -73,9 +73,19 @@ const Eigen::Vector6d& PhaseFieldElasticMaterial::getPK2StressVector() const
     autodiff::dual2nd u;
 
     mParams[0] = 2;
-    mParams[1] = 1.4; // TODO: fix later
+    mParams[1] = mPhi;
 
     mStressVec =
         autodiff::gradient( mStrainEnergyFunc, autodiff::wrt( mStrainVecDual ), autodiff::at( mStrainVecDual, mParams ), u );
     return mStressVec;
+}
+
+double PhaseFieldElasticMaterial::getPsiPos() const
+{
+    getGreenLagrangeStrainVector( mStrainVecDual );
+
+    mParams[0] = 0;
+    mParams[1] = mPhi;
+
+    return autodiff::detail::val( mStrainEnergyFunc( mStrainVecDual, mParams ) );
 }

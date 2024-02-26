@@ -1,6 +1,7 @@
 
 #pragma once
 #include "Material.h"
+#include "util.h"
 #include <Eigen/Dense>
 #include <memory>
 #include <mfem.hpp>
@@ -14,10 +15,13 @@ Eigen::MatrixXd mapper( const int dim, const int dof );
 
 void smallDeformMatrixB( const int, const int, const Eigen::MatrixXd&, Eigen::Matrix<double, 6, Eigen::Dynamic>& );
 
+void largeDeformMatrixB( const int, const int, const Eigen::MatrixXd&, const Eigen::MatrixXd&, Eigen::Matrix<double, 6, Eigen::Dynamic>& );
+
 struct GaussPointStorage
 {
     Eigen::MatrixXd GShape;
     double DetdXdXi;
+    util::AnyMap PointData;
 };
 
 struct CZMGaussPointStorage
@@ -32,6 +36,7 @@ struct CZMGaussPointStorage
     double CurLambda{ 0. }; // current effective opening displacement
 };
 
+// TODO: should rewrite Memorize class so that Initialize can be registered by integrators.
 class Memorize
 {
 public:
@@ -54,6 +59,7 @@ public:
     double GetDetdXdXi( const int gauss ) const;
 
     double GetFaceWeight( const int gauss ) const;
+
     const mfem::DenseMatrix& GetFaceJacobian( const int gauss ) const;
 
     void Reset( mfem::Mesh* m )
@@ -70,6 +76,16 @@ public:
     CZMGaussPointStorage& GetCZMPointStorage( const int gauss )
     {
         return ( *mFaceStorage[mElementNo] )[gauss];
+    }
+
+    const util::AnyMap& GetBodyPointData( const int gauss ) const
+    {
+        return ( *mEleStorage[mElementNo] )[gauss].PointData;
+    }
+
+    util::AnyMap& GetBodyPointData( const int gauss )
+    {
+        return ( *mEleStorage[mElementNo] )[gauss].PointData;
     }
 
 private:
@@ -185,8 +201,6 @@ public:
                                       mfem::ElementTransformation& Ttr,
                                       const mfem::Vector& elfun,
                                       mfem::DenseMatrix& elmat );
-
-    void matrixB( const int dof, const int dim, const Eigen::MatrixXd& gshape );
 
     void setGeomStiff( const bool flg )
     {

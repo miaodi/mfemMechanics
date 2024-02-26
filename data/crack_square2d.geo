@@ -1,13 +1,13 @@
 
-dt = 1e-3;
+dt = 1e-4;
 
-Point(1) = {-5e-3, -5e-3, 0, dt};
-Point(2) = {5e-3, -5e-3, 0, dt};
-Point(3) = {5e-3, 5e-3, 0, dt};
-Point(4) = {-5e-3, 5e-3, 0, dt};
-Point(5) = {-5e-3, 5e-5, 0, dt};
+Point(1) = {-5e-4, -5e-4, 0, dt};
+Point(2) = {5e-4, -5e-4, 0, dt};
+Point(3) = {5e-4, 5e-4, 0, dt};
+Point(4) = {-5e-4, 5e-4, 0, dt};
+Point(5) = {-5e-4, 5e-6, 0, dt};
 Point(6) = {0, 0, 0, dt};
-Point(7) = {-5e-3, -5e-5, 0, dt};
+Point(7) = {-5e-4, -5e-6, 0, dt};
 
 Line(1) = {1, 2};
 Line(2) = {2, 3};

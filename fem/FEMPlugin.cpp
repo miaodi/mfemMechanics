@@ -22,6 +22,8 @@ Eigen::MatrixXd mapper( const int dim, const int dof )
 
 void smallDeformMatrixB( const int dof, const int dim, const Eigen::MatrixXd& gshape, Eigen::Matrix<double, 6, Eigen::Dynamic>& B )
 {
+    B.resize( 6, dof * dim );
+    B.setZero();
     if ( dim == 2 )
     {
         for ( int i = 0; i < dof; i++ )
@@ -56,6 +58,62 @@ void smallDeformMatrixB( const int dof, const int dim, const Eigen::MatrixXd& gs
         MFEM_WARNING( "It is not for 1D analysis." );
     }
 }
+void largeDeformMatrixB( const int dof,
+                         const int dim,
+                         const Eigen::MatrixXd& gshape,
+                         const Eigen::MatrixXd& dxdX,
+                         Eigen::Matrix<double, 6, Eigen::Dynamic>& B )
+{
+    B.resize( 6, dof * dim );
+    B.setZero();
+    if ( dim == 2 )
+    {
+        for ( int i = 0; i < dof; i++ )
+        {
+            B( 0, i + 0 * dof ) = gshape( i, 0 ) * dxdX( 0, 0 );
+            B( 0, i + 1 * dof ) = gshape( i, 0 ) * dxdX( 1, 0 );
+
+            B( 1, i + 0 * dof ) = gshape( i, 1 ) * dxdX( 0, 1 );
+            B( 1, i + 1 * dof ) = gshape( i, 1 ) * dxdX( 1, 1 );
+
+            B( 3, i + 0 * dof ) = gshape( i, 1 ) * dxdX( 0, 0 ) + gshape( i, 0 ) * dxdX( 0, 1 );
+            B( 3, i + 1 * dof ) = gshape( i, 1 ) * dxdX( 1, 0 ) + gshape( i, 0 ) * dxdX( 1, 1 );
+        }
+    }
+    else if ( dim == 3 )
+    {
+        for ( int i = 0; i < dof; i++ )
+        {
+            B( 0, i + 0 * dof ) = gshape( i, 0 ) * dxdX( 0, 0 );
+            B( 0, i + 1 * dof ) = gshape( i, 0 ) * dxdX( 1, 0 );
+            B( 0, i + 2 * dof ) = gshape( i, 0 ) * dxdX( 2, 0 );
+
+            B( 1, i + 0 * dof ) = gshape( i, 1 ) * dxdX( 0, 1 );
+            B( 1, i + 1 * dof ) = gshape( i, 1 ) * dxdX( 1, 1 );
+            B( 1, i + 2 * dof ) = gshape( i, 1 ) * dxdX( 2, 1 );
+
+            B( 2, i + 0 * dof ) = gshape( i, 2 ) * dxdX( 0, 2 );
+            B( 2, i + 1 * dof ) = gshape( i, 2 ) * dxdX( 1, 2 );
+            B( 2, i + 2 * dof ) = gshape( i, 2 ) * dxdX( 2, 2 );
+
+            B( 3, i + 0 * dof ) = gshape( i, 1 ) * dxdX( 0, 0 ) + gshape( i, 0 ) * dxdX( 0, 1 );
+            B( 3, i + 1 * dof ) = gshape( i, 1 ) * dxdX( 1, 0 ) + gshape( i, 0 ) * dxdX( 1, 1 );
+            B( 3, i + 2 * dof ) = gshape( i, 1 ) * dxdX( 2, 0 ) + gshape( i, 0 ) * dxdX( 2, 1 );
+
+            B( 4, i + 0 * dof ) = gshape( i, 2 ) * dxdX( 0, 1 ) + gshape( i, 1 ) * dxdX( 0, 2 );
+            B( 4, i + 1 * dof ) = gshape( i, 2 ) * dxdX( 1, 1 ) + gshape( i, 1 ) * dxdX( 1, 2 );
+            B( 4, i + 2 * dof ) = gshape( i, 2 ) * dxdX( 2, 1 ) + gshape( i, 1 ) * dxdX( 2, 2 );
+
+            B( 5, i + 0 * dof ) = gshape( i, 0 ) * dxdX( 0, 2 ) + gshape( i, 2 ) * dxdX( 0, 0 );
+            B( 5, i + 1 * dof ) = gshape( i, 0 ) * dxdX( 1, 2 ) + gshape( i, 2 ) * dxdX( 1, 0 );
+            B( 5, i + 2 * dof ) = gshape( i, 0 ) * dxdX( 2, 2 ) + gshape( i, 2 ) * dxdX( 2, 0 );
+        }
+    }
+    else
+    {
+        MFEM_WARNING( "It is not for 1D analysis." );
+    }
+}
 
 Memorize::Memorize( mfem::Mesh* m ) : mEleStorage( m->GetNE() ), mFaceStorage( m->GetNumFaces() )
 {
@@ -82,6 +140,10 @@ void Memorize::InitializeElement( const mfem::FiniteElement& el, mfem::ElementTr
         Mult( mDShape1, Trans.InverseJacobian(), mGShape1 );
 
         ( *mEleStorage[mElementNo] )[i].DetdXdXi = Trans.Weight();
+
+        // historical strain energy+ for KKT condition
+        auto& pd = GetBodyPointData( i );
+        pd.set_val<double>( "H", 0. );
     }
 }
 
@@ -259,7 +321,15 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
         mdxdX.setZero();
         mdxdX.block( 0, 0, dim, dim ) = u.transpose() * gShape;
         mdxdX += identity;
-        matrixB( dof, dim, gShape );
+
+        if ( isNonlinear() )
+        {
+            largeDeformMatrixB( dof, dim, gShape, mdxdX, mB );
+        }
+        else
+        {
+            smallDeformMatrixB( dof, dim, gShape, mB );
+        }
 
         mMaterialModel->at( Ttr, ip );
         mMaterialModel->setDeformationGradient( mdxdX );
@@ -311,8 +381,14 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
         mdxdX.setZero();
         mdxdX.block( 0, 0, dim, dim ) = u.transpose() * gShape;
         mdxdX += identity;
-        matrixB( dof, dim, gShape );
-
+        if ( isNonlinear() )
+        {
+            largeDeformMatrixB( dof, dim, gShape, mdxdX, mB );
+        }
+        else
+        {
+            smallDeformMatrixB( dof, dim, gShape, mB );
+        }
         mMaterialModel->at( Ttr, ip );
         mMaterialModel->setDeformationGradient( mdxdX );
         mMaterialModel->updateRefModuli();
@@ -322,66 +398,6 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
     }
     // std::cout<<"Rhs:\n";
     // std::cout<<eigenVec<<std::endl;
-}
-
-void NonlinearElasticityIntegrator::matrixB( const int dof, const int dim, const Eigen::MatrixXd& gshape )
-{
-    mB.resize( 6, dof * dim );
-    mB.setZero();
-    if ( isNonlinear() )
-    {
-        if ( dim == 2 )
-        {
-            for ( int i = 0; i < dof; i++ )
-            {
-                mB( 0, i + 0 * dof ) = gshape( i, 0 ) * mdxdX( 0, 0 );
-                mB( 0, i + 1 * dof ) = gshape( i, 0 ) * mdxdX( 1, 0 );
-
-                mB( 1, i + 0 * dof ) = gshape( i, 1 ) * mdxdX( 0, 1 );
-                mB( 1, i + 1 * dof ) = gshape( i, 1 ) * mdxdX( 1, 1 );
-
-                mB( 3, i + 0 * dof ) = gshape( i, 1 ) * mdxdX( 0, 0 ) + gshape( i, 0 ) * mdxdX( 0, 1 );
-                mB( 3, i + 1 * dof ) = gshape( i, 1 ) * mdxdX( 1, 0 ) + gshape( i, 0 ) * mdxdX( 1, 1 );
-            }
-        }
-        else if ( dim == 3 )
-        {
-            for ( int i = 0; i < dof; i++ )
-            {
-                mB( 0, i + 0 * dof ) = gshape( i, 0 ) * mdxdX( 0, 0 );
-                mB( 0, i + 1 * dof ) = gshape( i, 0 ) * mdxdX( 1, 0 );
-                mB( 0, i + 2 * dof ) = gshape( i, 0 ) * mdxdX( 2, 0 );
-
-                mB( 1, i + 0 * dof ) = gshape( i, 1 ) * mdxdX( 0, 1 );
-                mB( 1, i + 1 * dof ) = gshape( i, 1 ) * mdxdX( 1, 1 );
-                mB( 1, i + 2 * dof ) = gshape( i, 1 ) * mdxdX( 2, 1 );
-
-                mB( 2, i + 0 * dof ) = gshape( i, 2 ) * mdxdX( 0, 2 );
-                mB( 2, i + 1 * dof ) = gshape( i, 2 ) * mdxdX( 1, 2 );
-                mB( 2, i + 2 * dof ) = gshape( i, 2 ) * mdxdX( 2, 2 );
-
-                mB( 3, i + 0 * dof ) = gshape( i, 1 ) * mdxdX( 0, 0 ) + gshape( i, 0 ) * mdxdX( 0, 1 );
-                mB( 3, i + 1 * dof ) = gshape( i, 1 ) * mdxdX( 1, 0 ) + gshape( i, 0 ) * mdxdX( 1, 1 );
-                mB( 3, i + 2 * dof ) = gshape( i, 1 ) * mdxdX( 2, 0 ) + gshape( i, 0 ) * mdxdX( 2, 1 );
-
-                mB( 4, i + 0 * dof ) = gshape( i, 2 ) * mdxdX( 0, 1 ) + gshape( i, 1 ) * mdxdX( 0, 2 );
-                mB( 4, i + 1 * dof ) = gshape( i, 2 ) * mdxdX( 1, 1 ) + gshape( i, 1 ) * mdxdX( 1, 2 );
-                mB( 4, i + 2 * dof ) = gshape( i, 2 ) * mdxdX( 2, 1 ) + gshape( i, 1 ) * mdxdX( 2, 2 );
-
-                mB( 5, i + 0 * dof ) = gshape( i, 0 ) * mdxdX( 0, 2 ) + gshape( i, 2 ) * mdxdX( 0, 0 );
-                mB( 5, i + 1 * dof ) = gshape( i, 0 ) * mdxdX( 1, 2 ) + gshape( i, 2 ) * mdxdX( 1, 0 );
-                mB( 5, i + 2 * dof ) = gshape( i, 0 ) * mdxdX( 2, 2 ) + gshape( i, 2 ) * mdxdX( 2, 0 );
-            }
-        }
-        else
-        {
-            MFEM_WARNING( "It is not for 1D analysis." );
-        }
-    }
-    else
-    {
-        smallDeformMatrixB( dof, dim, gshape, mB );
-    }
 }
 
 void NonlinearVectorBoundaryLFIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,

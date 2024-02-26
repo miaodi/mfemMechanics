@@ -3,10 +3,12 @@
 #include "SymmetricEigensolver3x3.hpp"
 #include "typeDef.h"
 #include <Eigen/Dense>
+#include <any>
 #include <autodiff/forward/real.hpp>
 #include <cmath>
 #include <iostream>
 #include <mfem.hpp>
+#include <optional>
 
 namespace util
 {
@@ -156,5 +158,34 @@ std::tuple<Eigen::Matrix<T, 3, 3>, Eigen::Matrix<T, 3, 3>> StrainSplit( const Ei
             strainPos += eval( i ) * ( evec.col( i ) * evec.col( i ).transpose() );
     }
     return std::tuple<Eigen::Matrix<T, 3, 3>, Eigen::Matrix<T, 3, 3>>{ strainPos, strainNeg };
+};
+
+class AnyMap
+{
+public:
+    template <typename T>
+    std::optional<T> get_val( const std::string& key ) const
+
+    {
+        auto it = _option.find( key );
+
+        if ( it == _option.cend() )
+
+            return {};
+
+        return std::any_cast<T>( it->second );
+    }
+
+    template <typename T>
+    void set_val( const std::string& key, const T& value )
+
+    {
+        _option[key] = value;
+    }
+
+    // void print() const;
+
+protected:
+    std::map<std::string, std::any> _option;
 };
 } // namespace util
