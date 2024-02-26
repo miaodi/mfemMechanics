@@ -1,6 +1,7 @@
 #pragma once
 #include "mfem.hpp"
 #include "typeDef.h"
+#include "util.h"
 #include <Eigen/Dense>
 
 class ElasticMaterial
@@ -10,7 +11,13 @@ public:
 
     virtual Eigen::Matrix3d getGreenLagrangeStrainTensor() const;
 
-    virtual Eigen::Vector6d getGreenLagrangeStrainVector() const;
+    template <typename T>
+    void getGreenLagrangeStrainVector( Eigen::Vector<T, 6>& strainVec ) const
+    {
+        return util::Voigt<double, T>( getGreenLagrangeStrainTensor(), true, strainVec );
+    }
+
+    virtual const Eigen::Vector6d& getGreenLagrangeStrainVector() const;
 
     bool isSamllDeformation() const
     {
@@ -19,7 +26,13 @@ public:
 
     virtual Eigen::Matrix3d getPK2StressTensor() const;
 
-    virtual Eigen::Vector6d getPK2StressVector() const;
+    template <typename T>
+    void getPK2StressVector( Eigen::Vector<T, 6>& stressVec ) const
+    {
+        return util::Voigt<double, T>( getPK2StressTensor(), false, stressVec );
+    }
+
+    virtual const Eigen::Vector6d& getPK2StressVector() const;
 
     Eigen::Matrix3d getCauchyStressTensor() const;
 
@@ -81,6 +94,10 @@ protected:
     double mLambda{ 0 };
     // intrinsic stress
     mfem::VectorCoefficient* mIntrinsicStress{ nullptr };
+
+    // strain cache
+    mutable Eigen::Vector6d mStrainVec;
+    mutable Eigen::Vector6d mStressVec;
 };
 
 class IsotropicElasticMaterial : public ElasticMaterial
@@ -104,7 +121,7 @@ public:
 
     virtual void updateRefModuli() override;
 
-    virtual Eigen::Vector6d getPK2StressVector() const;
+    virtual const Eigen::Vector6d& getPK2StressVector() const;
 
 protected:
     mfem::Coefficient* mE{ nullptr };

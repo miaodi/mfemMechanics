@@ -21,22 +21,35 @@ FetchContent_Declare(
   Eigen
   GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
   GIT_TAG master
+  GIT_SHALLOW TRUE
+  GIT_PROGRESS TRUE
 )
 
 FetchContent_Declare(
   autodiff
   GIT_REPOSITORY https://github.com/autodiff/autodiff.git
   GIT_TAG main
+  GIT_SHALLOW TRUE
+  GIT_PROGRESS TRUE
 )
+
+FetchContent_Declare(
+  taco
+  GIT_REPOSITORY https://github.com/tensor-compiler/taco.git
+  GIT_TAG master
+)
+
 set(BUILD_TESTING OFF)
 set(EIGEN_BUILD_DOC OFF)
 set(EIGEN_BUILD_PKGCONFIG OFF)
+set(EIGEN_BUILD_TESTING OFF)
+set(EIGEN_MPL2_ONLY ON)
 set(AUTODIFF_BUILD_TESTS OFF)
 set(AUTODIFF_BUILD_PYTHON OFF)
 set(AUTODIFF_BUILD_TESTS OFF)
 set(AUTODIFF_BUILD_EXAMPLES OFF)
 
-FetchContent_MakeAvailable(Eigen autodiff)
+FetchContent_MakeAvailable(Eigen autodiff taco)
 
 # FetchContent_Declare(
 #   taco
@@ -53,11 +66,12 @@ else()
     set(MFEM_FOLDER "build-release")
 endif()
 
-
+message("TACO_INCLUDE_DIR: ${TACO_INCLUDE_DIR}")
+message("taco_BINARY_DIR: ${taco_BINARY_DIR}")
 
 # find_path(TACO_INCLUDE_DIR REQUIRED NAMES taco.h HINTS ${CMAKE_BINARY_DIR}/_deps/taco-src/include)
 
-# find_library(TACO_LIB REQUIRED NAMES taco libtaco HINTS ${CMAKE_BINARY_DIR}/lib)
+# find_library(TACO_LIB REQUIRED NAMES taco libtaco HINTS ${CMAKE_BINARY_DIR}/lib/libtaco.so)
 
 find_package(mfem REQUIRED NAMES MFEM  HINTS ${CMAKE_SOURCE_DIR}/../mfem/${MFEM_FOLDER})
 
@@ -65,14 +79,14 @@ add_subdirectory(util)
 add_subdirectory(material)
 add_subdirectory(fem)
 
-set (INCLUDE_DIRS ${MFEM_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR})
-set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX autodiff::autodiff Eigen3::Eigen)
+set (INCLUDE_DIRS ${MFEM_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR} ${TACO_INCLUDE_DIR})
+set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX autodiff::autodiff Eigen3::Eigen ${CMAKE_BINARY_DIR}/lib/libtaco.so)
 
 add_subdirectory(examples)
 
-# add_executable(test test.cpp)
-# target_include_directories(test PUBLIC ${INCLUDE_DIRS} ${fastor_SOURCE_DIR} ${TACO_INCLUDE_DIR})
-# target_link_libraries(test PRIVATE ${LIBS} ${TACO_LIB})
+# add_executable(hello test.cpp)
+# target_include_directories(hello PUBLIC ${INCLUDE_DIRS} ${fastor_SOURCE_DIR} ${TACO_INCLUDE_DIR})
+# target_link_libraries(hello PRIVATE ${LIBS} ${TACO_LIB})
 
 add_executable(test2 test2.cpp)
 target_include_directories(test2 PUBLIC ${INCLUDE_DIRS})

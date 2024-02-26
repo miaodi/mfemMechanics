@@ -139,12 +139,6 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         }
 
         grad = &oper->GetGradient( x );
-        {
-            std::ofstream myfile;
-            myfile.open( "mat1.txt" );
-            grad->PrintMatlab( myfile );
-            myfile.close();
-        }
 
         prec->SetOperator( *grad );
 
@@ -385,19 +379,19 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                     break;
                 }
                 Monitor( it, norm, r, *u );
-
                 if ( norm <= norm_goal )
                 {
-                    converged = true;
-                    break;
-                }
 
                 // filter out slow convergence case
-                if ( check_conv_ratio && it >= std::max( 3, max_iter * 2 / 3 ) &&
-                     util::ConvergenceRate( norm, normPrev, normPrevPrev ) < .8 )
+                if ( check_conv_ratio && it >= std::max( 3, max_iter * 4 / 5 ) &&
+                     util::ConvergenceRate( norm, normPrev, normPrevPrev ) < 1.2 )
                 {
                     mfem::out << "Convergence rate " << util::ConvergenceRate( norm, normPrev, normPrevPrev ) << " is too small!\n";
                     converged = false;
+                    break;
+                }
+
+                    converged = true;
                     break;
                 }
             }
@@ -589,7 +583,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
         delta_lambda2 = ( -1. * b - std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
     }
 
-    util::mfemOut( "delta_lambda1: ", delta_lambda1, ", delta_lambda2: ", delta_lambda2, "\n", util::Color::RESET );
+    // util::mfemOut( "delta_lambda1: ", delta_lambda1, ", delta_lambda2: ", delta_lambda2, "\n", util::Color::RESET );
     if ( it == 0 )
     {
         // predictor
@@ -630,7 +624,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
 
 bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const
 {
-    const double frac = 1;
+    const double frac = .5;
     const double tol = 1e-8;
     if ( it == 0 )
     {
