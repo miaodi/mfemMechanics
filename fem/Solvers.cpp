@@ -26,6 +26,22 @@ void NewtonLineSearch::SetOperator( const mfem::Operator& op )
     // std::cout<<block_trueOffsets[0]<<", "<<block_trueOffsets[1]<<", "<<block_trueOffsets[2]<<std::endl;
 }
 
+int NewtonLineSearch::MyRank() const
+{
+#ifdef MFEM_USE_MPI
+    if ( GetComm() == MPI_COMM_NULL )
+    {
+        return 0;
+    }
+    else
+    {
+        return mfem::Mpi::WorldRank();
+    }
+#else
+    return 0;
+#endif
+}
+
 double NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, const mfem::Vector& b ) const
 {
     // if ( !line_search )
@@ -93,7 +109,8 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
     MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
 
-    double norm0, norm, norm_goal;
+    double norm0_u, norm_u, norm_goal_u;
+    double norm0_p, norm_p, norm_goal_p;
     const bool have_b = ( b.Size() == Height() );
 
     if ( !iterative_mode )
@@ -112,13 +129,8 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         r -= b;
     }
 
-    norm0 = norm = Norm( r );
-    // r_p.Print();
-    if ( print_options.first_and_last && !print_options.iterations )
-    {
-        mfem::out << "Newton iteration " << std::setw( 2 ) << 0 << " : ||r|| = " << norm << "...\n";
-    }
-    norm_goal = std::max( rel_tol * norm, abs_tol );
+    norm0_u = norm_u = Norm( r_u );
+    norm_goal_u = std::max( rel_tol * norm_u, abs_tol );
 
     prec->iterative_mode = false;
 
@@ -126,23 +138,21 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     for ( it = 0; true; it++ )
     {
         // r_u.Print();
-        if ( print_options.iterations )
+        if ( MyRank() == 0 )
         {
-            mfem::out << "Newton iteration " << std::setw( 2 ) << it << " : ||r|| = " << norm;
+            mfem::out << "Newton iteration " << std::setw( 2 ) << it << " : ||r_u|| = " << norm_u;
             if ( it > 0 )
             {
-                mfem::out << ", ||r||/||r_0|| = " << norm / norm0;
+                mfem::out << ", ||r_u||/||r_u_0|| = " << norm_u / norm0_u << ", ||r_p||/||r_p_0|| = " << norm_p / norm0_p << '\n';
             }
-            mfem::out << '\n';
         }
-        Monitor( it, norm, r, x );
 
-        if ( !mfem::IsFinite( norm ) )
+        if ( !mfem::IsFinite( norm_u ) || !mfem::IsFinite( norm_p ) )
         {
             converged = false;
             break;
         }
-        if ( norm <= norm_goal )
+        if ( norm_u <= norm_goal_u && norm_p <= norm_goal_p )
         {
             converged = true;
             break;
@@ -157,8 +167,17 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         prec->SetOperator( static_cast<mfem::BlockOperator&>( blockOper->GetGradient( x ) ).GetBlock( 0, 0 ) );
         prec->Mult( r_u, c_u ); // c = [DF(x_i)]^{-1} [F(x_i)-b]
         add( cur_u, -1., c_u, cur_u );
-        // c_u.Print();
         blockOper->Mult( x, r );
+
+        if ( it == 0 )
+        {
+            norm0_p = norm_p = Norm( r_p );
+            norm_goal_p = std::max( rel_tol * norm_p, abs_tol );
+            if ( MyRank() == 0 )
+                mfem::out << " : ||r_p|| = " << norm_p << "\n";
+        }
+        else
+            norm_p = Norm( r_p );
 
         prec->SetOperator( static_cast<mfem::BlockOperator&>( blockOper->GetGradient( x ) ).GetBlock( 1, 1 ) );
         prec->Mult( r_p, c_p ); // c = [DF(x_i)]^{-1} [F(x_i)-b]
@@ -169,17 +188,12 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         {
             r -= b;
         }
-        norm = Norm( r );
+        norm_u = Norm( r_u );
     }
 
     final_iter = it;
-    final_norm = norm;
 
-    if ( print_options.summary || ( !converged && print_options.warnings ) || print_options.first_and_last )
-    {
-        mfem::out << "Newton: Number of iterations: " << final_iter << '\n' << "   ||r|| = " << final_norm << '\n';
-    }
-    if ( !converged && ( print_options.summary || print_options.warnings ) )
+    if ( !converged && MyRank() == 0 )
     {
         mfem::out << "Newton: No convergence!\n";
     }
@@ -316,16 +330,16 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     //     petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
     // }
     int step = 0;
-    double norm{0}, norm_goal{0}, normPrev{0}, normPrevPrev{0};
+    double norm{ 0 }, norm_goal{ 0 }, normPrev{ 0 }, normPrevPrev{ 0 };
     const bool have_b = ( b.Size() == Height() );
     lambda = 0.;
 
     int count = 1;
 
-    if ( !iterative_mode )
-    {
-        *u = 0.0;
-    }
+    // if ( !iterative_mode )
+    // {
+    //     *u = 0.0;
+    // }
     InitializeVariables( static_cast<mfem::GridFunction&>( x ) );
     Delta_u_prev = 0.;
     Delta_lambda_prev = 0.;
@@ -537,7 +551,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
     const double c2 = delta_u_bar_dot_delta_u_bar;
 
     double ds = 1.;
-    double delta_lambda1{0.}, delta_lambda2{0.};
+    double delta_lambda1{ 0. }, delta_lambda2{ 0. };
 
     const double as = b1 * b1 - 4 * a0 * c2;
     const double bs = 2 * b0 * b1 - 4 * a0 * c1;
@@ -717,9 +731,12 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             if ( !GetConverged() )
                 delta_lambda /= 2;
             else
+            {
                 delta_lambda *= std::pow( .7 * this->max_iter / GetNumIterations(), .6 );
+                delta_lambda = std::min( delta_lambda, max_delta );
+            }
         }
-        // MFEM_VERIFY( delta_lambda > min_delta, "Required step size is smaller than the minimal bound." );
+        MFEM_VERIFY( delta_lambda > min_delta, "Required step size is smaller than the minimal bound." );
 
         util::mfemOut( "L: ", delta_lambda, "\n", util::Color::RESET );
         delta_lambda = std::min( delta_lambda, 1. - cur_lambda );

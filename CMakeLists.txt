@@ -70,14 +70,23 @@ endif()
 
 # find_library(TACO_LIB REQUIRED NAMES taco libtaco HINTS ${CMAKE_BINARY_DIR}/lib/libtaco.so)
 
-find_package(mfem REQUIRED NAMES MFEM  HINTS ${CMAKE_SOURCE_DIR}/../mfem/${MFEM_FOLDER})
+find_package(mfem REQUIRED NAMES MFEM  HINTS ${CMAKE_SOURCE_DIR}/../../mfem/${MFEM_FOLDER})
+
+
+set(TACO_DIR "" CACHE PATH "Path to the taco library.")
+
+add_library(taco SHARED IMPORTED) # or STATIC instead of SHARED
+set_target_properties(taco PROPERTIES
+  IMPORTED_LOCATION "${TACO_DIR}/lib/libtaco.so"
+  INTERFACE_INCLUDE_DIRECTORIES "${TACO_DIR}/include"
+)
 
 add_subdirectory(util)
 add_subdirectory(material)
 add_subdirectory(fem)
 
 set (INCLUDE_DIRS ${MFEM_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR} Eigen3::eigen)
-set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX autodiff::autodiff)
+set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX autodiff::autodiff taco)
 # message("taco_lib: ${CMAKE_BINARY_DIR}/lib/libtaco.so")
 add_subdirectory(examples)
 

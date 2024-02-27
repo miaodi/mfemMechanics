@@ -29,4 +29,5 @@ Physical Curve("crack_bot", 14) = {6};
 Physical Curve("crack_top", 15) = {5};
 
 Mesh 2;
+Mesh.Algorithm = 8; // Delaunay for quads
 Mesh.MshFileVersion = 2.2;

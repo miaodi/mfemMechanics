@@ -1,6 +1,2 @@
--ksp_type preonly 
--pc_type redistribute 
--redistribute_pc_type cholesky
--redistribute_pc_factor_mat_solver_type mumps
--mat_mumps_icntl_29 2
--mat_mumps_icntl_12	1
+-ksp_type cg 
+-pc_type none

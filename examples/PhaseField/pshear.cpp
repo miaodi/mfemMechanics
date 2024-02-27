@@ -11,68 +11,65 @@ using namespace mfem;
 
 int main( int argc, char* argv[] )
 {
+    // 1. Initialize MPI.
+    int num_procs, myid;
+    Mpi::Init( argc, argv );
+    MPI_Comm_size( MPI_COMM_WORLD, &num_procs );
+    MPI_Comm_rank( MPI_COMM_WORLD, &myid );
+    Hypre::Init();
+
     // 1. Parse command-line options.
     const char* mesh_file = "../../data/crack_square2d.msh";
     int order = 1;
     bool static_cond = false;
-    bool visualization = 1;
-    int refineLvl = 0;
-    int localRefineLvl = 0;
+    int ser_ref_levels = -1, par_ref_levels = -1;
+    const char* petscrc_file = "../../data/petscSetting";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
     args.AddOption( &order, "-o", "--order", "Finite element order (polynomial degree)." );
     args.AddOption( &static_cond, "-sc", "--static-condensation", "-no-sc", "--no-static-condensation",
                     "Enable static condensation." );
-    args.AddOption( &visualization, "-vis", "--visualization", "-no-vis", "--no-visualization",
-                    "Enable or disable GLVis visualization." );
-    args.AddOption( &refineLvl, "-r", "--refine-level", "Finite element refine level." );
-    args.AddOption( &localRefineLvl, "-lr", "--local-refine-level", "Finite element local refine level." );
+    args.AddOption( &ser_ref_levels, "-rs", "--refine-serial",
+                    "Number of times to refine the mesh uniformly in serial." );
+    args.AddOption( &par_ref_levels, "-rp", "--refine-parallel",
+                    "Number of times to refine the mesh uniformly in parallel." );
+    args.AddOption( &petscrc_file, "-petscopts", "--petscopts", "PetscOptions file to use." );
     args.Parse();
     if ( !args.Good() )
     {
-        args.PrintUsage( cout );
+        if ( myid == 0 )
+        {
+            args.PrintUsage( cout );
+        }
+        MPI_Finalize();
         return 1;
     }
-    args.PrintOptions( cout );
-    cout << static_cond << endl;
+    if ( myid == 0 )
+    {
+        args.PrintOptions( cout );
+    }
 
     // 2. Read the mesh from the given mesh file. We can handle triangular,
     //    quadrilateral, tetrahedral or hexahedral elements with the same code.
     Mesh* mesh = new Mesh( mesh_file, 1, 1 );
     int dim = mesh->Dimension();
 
-    // 3. Select the order of the finite element discretization space. For NURBS
-    //    meshes, we increase the order by degree elevation.
-    if ( mesh->NURBSext )
-    {
-        mesh->DegreeElevate( order, order );
-    }
+    MFEMInitializePetsc( NULL, NULL, petscrc_file, NULL );
 
     //  4. Mesh refinement
-    for ( int k = 0; k < refineLvl; k++ )
-        mesh->UniformRefinement();
-
-    for ( int k = 0; k < localRefineLvl; k++ )
+    for ( int lev = 0; lev < ser_ref_levels; lev++ )
     {
-        int ne = mesh->GetNE();
-        auto eles = mesh->GetElementsArray();
-        Array<Refinement> refinements;
-        for ( int i = 0; i < ne; i++ )
+        mesh->UniformRefinement();
+    }
+
+    ParMesh* pmesh = new ParMesh( MPI_COMM_WORLD, *mesh );
+    delete mesh;
+    {
+        for ( int l = 0; l < par_ref_levels; l++ )
         {
-            double* node{ nullptr };
-            for ( int j = 0; j < eles[i]->GetNVertices(); j++ )
-            {
-                const int vi = eles[i]->GetVertices()[j];
-                node = mesh->GetVertex( vi );
-                if ( node[1] > -0.00001 && node[1] < 0.0008 && node[0] > -0.00001 && node[0] < .0006 )
-                {
-                    refinements.Append( i );
-                    break;
-                }
-            }
+            pmesh->UniformRefinement();
         }
-        mesh->GeneralRefinement( refinements );
     }
 
     // 5. Define the finite element spaces for displacement and pressure
@@ -80,22 +77,25 @@ int main( int argc, char* argv[] )
     //    order vector field, while the pressure (p) is a linear scalar function.
     H1_FECollection lin_coll( order, dim );
 
-    FiniteElementSpace R_space( mesh, &lin_coll, dim, Ordering::byVDIM );
-    FiniteElementSpace W_space( mesh, &lin_coll );
+    ParFiniteElementSpace R_space( pmesh, &lin_coll, dim, Ordering::byVDIM );
+    ParFiniteElementSpace W_space( pmesh, &lin_coll );
 
-    Array<FiniteElementSpace*> spaces( 2 );
+    Array<ParFiniteElementSpace*> spaces( 2 );
     spaces[0] = &R_space;
     spaces[1] = &W_space;
 
     int R_size = R_space.GetTrueVSize();
     int W_size = W_space.GetTrueVSize();
 
-    // Print the mesh statistics
-    std::cout << "***********************************************************\n";
-    std::cout << "dim(u) = " << R_size << "\n";
-    std::cout << "dim(p) = " << W_size << "\n";
-    std::cout << "dim(u+p) = " << R_size + W_size << "\n";
-    std::cout << "***********************************************************\n";
+    // 9. Print the mesh statistics
+    if ( myid == 0 )
+    {
+        std::cout << "***********************************************************\n";
+        std::cout << "dim(u) = " << R_size << "\n";
+        std::cout << "dim(p) = " << W_size << "\n";
+        std::cout << "dim(u+p) = " << R_size + W_size << "\n";
+        std::cout << "***********************************************************\n";
+    }
 
     VectorArrayCoefficient d( dim );
     Vector topDisp( R_space.GetMesh()->bdr_attributes.Max() );
@@ -127,58 +127,58 @@ int main( int argc, char* argv[] )
 
     //    Define grid functions for the current configuration, reference
     //    configuration, final deformation, and pressure
-    GridFunction x_gf( &R_space );
-    GridFunction p_gf( &W_space );
+    ParGridFunction x_gf( &R_space );
+    ParGridFunction p_gf( &W_space );
 
-    x_gf.MakeTRef( &R_space, xp.GetBlock( 0 ), 0 );
-    p_gf.MakeTRef( &W_space, xp.GetBlock( 1 ), 0 );
-
-    printf( "Mesh is %i dimensional.\n", dim );
-    printf( "Number of mesh attributes: %i\n", mesh->attributes.Size() );
-    printf( "Number of boundary attributes: %i\n", mesh->bdr_attributes.Size() );
+    if ( myid == 0 )
+    {
+        printf( "Mesh is %i dimensional.\n", dim );
+        printf( "Number of mesh attributes: %i\n", pmesh->attributes.Size() );
+        printf( "Number of boundary attributes: %i\n", pmesh->bdr_attributes.Size() );
+    }
 
     //    Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
     //    which satisfies the boundary conditions.
-    Vector Nu( mesh->attributes.Max() );
+    Vector Nu( pmesh->attributes.Max() );
     Nu = .3;
     PWConstCoefficient nu_func( Nu );
 
-    Vector E( mesh->attributes.Max() );
+    Vector E( pmesh->attributes.Max() );
     E = 210E9;
     PWConstCoefficient E_func( E );
 
     PhaseFieldElasticMaterial iem( E_func, nu_func, PhaseFieldElasticMaterial::StrainEnergyType::Amor );
 
-    plugin::Memorize mm( mesh );
+    plugin::Memorize mm( pmesh );
 
     auto intg = new plugin::PhaseFieldIntegrator( iem, mm );
     // intg->setNonlinear( true );
 
-    auto* nlf = new mfem::BlockNonlinearForm( spaces );
+    auto* nlf = new mfem::ParBlockNonlinearForm( spaces );
     nlf->AddDomainIntegrator( intg );
     nlf->AddBdrFaceIntegrator( new plugin::BlockNonlinearDirichletPenaltyIntegrator( d, hevi ) );
+    nlf->SetGradientType( Operator::Type::Hypre_ParCSR );
 
     // Set up the Jacobian solver
-    omp_set_num_threads( 10 );
-    auto j_gmres = new UMFPackSolver();
-    auto newton_solver = new plugin::MultiNewtonAdaptive();
+    PetscLinearSolver* petsc = new PetscLinearSolver( MPI_COMM_WORLD );
+    auto newton_solver = new plugin::MultiNewtonAdaptive( MPI_COMM_WORLD );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
-    newton_solver->SetSolver( *j_gmres );
+    newton_solver->SetSolver( *petsc );
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetRelTol( 1e-7 );
+    newton_solver->SetRelTol( 1e-8 );
     newton_solver->SetAbsTol( 0 );
     newton_solver->SetMaxIter( 10 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( 2e-6 );
     newton_solver->SetMaxStep( 10000000 );
-    newton_solver->SetMaxDelta( 1e-4 );
+    newton_solver->SetMaxDelta( 5e-5 );
     newton_solver->SetMinDelta( 1e-14 );
 
-    ParaViewDataCollection paraview_dc( "phase_field_square_shear_test", mesh );
+    ParaViewDataCollection paraview_dc( "p_phase_field_square_shear_test", pmesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );
@@ -189,21 +189,21 @@ int main( int argc, char* argv[] )
     paraview_dc.RegisterField( "PhaseField", &p_gf );
 
     auto stress_fec = new H1_FECollection( order, dim );
-
-    // GridFunction ue( fespace );
-    // ue = 0.;
-    auto stress_fespace = new FiniteElementSpace( mesh, stress_fec, 7 );
-    GridFunction stress_grid( stress_fespace );
+    auto stress_fespace = new ParFiniteElementSpace( pmesh, stress_fec, 7 );
+    ParGridFunction stress_grid( stress_fespace );
     plugin::StressCoefficient sc( dim, iem );
     sc.SetDisplacement( x_gf );
     paraview_dc.RegisterField( "Stress", &stress_grid );
     stress_grid.ProjectCoefficient( sc );
     paraview_dc.Save();
 
-    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc]( int step, int count, double time )
+    std::function<void( int, int, double )> func =
+        [&paraview_dc, &stress_grid, &sc, &x_gf, &p_gf, &xp]( int step, int count, double time )
     {
         if ( step % 20 == 0 )
         {
+            x_gf.Distribute( xp.GetBlock( 0 ) );
+            p_gf.Distribute( xp.GetBlock( 1 ) );
             paraview_dc.SetCycle( count );
             paraview_dc.SetTime( count );
             stress_grid.ProjectCoefficient( sc );
@@ -216,5 +216,7 @@ int main( int argc, char* argv[] )
     Vector zero;
 
     newton_solver->Mult( zero, xp );
+
+    MFEMFinalizePetsc();
     return 0;
 }

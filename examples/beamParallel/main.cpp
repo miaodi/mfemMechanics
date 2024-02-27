@@ -69,12 +69,12 @@ int main( int argc, char* argv[] )
     MPI_Comm_rank( MPI_COMM_WORLD, &myid );
 
     // 1. Parse command-line options.
-    const char* mesh_file = "../data/gmshBeam.msh";
+    const char* mesh_file = "../../data/gmshBeam.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
     int ser_ref_levels = -1, par_ref_levels = -1;
-    const char* petscrc_file = "../data/petscSetting";
+    const char* petscrc_file = "../../data/petscSetting";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );

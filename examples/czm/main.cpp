@@ -56,6 +56,7 @@ int main( int argc, char* argv[] )
     bool visualization = 1;
     int refineLvl = 0;
     int localRefineLvl = 0;
+    const char* device_config = "cpu";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -66,6 +67,7 @@ int main( int argc, char* argv[] )
                     "Enable or disable GLVis visualization." );
     args.AddOption( &refineLvl, "-r", "--refine-level", "Finite element refine level." );
     args.AddOption( &localRefineLvl, "-lr", "--local-refine-level", "Finite element local refine level." );
+    args.AddOption( &device_config, "-d", "--device", "Device configuration string, see Device::Configure()." );
     args.Parse();
     if ( !args.Good() )
     {
@@ -74,6 +76,11 @@ int main( int argc, char* argv[] )
     }
     args.PrintOptions( cout );
     cout << static_cond << endl;
+
+    // 2. Enable hardware devices such as GPUs, and programming models such as
+    //    CUDA, OCCA, RAJA and OpenMP based on command line options.
+    Device device( device_config );
+    device.Print();
 
     // 2. Read the mesh from the given mesh file. We can handle triangular,
     //    quadrilateral, tetrahedral or hexahedral elements with the same code.
@@ -103,7 +110,7 @@ int main( int argc, char* argv[] )
             {
                 const int vi = eles[i]->GetVertices()[j];
                 node = mesh->GetVertex( vi );
-                if ( node[1] > -0.00001 && node[1] < 0.0008 && node[0] > -0.00001 && node[0] < .0006 )
+                if ( node[1] > -0.000001 && node[1] < 0.00008 && node[0] > -0.000001 && node[0] < .00006 )
                 {
                     refinements.Append( i );
                     break;
@@ -112,10 +119,10 @@ int main( int argc, char* argv[] )
         }
         mesh->GeneralRefinement( refinements );
     }
-    ofstream file;
-    file.open( "refined.vtk" );
-    mesh->PrintVTK( file );
-    file.close();
+    // ofstream file;
+    // file.open( "refined.vtk" );
+    // mesh->PrintVTK( file );
+    // file.close();
 
     // 5. Define a finite element space on the mesh. Here we use vector finite
     //    elements, i.e. dim copies of a scalar finite element space. The vector
@@ -154,14 +161,14 @@ int main( int argc, char* argv[] )
     }
     Vector topDisp( mesh->bdr_attributes.Max() );
     topDisp = .0;
-    topDisp( 10 ) = 2e-3;
+    topDisp( 10 ) = 5e-4;
     topDisp( 11 ) = 0;
     d.Set( 0, new PWConstCoefficient( topDisp ) );
 
     Vector activeBC( mesh->bdr_attributes.Max() );
     activeBC = 0.0;
-    activeBC( 10 ) = 1e17;
-    activeBC( 11 ) = 1e17;
+    activeBC( 10 ) = 1e15;
+    activeBC( 11 ) = 1e15;
     VectorArrayCoefficient hevi( dim );
     for ( int i = 0; i < dim; i++ )
     {
@@ -202,7 +209,7 @@ int main( int argc, char* argv[] )
     omp_set_num_threads( 12 );
     auto j_gmres = new UMFPackSolver();
 
-    auto newton_solver = new plugin::ArcLengthLinearize();
+    auto newton_solver = new plugin::MultiNewtonAdaptive();
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -212,14 +219,14 @@ int main( int argc, char* argv[] )
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-8 );
     newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 12 );
+    newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( 1e-8 );
-    newton_solver->SetPhi( 1 );
-    newton_solver->SetMaxDelta( 1e-1 );
-    newton_solver->SetMinDelta( 1e-14 );
-    newton_solver->SetMaxStep( 10000 );
-    newton_solver->SetAdaptiveL( true );
+    newton_solver->SetDelta( 1e-4 );
+    // newton_solver->SetPhi( 1 );
+    // newton_solver->SetMaxDelta( 1e-2 );
+    // newton_solver->SetMinDelta( 1e-30 );
+    newton_solver->SetMaxStep( 100000 );
+    // newton_solver->SetAdaptiveL( true );
     // newton_solver->SetCheckConvRatio( true );
     // newton_solver->SetRelaxFactor( .5 );
 
@@ -273,7 +280,7 @@ int main( int argc, char* argv[] )
 
     std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc]( int step, int count, double time )
     {
-        if ( step % 10 == 0 )
+        if ( step % 5 == 0 )
         {
             paraview_dc.SetCycle( count );
             paraview_dc.SetTime( count );

@@ -15,7 +15,9 @@ void PhaseFieldIntegrator::AssembleElementVector( const mfem::Array<const mfem::
     mGShape.SetSize( dof_p, dim );
     shape.SetSize( dof_p );
 
+    const double gc = mMaterialModel->getGc();
     const double k = mMaterialModel->getK();
+    const double l0 = mMaterialModel->getL0();
 
     // mGeomStiff.resize( dof_u, dof_u );
 
@@ -56,6 +58,9 @@ void PhaseFieldIntegrator::AssembleElementVector( const mfem::Array<const mfem::
 
         double pVal = p.dot( eigenShape );
 
+        Eigen::MatrixXd pGrad = p.transpose() * eigenGShape;
+        // std::cout<<pGrad<<std::endl<<std::endl;
+
         mMaterialModel->at( Tr, ip );
         mMaterialModel->setDeformationGradient( mdxdX );
         mMaterialModel->setPhaseField( pVal );
@@ -77,8 +82,10 @@ void PhaseFieldIntegrator::AssembleElementVector( const mfem::Array<const mfem::
         {
             pd.set_val<double>( "H", H );
         }
+        // std::cout << "H: " << pd.get_val<double>( "H" ).value() << std::endl;
 
-        eigenVec1 += -w * ( 2 * ( 1 - k ) * H * eigenShape );
+        eigenVec1 += w * ( -( 2 * ( 1 - k ) * H * ( 1 - pVal ) * eigenShape ) +
+                           gc * ( l0 * eigenGShape * pGrad.transpose() + 1 / l0 * pVal * eigenShape ) );
     }
 }
 
@@ -172,10 +179,10 @@ void PhaseFieldIntegrator::AssembleElementGrad( const mfem::Array<const mfem::Fi
 }
 
 void BlockNonlinearDirichletPenaltyIntegrator::AssembleFaceVector( const mfem::Array<const mfem::FiniteElement*>& el1,
-                                                                  const mfem::Array<const mfem::FiniteElement*>& el2,
-                                                                  mfem::FaceElementTransformations& Tr,
-                                                                  const mfem::Array<const mfem::Vector*>& elfun,
-                                                                  const mfem::Array<mfem::Vector*>& elvec )
+                                                                   const mfem::Array<const mfem::FiniteElement*>& el2,
+                                                                   mfem::FaceElementTransformations& Tr,
+                                                                   const mfem::Array<const mfem::Vector*>& elfun,
+                                                                   const mfem::Array<mfem::Vector*>& elvec )
 {
     int dof_u = el1[0]->GetDof(), dim = el1[0]->GetDim();
     int dof_p = el1[1]->GetDof();
@@ -191,10 +198,10 @@ void BlockNonlinearDirichletPenaltyIntegrator::AssembleFaceVector( const mfem::A
 
 /// Assemble the local gradient matrix
 void BlockNonlinearDirichletPenaltyIntegrator::AssembleFaceGrad( const mfem::Array<const mfem::FiniteElement*>& el1,
-                                                                const mfem::Array<const mfem::FiniteElement*>& el2,
-                                                                mfem::FaceElementTransformations& Tr,
-                                                                const mfem::Array<const mfem::Vector*>& elfun,
-                                                                const mfem::Array2D<mfem::DenseMatrix*>& elmats )
+                                                                 const mfem::Array<const mfem::FiniteElement*>& el2,
+                                                                 mfem::FaceElementTransformations& Tr,
+                                                                 const mfem::Array<const mfem::Vector*>& elfun,
+                                                                 const mfem::Array2D<mfem::DenseMatrix*>& elmats )
 {
     int dof_u = el1[0]->GetDof(), dim = el1[0]->GetDim();
     int dof_p = el1[1]->GetDof();
