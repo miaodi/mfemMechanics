@@ -26,14 +26,14 @@ struct GaussPointStorage
 
 struct CZMGaussPointStorage
 {
-    double Weight{ 0. };
+    double Weight{0.};
 
     mfem::Vector Shape1, Shape2;
     mfem::DenseMatrix GShapeFace1, GShapeFace2;
     mfem::DenseMatrix Jacobian;
 
-    double Lambda{ 0. };    // effective opening displacement            Ortiz and Pandolfi 1999
-    double CurLambda{ 0. }; // current effective opening displacement
+    double Lambda{0.};    // effective opening displacement            Ortiz and Pandolfi 1999
+    double CurLambda{0.}; // current effective opening displacement
 };
 
 // TODO: should rewrite Memorize class so that Initialize can be registered by integrators.
@@ -92,7 +92,7 @@ private:
     std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mEleStorage;
     std::vector<std::unique_ptr<std::vector<CZMGaussPointStorage>>> mFaceStorage;
     mfem::DenseMatrix mDShape1, mDShape2, mGShape1, mGShape2;
-    int mElementNo{ 0 };
+    int mElementNo{0};
 };
 
 class ElasticityIntegrator : public mfem::BilinearFormIntegrator
@@ -109,13 +109,13 @@ public:
 protected:
     mfem::DenseMatrix mDShape, mGShape;
 
-    ElasticMaterial* mMaterialModel{ nullptr };
+    ElasticMaterial* mMaterialModel{nullptr};
 };
 
 class NonlinearFormIntegratorLambda : public mfem::NonlinearFormIntegrator
 {
 public:
-    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator(), mLambda{ 1. }
+    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator(), mLambda{1.}
     {
     }
 
@@ -140,13 +140,13 @@ public:
 
 protected:
     mutable double mLambda;
-    IterAuxilliary const* mIterAux{ nullptr };
+    IterAuxilliary const* mIterAux{nullptr};
 };
 
 class NonlinearFormMaterialIntegratorLambda : public NonlinearFormIntegratorLambda
 {
 public:
-    NonlinearFormMaterialIntegratorLambda( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{ &m }
+    NonlinearFormMaterialIntegratorLambda( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{&m}
     {
     }
 
@@ -171,15 +171,15 @@ public:
     }
 
 protected:
-    ElasticMaterial* mMaterialModel{ nullptr };
-    bool mNonlinear{ true };
+    ElasticMaterial* mMaterialModel{nullptr};
+    bool mNonlinear{true};
 };
 
 class NonlinearElasticityIntegrator : public NonlinearFormMaterialIntegratorLambda
 {
 public:
     NonlinearElasticityIntegrator( ElasticMaterial& m, Memorize& memo )
-        : NonlinearFormMaterialIntegratorLambda( m ), mMemo{ memo }
+        : NonlinearFormMaterialIntegratorLambda( m ), mMemo{memo}
     {
     }
 
@@ -217,7 +217,7 @@ protected:
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
     Eigen::MatrixXd mGeomStiff;
     Memorize& mMemo;
-    bool mOnlyGeomStiff{ false };
+    bool mOnlyGeomStiff{false};
 };
 
 class NonlinearVectorBoundaryLFIntegrator : public NonlinearFormIntegratorLambda
@@ -358,7 +358,7 @@ protected:
 class NonlinearInternalPenaltyIntegrator : public mfem::NonlinearFormIntegrator
 {
 public:
-    NonlinearInternalPenaltyIntegrator( const double penalty = 1e10 ) : mfem::NonlinearFormIntegrator(), p{ penalty }
+    NonlinearInternalPenaltyIntegrator( const double penalty = 1e10 ) : mfem::NonlinearFormIntegrator(), p{penalty}
     {
     }
 
@@ -403,4 +403,34 @@ protected:
     double p;
 };
 
+class BlockNonlinearFormIntegratorLambda : public mfem::BlockNonlinearFormIntegrator
+{
+public:
+    BlockNonlinearFormIntegratorLambda() : mfem::BlockNonlinearFormIntegrator(), mLambda{1.}
+    {
+    }
+
+    virtual void SetLambda( const double lambda ) const
+    {
+        mLambda = lambda;
+    }
+
+    double GetLambda() const
+    {
+        return mLambda;
+    }
+
+    virtual ~BlockNonlinearFormIntegratorLambda()
+    {
+    }
+
+    void SetIterAux( IterAuxilliary const* ptr )
+    {
+        mIterAux = ptr;
+    }
+
+protected:
+    mutable double mLambda;
+    IterAuxilliary const* mIterAux{nullptr};
+};
 } // namespace plugin

@@ -10,70 +10,81 @@ namespace plugin
 {
 void NewtonLineSearch::SetOperator( const mfem::Operator& op )
 {
-    mfem::NewtonSolver::SetOperator( op );
-    u_cur.SetSize( op.Width() );
+    blockOper = static_cast<mfem::BlockNonlinearForm*>( const_cast<mfem::Operator*>( &op ) );
+    block_trueOffsets = blockOper->GetBlockTrueOffsets();
+    oper = &op;
+    height = op.Height();
+    width = op.Width();
+    MFEM_ASSERT( height == width, "square Operator is required." );
+
+    r.SetSize( width );
+    c.SetSize( width );
+    r_u = mfem::Vector( r.GetData() + block_trueOffsets[0], block_trueOffsets[1] - block_trueOffsets[0] );
+    c_u = mfem::Vector( c.GetData() + block_trueOffsets[0], block_trueOffsets[1] - block_trueOffsets[0] );
+    r_p = mfem::Vector( r.GetData() + block_trueOffsets[1], block_trueOffsets[2] - block_trueOffsets[1] );
+    c_p = mfem::Vector( c.GetData() + block_trueOffsets[1], block_trueOffsets[2] - block_trueOffsets[1] );
+    // std::cout<<block_trueOffsets[0]<<", "<<block_trueOffsets[1]<<", "<<block_trueOffsets[2]<<std::endl;
 }
 
 double NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, const mfem::Vector& b ) const
 {
-    if ( !line_search )
-        return 1.;
+    // if ( !line_search )
+    //     return 1.;
 
-    // initialize
-    const bool have_b = ( b.Size() == Height() );
-    double sL, sR, s;
-    double etaL = 0., etaR = 1., eta = 1., ratio = 1.;
-    auto CalcS = [&b, &x, have_b, this]( const double eta )
-    {
-        add( x, -eta, c, this->u_cur );
-        this->oper->Mult( this->u_cur, this->r );
-        if ( have_b )
-        {
-            this->r -= b;
-        }
-        return this->r * this->c;
-    };
-    oper->Mult( x, r );
-    if ( have_b )
-    {
-        r -= b;
-    }
-    sL = CalcS( etaL );
-    const double s0 = sL;
+    // // initialize
+    // const bool have_b = ( b.Size() == Height() );
+    // double sL, sR, s;
+    // double etaL = 0., etaR = 1., eta = 1., ratio = 1.;
+    // auto CalcS = [&b, &x, have_b, this]( const double eta ) {
+    //     add( x, -eta, c, this->cur );
+    //     this->oper->Mult( this->cur, this->r );
+    //     if ( have_b )
+    //     {
+    //         this->r -= b;
+    //     }
+    //     return this->r * this->c;
+    // };
+    // oper->Mult( x, r );
+    // if ( have_b )
+    // {
+    //     r -= b;
+    // }
+    // sL = CalcS( etaL );
+    // const double s0 = sL;
 
-    sR = CalcS( etaR );
+    // sR = CalcS( etaR );
 
-    // first find the right span
-    while ( sL * sR > 0 && etaR < max_eta )
-    {
-        etaR *= eta_coef;
+    // // first find the right span
+    // while ( sL * sR > 0 && etaR < max_eta )
+    // {
+    //     etaR *= eta_coef;
 
-        sR = CalcS( etaR );
-    }
+    //     sR = CalcS( etaR );
+    // }
 
-    int iter = 0;
-    while ( sL * sR < 0 && ratio > tol && iter++ < max_line_search_iter && eta > min_eta )
-    {
-        eta = .5 * ( etaL + etaR );
-        s = CalcS( eta );
-        ratio = fabs( s / s0 );
-        if ( s * sL > 0 )
-        {
-            sL = s;
-            etaL = eta;
-        }
-        else
-        {
-            sR = s;
-            etaR = eta;
-        }
-    }
-    if ( ratio > tol || sL * sR > 0 )
-    {
-        eta = 1.;
-    }
-    std::cout << "eta: " << eta << std::endl;
-    return eta;
+    // int iter = 0;
+    // while ( sL * sR < 0 && ratio > tol && iter++ < max_line_search_iter && eta > min_eta )
+    // {
+    //     eta = .5 * ( etaL + etaR );
+    //     s = CalcS( eta );
+    //     ratio = fabs( s / s0 );
+    //     if ( s * sL > 0 )
+    //     {
+    //         sL = s;
+    //         etaL = eta;
+    //     }
+    //     else
+    //     {
+    //         sR = s;
+    //         etaR = eta;
+    //     }
+    // }
+    // if ( ratio > tol || sL * sR > 0 )
+    // {
+    //     eta = 1.;
+    // }
+    // std::cout << "eta: " << eta << std::endl;
+    // return eta;
 }
 
 void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
@@ -90,15 +101,19 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         x = 0.0;
     }
 
+    mfem::Vector& cur_u = static_cast<mfem::BlockVector&>( x ).GetBlock( 0 );
+    mfem::Vector& cur_p = static_cast<mfem::BlockVector&>( x ).GetBlock( 1 );
+
     ProcessNewState( x );
 
-    oper->Mult( x, r );
+    blockOper->Mult( x, r );
     if ( have_b )
     {
         r -= b;
     }
 
     norm0 = norm = Norm( r );
+    // r_p.Print();
     if ( print_options.first_and_last && !print_options.iterations )
     {
         mfem::out << "Newton iteration " << std::setw( 2 ) << 0 << " : ||r|| = " << norm << "...\n";
@@ -110,6 +125,7 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     // x_{i+1} = x_i - [DF(x_i)]^{-1} [F(x_i)-b]
     for ( it = 0; true; it++ )
     {
+        // r_u.Print();
         if ( print_options.iterations )
         {
             mfem::out << "Newton iteration " << std::setw( 2 ) << it << " : ||r|| = " << norm;
@@ -138,33 +154,17 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             break;
         }
 
-        grad = &oper->GetGradient( x );
+        prec->SetOperator( static_cast<mfem::BlockOperator&>( blockOper->GetGradient( x ) ).GetBlock( 0, 0 ) );
+        prec->Mult( r_u, c_u ); // c = [DF(x_i)]^{-1} [F(x_i)-b]
+        add( cur_u, -1., c_u, cur_u );
+        // c_u.Print();
+        blockOper->Mult( x, r );
 
-        prec->SetOperator( *grad );
+        prec->SetOperator( static_cast<mfem::BlockOperator&>( blockOper->GetGradient( x ) ).GetBlock( 1, 1 ) );
+        prec->Mult( r_p, c_p ); // c = [DF(x_i)]^{-1} [F(x_i)-b]
+        add( cur_p, -1., c_p, cur_p );
+        blockOper->Mult( x, r );
 
-        if ( lin_rtol_type )
-        {
-            AdaptiveLinRtolPreSolve( x, it, norm );
-        }
-
-        prec->Mult( r, c ); // c = [DF(x_i)]^{-1} [F(x_i)-b]
-
-        if ( lin_rtol_type )
-        {
-            AdaptiveLinRtolPostSolve( c, r, it, norm );
-        }
-
-        const double c_scale = ComputeScalingFactor( x, b );
-        if ( c_scale == 0.0 )
-        {
-            converged = false;
-            break;
-        }
-        add( x, -c_scale, c, x );
-
-        ProcessNewState( x );
-
-        oper->Mult( x, r );
         if ( have_b )
         {
             r -= b;
@@ -202,6 +202,27 @@ void SetLambdaToIntegrators( const mfem::Operator* oper, const double l )
         for ( int i = 0; i < dnfi.Size(); i++ )
         {
             if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( dnfi[i] ) )
+            {
+                with_lambda->SetLambda( l );
+            }
+        }
+    }
+
+    if ( auto nonlinearform = dynamic_cast<mfem::BlockNonlinearForm*>( const_cast<mfem::Operator*>( oper ) ) )
+    {
+        auto bfnfi = nonlinearform->GetBdrFaceIntegrators();
+        for ( int i = 0; i < bfnfi.Size(); i++ )
+        {
+            if ( auto with_lambda = dynamic_cast<BlockNonlinearFormIntegratorLambda*>( bfnfi[i] ) )
+            {
+                with_lambda->SetLambda( l );
+            }
+        }
+
+        auto& dnfi = *nonlinearform->GetDNFI();
+        for ( int i = 0; i < dnfi.Size(); i++ )
+        {
+            if ( auto with_lambda = dynamic_cast<BlockNonlinearFormIntegratorLambda*>( dnfi[i] ) )
             {
                 with_lambda->SetLambda( l );
             }
@@ -295,7 +316,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     //     petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
     // }
     int step = 0;
-    double norm{ 0 }, norm_goal{ 0 }, normPrev{ 0 }, normPrevPrev{ 0 };
+    double norm{0}, norm_goal{0}, normPrev{0}, normPrevPrev{0};
     const bool have_b = ( b.Size() == Height() );
     lambda = 0.;
 
@@ -381,15 +402,14 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 Monitor( it, norm, r, *u );
                 if ( norm <= norm_goal )
                 {
-
-                // filter out slow convergence case
-                if ( check_conv_ratio && it >= std::max( 3, max_iter * 4 / 5 ) &&
-                     util::ConvergenceRate( norm, normPrev, normPrevPrev ) < 1.2 )
-                {
-                    mfem::out << "Convergence rate " << util::ConvergenceRate( norm, normPrev, normPrevPrev ) << " is too small!\n";
-                    converged = false;
-                    break;
-                }
+                    // filter out slow convergence case
+                    if ( check_conv_ratio && it >= std::max( 3, max_iter * 4 / 5 ) &&
+                         util::ConvergenceRate( norm, normPrev, normPrevPrev ) < 1.2 )
+                    {
+                        mfem::out << "Convergence rate " << util::ConvergenceRate( norm, normPrev, normPrevPrev ) << " is too small!\n";
+                        converged = false;
+                        break;
+                    }
 
                     converged = true;
                     break;
@@ -517,7 +537,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
     const double c2 = delta_u_bar_dot_delta_u_bar;
 
     double ds = 1.;
-    double delta_lambda1{ 0. }, delta_lambda2{ 0. };
+    double delta_lambda1{0.}, delta_lambda2{0.};
 
     const double as = b1 * b1 - 4 * a0 * c2;
     const double bs = 2 * b0 * b1 - 4 * a0 * c1;
@@ -660,13 +680,8 @@ bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem
 
 void MultiNewtonAdaptive::SetOperator( const mfem::Operator& op )
 {
-    mfem::NewtonSolver::SetOperator( op );
-    oper = &op;
-    height = op.Height();
-    width = op.Width();
-    MFEM_ASSERT( height == width, "square Operator is required." );
-
-    u_cur.SetSize( width );
+    NewtonLineSearch::SetOperator( op );
+    cur.SetSize( width );
 }
 
 void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
@@ -686,7 +701,7 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         u = &x;
     }
 
-    u_cur = *u;
+    cur = *u;
     for ( ; true; step++ )
     {
         if ( step == max_steps )
@@ -708,13 +723,13 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
         util::mfemOut( "L: ", delta_lambda, "\n", util::Color::RESET );
         delta_lambda = std::min( delta_lambda, 1. - cur_lambda );
-        SetLambdaToIntegrators( oper, delta_lambda + cur_lambda );
+        SetLambdaToIntegrators( blockOper, delta_lambda + cur_lambda );
 
         plugin::NewtonLineSearch::Mult( b, *u );
         if ( GetConverged() )
         {
             cur_lambda += delta_lambda;
-            u_cur = *u;
+            cur = *u;
 
             if ( data_collect_func )
             {
@@ -728,7 +743,7 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         }
         else
         {
-            *u = u_cur;
+            *u = cur;
         }
 
 #ifdef MFEM_USE_MPI

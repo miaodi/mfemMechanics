@@ -18,8 +18,7 @@ std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::V
     case PhaseFieldElasticMaterial::StrainEnergyType::Amor:
     {
         // zhou2018phase
-        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXd& params )
-        {
+        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXd& params ) {
             using T = typename std::decay_t<decltype( strainVec( 0 ) )>;
 
             auto curlyBracPos = []( const T& val ) { return val > 0 ? val : static_cast<T>( 0 ); };
@@ -35,11 +34,11 @@ std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::V
 
             auto [strainPos, strainNeg] = util::StrainSplit( strainTensor );
             const T psiPos = mLambda / 2 * autodiff::detail::pow( curlyBracPos( strainTensor.trace() ), 2 ) +
-                             mu * strainPos.array().square().sum();
+                             mu * strainPos.squaredNorm();
             if ( params[0] == 0 )
                 return psiPos;
             const T psiNeg = lambda / 2 * autodiff::detail::pow( curlyBracNeg( strainTensor.trace() ), 2 ) +
-                             mu * strainNeg.array().square().sum();
+                             mu * strainNeg.squaredNorm();
             if ( params[0] == 1 )
                 return psiNeg;
             const T res = ( ( 1 - mK ) * std::pow( 1 - phi, 2 ) + mK ) * psiPos + psiNeg;
@@ -48,9 +47,24 @@ std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::V
             return T( 0. );
         };
     }
+    case StrainEnergyType::IsotropicLinearElastic:
+    {
+        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXd& params ) {
+            const auto strainTensor = util::InverseVoigt( strainVec, true );
+            const double E = this->E();
+            const double Nu = this->Nu();
+            const double mu = E / ( 2. * ( 1. + Nu ) );
+            const double lambda = ( Nu * E ) / ( ( 1 + Nu ) * ( 1. - 2. * Nu ) );
+            const double phi = params[1];
+            const autodiff::dual2nd psi =
+                lambda / 2 * strainTensor.trace() * strainTensor.trace() + mu * strainTensor.squaredNorm();
+            return psi;
+        };
+    }
     default:
-        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXd& params )
-        { return autodiff::dual2nd( 0 ); };
+        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXd& params ) {
+            return autodiff::dual2nd( 0 );
+        };
     }
 }
 

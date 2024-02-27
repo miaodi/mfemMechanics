@@ -28,19 +28,22 @@ public:
 protected:
     mutable int it = 0;
 
-    mutable std::function<void( int, int, double )>* data_collect_func{ nullptr };
+    mutable std::function<void( int, int, double )>* data_collect_func{nullptr};
 };
 
 class NewtonLineSearch : public mfem::NewtonSolver, public IterAuxilliary
 {
 protected:
-    mutable mfem::Vector u_cur;
-    double max_eta{ 10. };
-    double min_eta{ .1 };
-    double eta_coef{ 1.5 };
-    int max_line_search_iter{ 10 };
-    double tol{ .006 };
-    bool line_search{ false };
+    mutable mfem::Vector r_u, c_u;
+    mutable mfem::Vector r_p, c_p;
+    double max_eta{10.};
+    double min_eta{.1};
+    double eta_coef{1.5};
+    int max_line_search_iter{10};
+    double tol{.006};
+    bool line_search{false};
+    mutable mfem::BlockNonlinearForm* blockOper;
+    mfem::Array<int> block_trueOffsets;
 
 public:
     NewtonLineSearch() : IterAuxilliary()
@@ -185,15 +188,15 @@ protected:
 
     mutable mfem::GridFunction Delta_u_prev;
 
-    mutable double lambda, Delta_lambda, delta_lambda, delta_lambda_prev, Delta_lambda_prev, max_delta{ 1. },
-        min_delta{ 1. }, L{ 1 }, phi{ 1 }, L_prev;
+    mutable double lambda, Delta_lambda, delta_lambda, delta_lambda_prev, Delta_lambda_prev, max_delta{1.},
+        min_delta{1.}, L{1}, phi{1}, L_prev;
 
-    int max_steps{ 100 };
+    int max_steps{100};
 
-    bool check_conv_ratio{ false };
-    bool adaptive_l{ false };
-    mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{ nullptr };
-    double relaxation_factor{ 1.0 };
+    bool check_conv_ratio{false};
+    bool adaptive_l{false};
+    mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{nullptr};
+    double relaxation_factor{1.0};
 };
 
 class Crisfield : public ALMBase
@@ -256,10 +259,10 @@ public:
     virtual void SetOperator( const mfem::Operator& op );
 
 protected:
-    int max_steps{ 100 };
-    mutable double delta_lambda{ 1. };
-    mutable mfem::IterativeSolver* prec{ nullptr };
-    mutable mfem::Vector u_cur;
-    const mfem::Operator* oper{ nullptr };
+    int max_steps{100};
+    mutable double delta_lambda{1.};
+    mutable mfem::IterativeSolver* prec{nullptr};
+    mutable mfem::Vector cur;
+    const mfem::Operator* oper{nullptr};
 };
 } // namespace plugin

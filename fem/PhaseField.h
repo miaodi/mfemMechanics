@@ -10,46 +10,11 @@
 
 namespace plugin
 {
-
-class BlockNonlinearFormIntegratorLambda : public mfem::BlockNonlinearFormIntegrator
-{
-public:
-    BlockNonlinearFormIntegratorLambda( PhaseFieldElasticMaterial& m )
-        : mfem::BlockNonlinearFormIntegrator(), mLambda{ 1. }, mMaterialModel{ &m }
-    {
-    }
-
-    virtual void SetLambda( const double lambda ) const
-    {
-        mLambda = lambda;
-    }
-
-    double GetLambda() const
-    {
-        return mLambda;
-    }
-
-    virtual ~BlockNonlinearFormIntegratorLambda()
-    {
-    }
-
-    void SetIterAux( IterAuxilliary const* ptr )
-    {
-        mIterAux = ptr;
-    }
-
-protected:
-    mutable double mLambda;
-    IterAuxilliary const* mIterAux{ nullptr };
-
-    PhaseFieldElasticMaterial* mMaterialModel{ nullptr };
-};
-
 class PhaseFieldIntegrator : public BlockNonlinearFormIntegratorLambda
 {
 public:
     PhaseFieldIntegrator( PhaseFieldElasticMaterial& m, Memorize& memo )
-        : BlockNonlinearFormIntegratorLambda( m ), mMemo{ memo }
+        : BlockNonlinearFormIntegratorLambda(), mMaterialModel( &m ), mMemo{memo}
     {
     }
 
@@ -76,6 +41,8 @@ public:
     // }
 
 protected:
+    PhaseFieldElasticMaterial* mMaterialModel{nullptr};
+
     Eigen::Matrix<double, 3, 3> mdxdX;
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
     // Eigen::MatrixXd mGeomStiff;
@@ -85,5 +52,37 @@ protected:
     // data for phase field
     mfem::Vector shape;
     mfem::DenseMatrix mDShape, mGShape;
+};
+
+class BlockNonlinearDirichletPenaltyIntegrator : public BlockNonlinearFormIntegratorLambda
+{
+public:
+    BlockNonlinearDirichletPenaltyIntegrator( mfem::VectorCoefficient& QG, mfem::VectorCoefficient& HG )
+        : BlockNonlinearFormIntegratorLambda(), mIntegrator( QG, HG )
+    {
+    }
+
+    /// Perform the local action of the BlockNonlinearFormIntegrator
+    virtual void AssembleFaceVector( const mfem::Array<const mfem::FiniteElement*>& el1,
+                                     const mfem::Array<const mfem::FiniteElement*>& el2,
+                                     mfem::FaceElementTransformations& Tr,
+                                     const mfem::Array<const mfem::Vector*>& elfun,
+                                     const mfem::Array<mfem::Vector*>& elvec );
+
+    /// Assemble the local gradient matrix
+    virtual void AssembleFaceGrad( const mfem::Array<const mfem::FiniteElement*>& el1,
+                                   const mfem::Array<const mfem::FiniteElement*>& el2,
+                                   mfem::FaceElementTransformations& Tr,
+                                   const mfem::Array<const mfem::Vector*>& elfun,
+                                   const mfem::Array2D<mfem::DenseMatrix*>& elmats );
+
+    virtual void SetLambda( const double lambda ) const override
+    {
+        mLambda = lambda;
+        mIntegrator.SetLambda( lambda );
+    }
+
+protected:
+    NonlinearDirichletPenaltyIntegrator mIntegrator;
 };
 } // namespace plugin

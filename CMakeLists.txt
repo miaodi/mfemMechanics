@@ -33,11 +33,11 @@ FetchContent_Declare(
   GIT_PROGRESS TRUE
 )
 
-FetchContent_Declare(
-  taco
-  GIT_REPOSITORY https://github.com/tensor-compiler/taco.git
-  GIT_TAG master
-)
+# FetchContent_Declare(
+#   taco
+#   GIT_REPOSITORY https://github.com/tensor-compiler/taco.git
+#   GIT_TAG master
+# )
 
 set(BUILD_TESTING OFF)
 set(EIGEN_BUILD_DOC OFF)
@@ -49,7 +49,7 @@ set(AUTODIFF_BUILD_PYTHON OFF)
 set(AUTODIFF_BUILD_TESTS OFF)
 set(AUTODIFF_BUILD_EXAMPLES OFF)
 
-FetchContent_MakeAvailable(Eigen autodiff taco)
+FetchContent_MakeAvailable(Eigen autodiff)
 
 # FetchContent_Declare(
 #   taco
@@ -66,9 +66,6 @@ else()
     set(MFEM_FOLDER "build-release")
 endif()
 
-message("TACO_INCLUDE_DIR: ${TACO_INCLUDE_DIR}")
-message("taco_BINARY_DIR: ${taco_BINARY_DIR}")
-
 # find_path(TACO_INCLUDE_DIR REQUIRED NAMES taco.h HINTS ${CMAKE_BINARY_DIR}/_deps/taco-src/include)
 
 # find_library(TACO_LIB REQUIRED NAMES taco libtaco HINTS ${CMAKE_BINARY_DIR}/lib/libtaco.so)
@@ -79,9 +76,9 @@ add_subdirectory(util)
 add_subdirectory(material)
 add_subdirectory(fem)
 
-set (INCLUDE_DIRS ${MFEM_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR} ${TACO_INCLUDE_DIR})
-set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX autodiff::autodiff Eigen3::Eigen ${CMAKE_BINARY_DIR}/lib/libtaco.so)
-
+set (INCLUDE_DIRS ${MFEM_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR} Eigen3::eigen)
+set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX autodiff::autodiff)
+# message("taco_lib: ${CMAKE_BINARY_DIR}/lib/libtaco.so")
 add_subdirectory(examples)
 
 # add_executable(hello test.cpp)

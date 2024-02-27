@@ -224,7 +224,7 @@ int main( int argc, char* argv[] )
     // newton_solver->SetRelaxFactor( .5 );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
-    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 1E-4, 1E-4 );
+    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 1E-5, 1E-5 );
     nlf->AddInteriorFaceIntegrator( czm_intg );
     czm_intg->SetIterAux( newton_solver );
     // mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
