@@ -71,12 +71,11 @@ void PhaseFieldIntegrator::AssembleElementVector( const mfem::Array<const mfem::
         eigenVec0 += w * ( mB.transpose() * mMaterialModel->getPK2StressVector() );
 
         double H = mMaterialModel->getPsiPos();
-
         auto& pd = mMemo.GetBodyPointData( i );
-        pd.get_val<double>( "H" );
-        if ( H < pd.get_val<double>( "H" ).value() )
+        const double H_prev = pd.get_val<double>( "H" ).value();
+        if ( H < H_prev )
         {
-            H = pd.get_val<double>( "H" ).value();
+            H = H_prev;
         }
         else
         {

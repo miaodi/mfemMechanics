@@ -143,7 +143,8 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             mfem::out << "Newton iteration " << std::setw( 2 ) << it << " : ||r_u|| = " << norm_u;
             if ( it > 0 )
             {
-                mfem::out << ", ||r_u||/||r_u_0|| = " << norm_u / norm0_u << ", ||r_p||/||r_p_0|| = " << norm_p / norm0_p << '\n';
+                mfem::out << " : ||r_p|| = " << norm_p << ", ||r_u||/||r_u_0|| = " << norm_u / norm0_u
+                          << ", ||r_p||/||r_p_0|| = " << norm_p / norm0_p << '\n';
             }
         }
 
@@ -176,19 +177,19 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             if ( MyRank() == 0 )
                 mfem::out << " : ||r_p|| = " << norm_p << "\n";
         }
-        else
-            norm_p = Norm( r_p );
 
         prec->SetOperator( static_cast<mfem::BlockOperator&>( blockOper->GetGradient( x ) ).GetBlock( 1, 1 ) );
         prec->Mult( r_p, c_p ); // c = [DF(x_i)]^{-1} [F(x_i)-b]
         add( cur_p, -1., c_p, cur_p );
         blockOper->Mult( x, r );
 
+        norm_u = Norm( r_u );
+        norm_p = Norm( r_p );
+
         if ( have_b )
         {
             r -= b;
         }
-        norm_u = Norm( r_u );
     }
 
     final_iter = it;
@@ -330,7 +331,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     //     petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
     // }
     int step = 0;
-    double norm{ 0 }, norm_goal{ 0 }, normPrev{ 0 }, normPrevPrev{ 0 };
+    double norm{0}, norm_goal{0}, normPrev{0}, normPrevPrev{0};
     const bool have_b = ( b.Size() == Height() );
     lambda = 0.;
 
@@ -551,7 +552,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
     const double c2 = delta_u_bar_dot_delta_u_bar;
 
     double ds = 1.;
-    double delta_lambda1{ 0. }, delta_lambda2{ 0. };
+    double delta_lambda1{0.}, delta_lambda2{0.};
 
     const double as = b1 * b1 - 4 * a0 * c2;
     const double bs = 2 * b0 * b1 - 4 * a0 * c1;
@@ -732,7 +733,7 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 delta_lambda /= 2;
             else
             {
-                delta_lambda *= std::pow( .7 * this->max_iter / GetNumIterations(), .6 );
+                delta_lambda *= std::pow( this->max_iter / GetNumIterations(), .2 );
                 delta_lambda = std::min( delta_lambda, max_delta );
             }
         }

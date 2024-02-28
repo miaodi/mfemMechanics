@@ -60,18 +60,19 @@ FetchContent_MakeAvailable(Eigen autodiff)
 # FetchContent_MakeAvailable(taco)
 # target_include_directories(taco PUBLIC ${taco_BINARY_DIR}/include)
 
-if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(MFEM_FOLDER "build-debug")
-else()
-    set(MFEM_FOLDER "build-release")
-endif()
+# if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+#     set(MFEM_FOLDER "build-debug")
+# else()
+#     set(MFEM_FOLDER "build-release")
+# endif()
 
 # find_path(TACO_INCLUDE_DIR REQUIRED NAMES taco.h HINTS ${CMAKE_BINARY_DIR}/_deps/taco-src/include)
 
 # find_library(TACO_LIB REQUIRED NAMES taco libtaco HINTS ${CMAKE_BINARY_DIR}/lib/libtaco.so)
 
-find_package(mfem REQUIRED NAMES MFEM  HINTS ${CMAKE_SOURCE_DIR}/../../mfem/${MFEM_FOLDER})
+set(MFEM_DIR "" CACHE PATH "Path to the mfem library.")
 
+find_package(mfem EXACT REQUIRED NAMES MFEM PATHS ${MFEM_DIR})
 
 set(TACO_DIR "" CACHE PATH "Path to the taco library.")
 

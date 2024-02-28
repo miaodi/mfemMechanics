@@ -55,7 +55,7 @@ int main( int argc, char* argv[] )
     Mesh* mesh = new Mesh( mesh_file, 1, 1 );
     int dim = mesh->Dimension();
 
-    MFEMInitializePetsc( NULL, NULL, petscrc_file, NULL );
+    // MFEMInitializePetsc( NULL, NULL, petscrc_file, NULL );
 
     //  4. Mesh refinement
     for ( int lev = 0; lev < ser_ref_levels; lev++ )
@@ -84,16 +84,16 @@ int main( int argc, char* argv[] )
     spaces[0] = &R_space;
     spaces[1] = &W_space;
 
-    int R_size = R_space.GetTrueVSize();
-    int W_size = W_space.GetTrueVSize();
+    HYPRE_BigInt glob_R_size = R_space.GlobalTrueVSize();
+    HYPRE_BigInt glob_W_size = W_space.GlobalTrueVSize();
 
     // 9. Print the mesh statistics
     if ( myid == 0 )
     {
         std::cout << "***********************************************************\n";
-        std::cout << "dim(u) = " << R_size << "\n";
-        std::cout << "dim(p) = " << W_size << "\n";
-        std::cout << "dim(u+p) = " << R_size + W_size << "\n";
+        std::cout << "dim(u) = " << glob_R_size << "\n";
+        std::cout << "dim(p) = " << glob_W_size << "\n";
+        std::cout << "dim(u+p) = " << glob_R_size + glob_W_size << "\n";
         std::cout << "***********************************************************\n";
     }
 
@@ -161,24 +161,46 @@ int main( int argc, char* argv[] )
     nlf->SetGradientType( Operator::Type::Hypre_ParCSR );
 
     // Set up the Jacobian solver
-    PetscLinearSolver* petsc = new PetscLinearSolver( MPI_COMM_WORLD );
+    // PetscLinearSolver* petsc = new PetscLinearSolver( MPI_COMM_WORLD );
+
+    mfem::Solver* lin_solver{nullptr};
+    // {
+    //     auto cg  = new mfem::CGSolver( MPI_COMM_WORLD );
+    //     lin_solver = cg;
+    //     // gmres->SetPrintLevel( -1 );
+    //     cg->SetRelTol( 1e-11 );
+    //     cg->SetMaxIter( 200000 );
+    //     cg->SetPrintLevel(0);
+
+    //     mfem::HypreBoomerAMG* prec = new mfem::HypreBoomerAMG();
+    //     prec->SetPrintLevel(0);
+    //     cg->SetPreconditioner( *prec );
+    // }
+    {
+        auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
+        mumps->SetPrintLevel( 0 );
+        mumps->SetMatrixSymType( MUMPSSolver::MatType::SYMMETRIC_INDEFINITE );
+        lin_solver = mumps;
+    }
+
     auto newton_solver = new plugin::MultiNewtonAdaptive( MPI_COMM_WORLD );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
-    newton_solver->SetSolver( *petsc );
+    newton_solver->SetSolver( *lin_solver );
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetRelTol( 1e-8 );
+    newton_solver->SetRelTol( 1e-6 );
     newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 10 );
+    newton_solver->SetMaxIter( 8 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( 2e-6 );
+    newton_solver->SetDelta( 1e-5 );
     newton_solver->SetMaxStep( 10000000 );
-    newton_solver->SetMaxDelta( 5e-5 );
+    newton_solver->SetMaxDelta( 1e-3 );
     newton_solver->SetMinDelta( 1e-14 );
+    std::string outPutName = "p_phase_field_square_shear_test_rp=" + std::to_string( par_ref_levels );
 
-    ParaViewDataCollection paraview_dc( "p_phase_field_square_shear_test", pmesh );
+    ParaViewDataCollection paraview_dc( outPutName, pmesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );
@@ -188,7 +210,7 @@ int main( int argc, char* argv[] )
     paraview_dc.RegisterField( "Displace", &x_gf );
     paraview_dc.RegisterField( "PhaseField", &p_gf );
 
-    auto stress_fec = new H1_FECollection( order, dim );
+    auto stress_fec = new DG_FECollection( order, dim );
     auto stress_fespace = new ParFiniteElementSpace( pmesh, stress_fec, 7 );
     ParGridFunction stress_grid( stress_fespace );
     plugin::StressCoefficient sc( dim, iem );
@@ -197,10 +219,9 @@ int main( int argc, char* argv[] )
     stress_grid.ProjectCoefficient( sc );
     paraview_dc.Save();
 
-    std::function<void( int, int, double )> func =
-        [&paraview_dc, &stress_grid, &sc, &x_gf, &p_gf, &xp]( int step, int count, double time )
-    {
-        if ( step % 20 == 0 )
+    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc, &x_gf, &p_gf, &xp](
+                                                       int step, int count, double time ) {
+        if ( step % 10 == 0 )
         {
             x_gf.Distribute( xp.GetBlock( 0 ) );
             p_gf.Distribute( xp.GetBlock( 1 ) );
@@ -217,6 +238,6 @@ int main( int argc, char* argv[] )
 
     newton_solver->Mult( zero, xp );
 
-    MFEMFinalizePetsc();
+    // MFEMFinalizePetsc();
     return 0;
 }
