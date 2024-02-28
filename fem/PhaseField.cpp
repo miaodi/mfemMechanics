@@ -1,7 +1,49 @@
 #include "PhaseField.h"
+#include "Solvers.h"
 
 namespace plugin
 {
+
+void PhaseFieldIntegrator::UpdateH( const int gauss, double& H )
+{
+    auto& pd = mMemo.GetBodyPointData( gauss );
+    // historical strain energy+ for KKT condition
+    if ( mIterAux->IterNumber() == 0 )
+    {
+        if ( mIterAux->StepNumber() == 0 )
+        {
+            if ( !pd.get_val<PointData>( "H" ).has_value() )
+                pd.set_val<PointData>( "H", std::move( PointData() ) );
+        }
+        else
+        {
+            auto& H_data = pd.get_val<PointData>( "H" ).value().get();
+            if ( mIterAux->Convergence() )
+            {
+                if ( mIterAux->StepNumber() > H_data.success_step )
+                {
+                    H_data.H_bac = H_data.H;
+                    H_data.success_step = mIterAux->StepNumber();
+                }
+            }
+            else
+            {
+                H_data.H = H_data.H_bac;
+            }
+        }
+    }
+
+    auto& H_data = pd.get_val<PointData>( "H" ).value().get();
+    if ( H < H_data.H )
+    {
+        H = H_data.H;
+    }
+    else
+    {
+        H_data.H = H;
+    }
+}
+
 void PhaseFieldIntegrator::AssembleElementVector( const mfem::Array<const mfem::FiniteElement*>& el,
                                                   mfem::ElementTransformation& Tr,
                                                   const mfem::Array<const mfem::Vector*>& elfun,
@@ -69,19 +111,10 @@ void PhaseFieldIntegrator::AssembleElementVector( const mfem::Array<const mfem::
 
         w = ip.weight * mMemo.GetDetdXdXi( i );
         eigenVec0 += w * ( mB.transpose() * mMaterialModel->getPK2StressVector() );
-
         double H = mMaterialModel->getPsiPos();
+
         auto& pd = mMemo.GetBodyPointData( i );
-        const double H_prev = pd.get_val<double>( "H" ).value();
-        if ( H < H_prev )
-        {
-            H = H_prev;
-        }
-        else
-        {
-            pd.set_val<double>( "H", H );
-        }
-        // std::cout << "H: " << pd.get_val<double>( "H" ).value() << std::endl;
+        UpdateH( i, H );
 
         eigenVec1 += w * ( -( 2 * ( 1 - k ) * H * ( 1 - pVal ) * eigenShape ) +
                            gc * ( l0 * eigenGShape * pGrad.transpose() + 1 / l0 * pVal * eigenShape ) );
@@ -161,17 +194,9 @@ void PhaseFieldIntegrator::AssembleElementGrad( const mfem::Array<const mfem::Fi
         eigenMat00 += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
 
         double H = mMaterialModel->getPsiPos();
-
         auto& pd = mMemo.GetBodyPointData( i );
-        pd.get_val<double>( "H" );
-        if ( H < pd.get_val<double>( "H" ).value() )
-        {
-            H = pd.get_val<double>( "H" ).value();
-        }
-        else
-        {
-            pd.set_val<double>( "H", H );
-        }
+        UpdateH( i, H );
+
         eigenMat11 += w * ( gc * l0 * eigenGShape * eigenGShape.transpose() +
                             ( gc / l0 + 2 * ( 1 - k ) * H ) * eigenShape * eigenShape.transpose() );
     }

@@ -14,7 +14,7 @@ public:
     enum class StrainEnergyType
     {
         Amor,
-        IsotropicLinearElastic,  // for testing
+        IsotropicLinearElastic, // for testing
         Borden
     };
     PhaseFieldElasticMaterial( mfem::Coefficient& E, mfem::Coefficient& nu, StrainEnergyType set = StrainEnergyType::Amor );
@@ -61,13 +61,13 @@ protected:
     std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::VectorXd& )> StrainEnergyFactory( const StrainEnergyType set ) const;
 
 protected:
-    mfem::Coefficient* mE{nullptr};
-    mfem::Coefficient* mNu{nullptr};
+    mfem::Coefficient* mE{ nullptr };
+    mfem::Coefficient* mNu{ nullptr };
 
-    double mPhi{0.};
-    double mK{1e-9};    // prevent from 0 elasticity
-    double mGc{2700};   // Grifﬁth-type critical energy release rate
-    double mL0{1.5e-5}; // length scale
+    double mPhi{ 0. };
+    double mK{ 1e-9 };      // prevent from 0 elasticity
+    double mGc{ 2700 };     // Grifﬁth-type critical energy release rate
+    double mL0{ 0.015e-3 }; // length scale
     StrainEnergyType mSET;
 
     std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::VectorXd& )> mStrainEnergyFunc;

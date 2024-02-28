@@ -331,7 +331,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     //     petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
     // }
     int step = 0;
-    double norm{0}, norm_goal{0}, normPrev{0}, normPrevPrev{0};
+    double norm{ 0 }, norm_goal{ 0 }, normPrev{ 0 }, normPrevPrev{ 0 };
     const bool have_b = ( b.Size() == Height() );
     lambda = 0.;
 
@@ -552,7 +552,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
     const double c2 = delta_u_bar_dot_delta_u_bar;
 
     double ds = 1.;
-    double delta_lambda1{0.}, delta_lambda2{0.};
+    double delta_lambda1{ 0. }, delta_lambda2{ 0. };
 
     const double as = b1 * b1 - 4 * a0 * c2;
     const double bs = 2 * b0 * b1 - 4 * a0 * c1;
@@ -702,9 +702,7 @@ void MultiNewtonAdaptive::SetOperator( const mfem::Operator& op )
 void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 {
     double cur_lambda = 0.;
-    int step = 0;
 
-    int count = 1;
     mfem::Vector* u;
     if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
     {
@@ -717,9 +715,9 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     }
 
     cur = *u;
-    for ( ; true; step++ )
+    for ( int count = 0; true; count++ )
     {
-        if ( step == max_steps )
+        if ( count == max_steps )
         {
             break;
         }
@@ -727,7 +725,7 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         {
             break;
         }
-        if ( step )
+        if ( count )
         {
             if ( !GetConverged() )
                 delta_lambda /= 2;
@@ -755,9 +753,9 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 {
                     par_grid_x->Distribute( *u );
                 }
-                ( *data_collect_func )( step, count, count );
+                ( *data_collect_func )( count, count, cur_lambda );
             }
-            count++;
+            step++;
         }
         else
         {

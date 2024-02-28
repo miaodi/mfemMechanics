@@ -140,10 +140,6 @@ void Memorize::InitializeElement( const mfem::FiniteElement& el, mfem::ElementTr
         Mult( mDShape1, Trans.InverseJacobian(), mGShape1 );
 
         ( *mEleStorage[mElementNo] )[i].DetdXdXi = Trans.Weight();
-
-        // historical strain energy+ for KKT condition
-        auto& pd = GetBodyPointData( i );
-        pd.set_val<double>( "H", 0. );
     }
 }
 

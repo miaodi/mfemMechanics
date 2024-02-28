@@ -6,10 +6,10 @@
 #include <any>
 #include <autodiff/forward/real.hpp>
 #include <cmath>
+#include <functional>
 #include <iostream>
 #include <mfem.hpp>
 #include <optional>
-
 namespace util
 {
 constexpr double pi = 3.14159265358979323846;
@@ -164,8 +164,7 @@ class AnyMap
 {
 public:
     template <typename T>
-    std::optional<T> get_val( const std::string& key ) const
-
+    std::optional<std::reference_wrapper<const T>> get_val( const std::string& key ) const
     {
         auto it = _option.find( key );
 
@@ -173,14 +172,31 @@ public:
 
             return {};
 
-        return std::any_cast<T>( it->second );
+        return std::any_cast<const T&>( it->second );
+    }
+
+    template <typename T>
+    std::optional<std::reference_wrapper<T>> get_val( const std::string& key )
+    {
+        auto it = _option.find( key );
+
+        if ( it == _option.cend() )
+
+            return {};
+
+        return std::any_cast<T&>( it->second );
     }
 
     template <typename T>
     void set_val( const std::string& key, const T& value )
-
     {
         _option[key] = value;
+    }
+
+    template <typename T>
+    void set_val( const std::string& key, T&& value )
+    {
+        _option.emplace( key, std::move( value ) );
     }
 
     // void print() const;

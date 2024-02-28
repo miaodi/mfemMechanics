@@ -47,10 +47,12 @@ If (tri_or_quad == 1)
 EndIf
 
 Physical Surface(1) = {1, 2, 3, 4};
-Physical Curve("right", 11) = {2, 13};
-Physical Curve("left top", 12) = {4};
-Physical Curve("left bot", 13) = {7};
-Physical Curve("bot", 14) = {1, 12};
+
+Physical Curve("bot", 11) = {1, 12};
+Physical Curve("top", 12) = {3, 11};
+Physical Curve("right", 13) = {2, 13};
+Physical Curve("left top", 14) = {4};
+Physical Curve("left bot", 15) = {7};
 
 Mesh.MshFileVersion = 2.2;
 Mesh 2;

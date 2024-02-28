@@ -25,8 +25,15 @@ public:
         data_collect_func = &dcf;
     }
 
+    int StepNumber() const
+    {
+        return step;
+    }
+
 protected:
-    mutable int it = 0;
+    mutable int it = 0; // iter # of each step
+
+    mutable int step = 0; // step #
 
     mutable std::function<void( int, int, double )>* data_collect_func{ nullptr };
 };

@@ -12,9 +12,18 @@ namespace plugin
 {
 class PhaseFieldIntegrator : public BlockNonlinearFormIntegratorLambda
 {
+    struct PointData
+    {
+        double H{ 0. };
+        double H_bac{ 0. };
+        int success_step{ 0 };
+    };
+
+    void UpdateH( const int, double& );
+
 public:
     PhaseFieldIntegrator( PhaseFieldElasticMaterial& m, Memorize& memo )
-        : BlockNonlinearFormIntegratorLambda(), mMaterialModel( &m ), mMemo{memo}
+        : BlockNonlinearFormIntegratorLambda(), mMaterialModel( &m ), mMemo{ memo }
     {
     }
 
@@ -41,7 +50,7 @@ public:
     // }
 
 protected:
-    PhaseFieldElasticMaterial* mMaterialModel{nullptr};
+    PhaseFieldElasticMaterial* mMaterialModel{ nullptr };
 
     Eigen::Matrix<double, 3, 3> mdxdX;
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;

@@ -25,8 +25,10 @@ Physical Surface(1) = {1};
 Physical Curve("bot", 11) = {1};
 Physical Curve("top", 12) = {3};
 Physical Curve("right", 13) = {2};
-Physical Curve("crack_bot", 14) = {6};
-Physical Curve("crack_top", 15) = {5};
+Physical Curve("left top", 14) = {4};
+Physical Curve("left bot", 15) = {7};
+Physical Curve("crack_bot", 16) = {6};
+Physical Curve("crack_top", 17) = {5};
 
 Mesh 2;
 Mesh.Algorithm = 8; // Delaunay for quads
