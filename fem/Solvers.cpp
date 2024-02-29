@@ -372,7 +372,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         MFEM_VERIFY( L > min_delta, "Required step size is smaller than the minimal bound." );
 
         if ( step && adaptive_l )
-            phi = std::abs( Delta_u_prev.Norml2() / Delta_lambda_prev );
+            phi = std::abs( Norm( Delta_u_prev ) / Delta_lambda_prev );
 
         util::mfemOut( "L: ", L, ", phi: ", phi, "\n", util::Color::RESET );
 
@@ -404,7 +404,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 // convergence check
                 normPrevPrev = normPrev;
                 normPrev = norm;
-                norm = delta_u.Norml2();
+                norm = Norm( delta_u );
                 if ( it == 1 )
                 {
                     norm_goal = std::max( rel_tol * norm, abs_tol );
@@ -664,7 +664,7 @@ bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem
     if ( it == 0 )
     {
         // predictor
-        if ( Delta_u_prev.Norml2() < tol && std::abs( Delta_lambda_prev ) < tol )
+        if ( Norm( Delta_u_prev ) < tol && std::abs( Delta_lambda_prev ) < tol )
         {
             delta_u = delta_u_t;
             const double L_pred = InnerProduct( delta_u, 1, delta_u, 1 );

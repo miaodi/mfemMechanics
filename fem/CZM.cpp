@@ -31,8 +31,6 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
-        if ( mIterAux->IterNumber() == 0 && mIterAux->Convergence() )
-            UpdateMemo( i );
         // // Set the integration point in the face and the neighboring element
         // const mfem::IntegrationPoint& ip = ir->IntPoint( i );
         // Tr.SetAllIntPoints( &ip );
@@ -80,8 +78,6 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
     mMemo.InitializeFace( el1, el2, Tr, *ir );
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
-        if ( mIterAux->IterNumber() == 0 && mIterAux->Convergence() )
-            UpdateMemo( i );
         // // Set the integration point in the face and the neighboring element
         // const mfem::IntegrationPoint& ip = ir->IntPoint( i );
         // Tr.SetAllIntPoints( &ip );

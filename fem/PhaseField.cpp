@@ -107,13 +107,11 @@ void PhaseFieldIntegrator::AssembleElementVector( const mfem::Array<const mfem::
         mMaterialModel->setDeformationGradient( mdxdX );
         mMaterialModel->setPhaseField( pVal );
 
-        mMaterialModel->updateRefModuli();
+        // mMaterialModel->updateRefModuli();
 
         w = ip.weight * mMemo.GetDetdXdXi( i );
         eigenVec0 += w * ( mB.transpose() * mMaterialModel->getPK2StressVector() );
         double H = mMaterialModel->getPsiPos();
-
-        auto& pd = mMemo.GetBodyPointData( i );
         UpdateH( i, H );
 
         eigenVec1 += w * ( -( 2 * ( 1 - k ) * H * ( 1 - pVal ) * eigenShape ) +
@@ -194,12 +192,12 @@ void PhaseFieldIntegrator::AssembleElementGrad( const mfem::Array<const mfem::Fi
         eigenMat00 += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
 
         double H = mMaterialModel->getPsiPos();
-        auto& pd = mMemo.GetBodyPointData( i );
         UpdateH( i, H );
 
         eigenMat11 += w * ( gc * l0 * eigenGShape * eigenGShape.transpose() +
                             ( gc / l0 + 2 * ( 1 - k ) * H ) * eigenShape * eigenShape.transpose() );
     }
+    // std::cout << eigenMat00 << std::endl << std::endl;
 }
 
 void BlockNonlinearDirichletPenaltyIntegrator::AssembleFaceVector( const mfem::Array<const mfem::FiniteElement*>& el1,

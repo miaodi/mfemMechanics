@@ -3,6 +3,7 @@
 #include "mfem.hpp"
 #include <fstream>
 #include <iostream>
+#include <unistd.h>
 
 using namespace std;
 using namespace mfem;
@@ -10,9 +11,22 @@ using namespace mfem;
 class GeneralResidualMonitor : public IterativeSolverMonitor
 {
 public:
-    GeneralResidualMonitor( const std::string& prefix_, int print_lvl ) : prefix( prefix_ )
+    GeneralResidualMonitor( MPI_Comm comm, const std::string& prefix_, int print_lvl ) : prefix( prefix_ )
     {
+#ifndef MFEM_USE_MPI
         print_level = print_lvl;
+#else
+        int rank;
+        MPI_Comm_rank( comm, &rank );
+        if ( rank == 0 )
+        {
+            print_level = print_lvl;
+        }
+        else
+        {
+            print_level = -1;
+        }
+#endif
     }
 
     virtual void MonitorResidual( int it, double norm, const Vector& r, bool final );
@@ -23,18 +37,12 @@ private:
     mutable double norm0;
 };
 
-void ReferenceConfiguration( const Vector& x, Vector& y )
-{
-    // Set the reference, stress free, configuration
-    y = x;
-}
-
 void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector& r, bool final )
 {
     if ( print_level == 1 || ( print_level == 3 && ( final || it == 0 ) ) )
     {
         mfem::out << prefix << " iteration " << setw( 2 ) << it << " : ||r|| = " << norm;
-        if ( it > 0 )
+        if ( it > 1 )
         {
             mfem::out << ",  ||r||/||r_0|| = " << norm / norm0;
         }
@@ -60,7 +68,6 @@ int main( int argc, char* argv[] )
     bool static_cond = false;
     bool visualization = 1;
     int ser_ref_levels = -1, par_ref_levels = -1;
-    const char* petscrc_file = "../../data/petscSetting";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -73,7 +80,6 @@ int main( int argc, char* argv[] )
                     "Number of times to refine the mesh uniformly in serial." );
     args.AddOption( &par_ref_levels, "-rp", "--refine-parallel",
                     "Number of times to refine the mesh uniformly in parallel." );
-    args.AddOption( &petscrc_file, "-petscopts", "--petscopts", "PetscOptions file to use." );
     args.Parse();
     args.Parse();
     if ( !args.Good() )
@@ -89,8 +95,6 @@ int main( int argc, char* argv[] )
     {
         args.PrintOptions( cout );
     }
-
-    MFEMInitializePetsc( NULL, NULL, petscrc_file, NULL );
 
     // 2. Read the mesh from the given mesh file. We can handle triangular,
     //    quadrilateral, tetrahedral or hexahedral elements with the same code.
@@ -201,29 +205,47 @@ int main( int argc, char* argv[] )
 
     ParNonlinearForm* nlf = new ParNonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
-    nlf->SetGradientType( Operator::Type::PETSC_MATAIJ );
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
 
-    GeneralResidualMonitor newton_monitor( "Newton", 1 );
-    GeneralResidualMonitor j_monitor( "GMRES", 3 );
+    GeneralResidualMonitor newton_monitor( fespace->GetComm(), "Newton", 1 );
 
     // Set up the Jacobian solver
-    PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
+    mfem::Solver* lin_solver{ nullptr };
+    
+    // {
+    //     auto cg  = new mfem::CGSolver( MPI_COMM_WORLD );
+    //     lin_solver = cg;
+    //     // gmres->SetPrintLevel( -1 );
+    //     cg->SetRelTol( 1e-11 );
+    //     cg->SetMaxIter( 200000 );
+    //     cg->SetPrintLevel(0);
+
+    //     // mfem::HypreBoomerAMG* prec = new mfem::HypreBoomerAMG();
+    //     // prec->SetPrintLevel(0);
+    //     // cg->SetPreconditioner( *prec );
+    // }
+    {
+        auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
+        mumps->SetMatrixSymType( MUMPSSolver::MatType::SYMMETRIC_INDEFINITE );
+        // mumps->SetReorderingStrategy( MUMPSSolver::ReorderingStrategy::PARMETIS );
+        mumps->SetPrintLevel( -1 );
+        lin_solver = mumps;
+    }
 
     auto newton_solver = new plugin::Crisfield( fespace->GetComm() );
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
-    newton_solver->SetSolver( *petsc );
+    newton_solver->SetSolver( *lin_solver );
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-8 );
-    newton_solver->SetAbsTol( 1e-14 );
-    newton_solver->SetMaxIter( 7 );
+    newton_solver->SetAbsTol( 0 );
+    newton_solver->SetMaxIter( 100 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .00001 );
     newton_solver->SetPhi( 10 );
-    newton_solver->SetMaxDelta( .2 );
+    newton_solver->SetMaxDelta( 1e-6 );
     newton_solver->SetMinDelta( 1e-12 );
     newton_solver->SetMaxStep( 200000 );
 
@@ -250,9 +272,6 @@ int main( int argc, char* argv[] )
     // paraview_dc.Save();
 
     newton_solver->Mult( zero, u );
-
-    MFEMFinalizePetsc();
-
     MPI_Finalize();
     return 0;
 }
