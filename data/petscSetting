@@ -1,2 +1,4 @@
--ksp_type cg 
--pc_type none
+# Use a direct Cholesky solver
+# it needs PETSc configured with MUMPS
+-ksp_type preonly
+-pc_type mumps

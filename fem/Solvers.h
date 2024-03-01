@@ -104,7 +104,7 @@ protected:
 
     void ResizeVectors( const int size ) const;
 
-    void InitializeVariables( mfem::GridFunction& u ) const;
+    void InitializeVariables( const mfem::Vector& u ) const;
 
 public:
     ALMBase() : IterAuxilliary()
@@ -195,7 +195,7 @@ protected:
     mutable mfem::Vector r, delta_u, u_cur, q, delta_u_bar, delta_u_t, Delta_u;
     mutable mfem::Operator* grad;
 
-    mutable mfem::GridFunction Delta_u_prev;
+    mutable mfem::Vector Delta_u_prev;
 
     mutable double lambda, Delta_lambda, delta_lambda, delta_lambda_prev, Delta_lambda_prev, max_delta{ 1. },
         min_delta{ 1. }, L{ 1 }, phi{ 1 }, L_prev;

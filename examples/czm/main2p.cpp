@@ -57,10 +57,10 @@ void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector&
 int main( int argc, char* argv[] )
 {
     // 1. Initialize MPI.
-    int num_procs, myid;
-    MPI_Init( &argc, &argv );
-    MPI_Comm_size( MPI_COMM_WORLD, &num_procs );
-    MPI_Comm_rank( MPI_COMM_WORLD, &myid );
+    Mpi::Init( argc, argv );
+    int num_procs = Mpi::WorldSize();
+    int myid = Mpi::WorldRank();
+    Hypre::Init();
 
     // 1. Parse command-line options.
     const char* mesh_file = "../../data/DCB.msh";
@@ -68,6 +68,7 @@ int main( int argc, char* argv[] )
     bool static_cond = false;
     bool visualization = 1;
     int ser_ref_levels = -1, par_ref_levels = -1;
+    const char* petscrc_file = "../../data/petscSetting";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -80,8 +81,9 @@ int main( int argc, char* argv[] )
                     "Number of times to refine the mesh uniformly in serial." );
     args.AddOption( &par_ref_levels, "-rp", "--refine-parallel",
                     "Number of times to refine the mesh uniformly in parallel." );
+    args.AddOption( &petscrc_file, "-petscopts", "--petscopts", "PetscOptions file to use." );
     args.Parse();
-    args.Parse();
+
     if ( !args.Good() )
     {
         if ( myid == 0 )
@@ -95,6 +97,7 @@ int main( int argc, char* argv[] )
     {
         args.PrintOptions( cout );
     }
+    // MFEMInitializePetsc( NULL, NULL, petscrc_file, NULL );
 
     // 2. Read the mesh from the given mesh file. We can handle triangular,
     //    quadrilateral, tetrahedral or hexahedral elements with the same code.
@@ -147,14 +150,13 @@ int main( int argc, char* argv[] )
     //    associated with the mesh nodes.
     FiniteElementCollection* fec;
     ParFiniteElementSpace* fespace;
-    fec = new DG_FECollection( order, dim, mfem::BasisType::GaussLobatto );
+    fec = new DG_FECollection( order, dim );
     fespace = new ParFiniteElementSpace( pmesh, fec, dim, Ordering::byVDIM );
     HYPRE_BigInt size = fespace->GlobalTrueVSize();
 
     if ( myid == 0 )
     {
-        cout << "Number of vertices: " << fespace->GetNV() << endl;
-        cout << "Number of finite element unknowns: " << fespace->GetTrueVSize() << endl << "Assembling: " << endl;
+        cout << "Number of finite element unknowns: " << size << endl << "Assembling: " << endl;
     }
 
     // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
@@ -201,11 +203,13 @@ int main( int argc, char* argv[] )
     plugin::Memorize mm( pmesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
-    intg->setNonlinear( false );
+    intg->setNonlinear( true );
 
     ParNonlinearForm* nlf = new ParNonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
-    nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
+    auto dirichlet = new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi );
+
+    nlf->AddBdrFaceIntegrator( dirichlet );
 
     GeneralResidualMonitor newton_monitor( fespace->GetComm(), "Newton", 1 );
 
@@ -215,24 +219,43 @@ int main( int argc, char* argv[] )
     // {
     //     auto cg  = new mfem::CGSolver( MPI_COMM_WORLD );
     //     lin_solver = cg;
-    //     // gmres->SetPrintLevel( -1 );
     //     cg->SetRelTol( 1e-11 );
     //     cg->SetMaxIter( 200000 );
-    //     cg->SetPrintLevel(0);
+    //     cg->SetPrintLevel(1);
 
-    //     // mfem::HypreBoomerAMG* prec = new mfem::HypreBoomerAMG();
-    //     // prec->SetPrintLevel(0);
-    //     // cg->SetPreconditioner( *prec );
+    //     mfem::HypreBoomerAMG* prec = new mfem::HypreBoomerAMG();
+    //     prec->SetSystemsOptions( dim );
+    //     prec->SetPrintLevel(0);
+    //     cg->SetPreconditioner( *prec );
+    // }
+    // {
+    //     auto gmres  = new mfem::GMRESSolver( MPI_COMM_WORLD );
+    //     lin_solver = gmres;
+    //     // gmres->SetPrintLevel( -1 );
+    //     gmres->SetRelTol( 1e-13 );
+    //     gmres->SetMaxIter( 2000 );
+    //     gmres->SetKDim( 50 );
+    //     gmres->SetPrintLevel(1);
+
+    //     mfem::HypreBoomerAMG* prec = new mfem::HypreBoomerAMG();
+    //     prec->SetSystemsOptions( dim );
+    //     prec->SetPrintLevel(0);
+    //     gmres->SetPreconditioner( *prec );
     // }
     {
         auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
-        mumps->SetMatrixSymType( MUMPSSolver::MatType::SYMMETRIC_INDEFINITE );
+        mumps->SetMatrixSymType( MUMPSSolver::MatType::UNSYMMETRIC );
         // mumps->SetReorderingStrategy( MUMPSSolver::ReorderingStrategy::PARMETIS );
         mumps->SetPrintLevel( -1 );
         lin_solver = mumps;
     }
+    // {
+    //     nlf->SetGradientType( Operator::Type::PETSC_MATAIJ );
+    //     PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
+    //     lin_solver = petsc;
+    // }
 
-    auto newton_solver = new plugin::Crisfield( fespace->GetComm() );
+    auto newton_solver = new plugin::ArcLengthLinearize( fespace->GetComm() );
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
     newton_solver->SetSolver( *lin_solver );
@@ -241,36 +264,62 @@ int main( int argc, char* argv[] )
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-8 );
     newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 100 );
+    newton_solver->SetMaxIter( 10 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .00001 );
-    newton_solver->SetPhi( 10 );
-    newton_solver->SetMaxDelta( 1e-6 );
+    newton_solver->SetPhi( 1 );
+    newton_solver->SetMaxDelta( 1e-4 );
     newton_solver->SetMinDelta( 1e-12 );
-    newton_solver->SetMaxStep( 200000 );
+    newton_solver->SetMaxStep( 2000000 );
+    newton_solver->SetAdaptiveL( true );
 
-    nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialCZMIntegrator( mm, 324E5, 755.4E5, 4E-7, 4E-7 ) );
+    // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
+    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialRotADCZMIntegrator( mm, 324E5, 755.4E5, 4E-4, 4E-4 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;
 
-    GridFunction u( fespace );
+    // ParGridFunction u( fespace );
+    Vector u( fespace->GetTrueVSize() );
     u = 0.;
 
-    // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
-    // 15. Save data in the ParaView format
-    // ParaViewDataCollection paraview_dc( "czm2Dp", pmesh );
-    // paraview_dc.SetPrefixPath( "ParaView" );
-    // paraview_dc.SetLevelsOfDetail( order );
-    // paraview_dc.SetCycle( 0 );
-    // paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    // paraview_dc.SetHighOrderOutput( true );
-    // paraview_dc.SetTime( 0.0 ); // set the time
-    // paraview_dc.RegisterField( "Displace", &u );
-    // newton_solver->SetDataCollection( &paraview_dc );
-    // paraview_dc.Save();
+    std::string outPutName = "czm_parallel_rp=" + std::to_string( par_ref_levels );
 
+    ParaViewDataCollection paraview_dc( outPutName, pmesh );
+    paraview_dc.SetPrefixPath( "ParaView" );
+    paraview_dc.SetLevelsOfDetail( order );
+    paraview_dc.SetCycle( 0 );
+    paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    paraview_dc.SetHighOrderOutput( true );
+    paraview_dc.SetTime( 0.0 ); // set the time
+
+    auto stress_fec = new DG_FECollection( order, dim );
+    auto stress_fespace = new ParFiniteElementSpace( pmesh, stress_fec, 7 );
+    ParGridFunction stress_grid( stress_fespace );
+    plugin::StressCoefficient sc( dim, iem );
+    ParGridFunction x_gf( fespace );
+    sc.SetDisplacement( x_gf );
+    stress_grid.ProjectCoefficient( sc );
+    paraview_dc.RegisterField( "Displace", &x_gf );
+    paraview_dc.RegisterField( "Stress", &stress_grid );
+    stress_grid.ProjectCoefficient( sc );
+    paraview_dc.Save();
+
+    std::function<void( int, int, double )> func =
+        [&paraview_dc, &stress_grid, &sc, &x_gf, &u]( int step, int count, double time )
+    {
+        static int local_counter = 0;
+        if ( count % 20 == 0 )
+        {
+            
+            x_gf.Distribute( u );
+            paraview_dc.SetCycle( local_counter++ );
+            paraview_dc.SetTime( time );
+            stress_grid.ProjectCoefficient( sc );
+            paraview_dc.Save();
+        }
+    };
+    newton_solver->SetDataCollectionFunc( func );
     newton_solver->Mult( zero, u );
     MPI_Finalize();
     return 0;

@@ -110,7 +110,7 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
 
     double norm0_u, norm_u, norm_goal_u;
-    double norm0_p, norm_p, norm_goal_p;
+    double norm0_p{0}, norm_p{0}, norm_goal_p{100};
     const bool have_b = ( b.Size() == Height() );
 
     if ( !iterative_mode )
@@ -161,7 +161,7 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
         if ( it >= max_iter )
         {
-            converged = false;
+            converged = true;
             break;
         }
 
@@ -292,12 +292,12 @@ void ALMBase::ResizeVectors( const int size ) const
     delta_u_bar.SetSize( size );
     delta_u_t.SetSize( size );
     Delta_u.SetSize( size );
+    Delta_u_prev.SetSize( size );
 }
 
-void ALMBase::InitializeVariables( mfem::GridFunction& u ) const
+void ALMBase::InitializeVariables( const mfem::Vector& u ) const
 {
     ResizeVectors( u.Size() );
-    Delta_u_prev.SetSpace( u.FESpace() );
 }
 
 void ALMBase::SetOperator( const mfem::Operator& op )
@@ -315,15 +315,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
     const double goldenRatio = ( 1. + std::sqrt( 5 ) ) / 2;
     mfem::Vector* u;
-    if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
-    {
-        u = new mfem::Vector( par_grid_x->ParFESpace()->GetTrueVSize() );
-        par_grid_x->ParallelProject( *u );
-    }
-    else
-    {
-        u = &x;
-    }
+    u = &x;
 
     // mfem::PetscSolver* petscPrec = nullptr;
     // if ( dynamic_cast<mfem::PetscSolver*>( prec ) )
@@ -341,7 +333,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     // {
     //     *u = 0.0;
     // }
-    InitializeVariables( static_cast<mfem::GridFunction&>( x ) );
+    InitializeVariables( x );
     Delta_u_prev = 0.;
     Delta_lambda_prev = 0.;
 
@@ -451,10 +443,10 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             prec->SetOperator( *grad );
 
             prec->Mult( q, delta_u_t );
-            // mfem::OperatorHandle gradHandle( grad, false );
-            // PetscBool isSymmetric;
-            // MatIsSymmetric( ( mfem::petsc::Mat )( *gradHandle.As<mfem::PetscParMatrix>() ), 0., &isSymmetric );
-            prec->Mult( r, delta_u_bar );
+            if ( it == 0 )
+                delta_u_bar = 0.;
+            else
+                prec->Mult( r, delta_u_bar );
 
             if ( !updateStep( delta_u_bar, delta_u_t, it, step ) )
             {
@@ -493,17 +485,17 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
             if ( adaptive_mesh_refine_func )
             {
-                if ( !( *adaptive_mesh_refine_func )( Delta_u ) )
-                {
-                    mfem::out << "Refine mesh. Redo nonlinear step\n";
-                    ResizeVectors( x.Size() );
-                    Delta_u_prev.Update();
-                    continue;
-                }
-                else
-                {
-                    mfem::out << "Stopping criterion satisfied. Stop refining.\n";
-                }
+                // if ( !( *adaptive_mesh_refine_func )( Delta_u ) )
+                // {
+                //     mfem::out << "Refine mesh. Redo nonlinear step\n";
+                //     ResizeVectors( x.Size() );
+                //     Delta_u_prev.Update();
+                //     continue;
+                // }
+                // else
+                // {
+                //     mfem::out << "Stopping criterion satisfied. Stop refining.\n";
+                // }
             }
 
             lambda += Delta_lambda;
@@ -526,11 +518,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             count++;
         }
         util::mfemOut( util::ProgressBar( lambda, converged ), '\n' );
-    }
-    if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
-    {
-        par_grid_x->Distribute( *u );
-        delete u;
     }
 }
 

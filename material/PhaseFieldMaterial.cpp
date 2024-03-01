@@ -51,14 +51,13 @@ std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::V
     {
         return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXd& params ) {
             const auto strainTensor = util::InverseVoigt( strainVec, true );
-            const double E = this->E();
             const double Nu = this->Nu();
+            const double E = this->E();
+
             const double mu = E / ( 2. * ( 1. + Nu ) );
             const double lambda = ( Nu * E ) / ( ( 1 + Nu ) * ( 1. - 2. * Nu ) );
-            const double phi = params[1];
-            const autodiff::dual2nd psi =
-                lambda / 2 * strainTensor.trace() * strainTensor.trace() + mu * strainTensor.squaredNorm();
-            return psi;
+
+            return lambda / 2 * strainTensor.trace() * strainTensor.trace() + mu * strainTensor.squaredNorm();
         };
     }
     default:
