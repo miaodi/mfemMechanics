@@ -424,12 +424,11 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
 
             // compute q
-            SetLambdaToIntegrators( oper, .0001 + lambda + Delta_lambda );
+            SetLambdaToIntegrators( oper, 1. + lambda + Delta_lambda );
             oper->Mult( u_cur, q );
 
             q -= r;
             q.Neg();
-            q *= 10000;
             if ( have_b )
             {
                 r -= b;

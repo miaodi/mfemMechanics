@@ -97,7 +97,7 @@ int main( int argc, char* argv[] )
     {
         args.PrintOptions( cout );
     }
-    // MFEMInitializePetsc( NULL, NULL, petscrc_file, NULL );
+    MFEMInitializePetsc( NULL, NULL, petscrc_file, NULL );
 
     // 2. Read the mesh from the given mesh file. We can handle triangular,
     //    quadrilateral, tetrahedral or hexahedral elements with the same code.
@@ -237,23 +237,23 @@ int main( int argc, char* argv[] )
     //     gmres->SetKDim( 50 );
     //     gmres->SetPrintLevel(1);
 
-    //     mfem::HypreBoomerAMG* prec = new mfem::HypreBoomerAMG();
-    //     prec->SetSystemsOptions( dim );
-    //     prec->SetPrintLevel(0);
-    //     gmres->SetPreconditioner( *prec );
+    //     // mfem::HypreBoomerAMG* prec = new mfem::HypreBoomerAMG();
+    //     // prec->SetSystemsOptions( dim );
+    //     // prec->SetPrintLevel(0);
+    //     // gmres->SetPreconditioner( *prec );
+    // }
+    // {
+    //     auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
+    //     mumps->SetMatrixSymType( MUMPSSolver::MatType::UNSYMMETRIC );
+    //     // mumps->SetReorderingStrategy( MUMPSSolver::ReorderingStrategy::PARMETIS );
+    //     mumps->SetPrintLevel( -1 );
+    //     lin_solver = mumps;
     // }
     {
-        auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
-        mumps->SetMatrixSymType( MUMPSSolver::MatType::UNSYMMETRIC );
-        // mumps->SetReorderingStrategy( MUMPSSolver::ReorderingStrategy::PARMETIS );
-        mumps->SetPrintLevel( -1 );
-        lin_solver = mumps;
+        nlf->SetGradientType( Operator::Type::PETSC_MATAIJ );
+        PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
+        lin_solver = petsc;
     }
-    // {
-    //     nlf->SetGradientType( Operator::Type::PETSC_MATAIJ );
-    //     PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
-    //     lin_solver = petsc;
-    // }
 
     auto newton_solver = new plugin::ArcLengthLinearize( fespace->GetComm() );
     // Set the newton solve parameters
@@ -264,11 +264,11 @@ int main( int argc, char* argv[] )
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-8 );
     newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 10 );
+    newton_solver->SetMaxIter( 12 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( .00001 );
     newton_solver->SetPhi( 1 );
-    newton_solver->SetMaxDelta( 1e-4 );
+    newton_solver->SetMaxDelta( 1e-3 );
     newton_solver->SetMinDelta( 1e-12 );
     newton_solver->SetMaxStep( 2000000 );
     newton_solver->SetAdaptiveL( true );
