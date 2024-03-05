@@ -63,7 +63,7 @@ int main( int argc, char* argv[] )
     Hypre::Init();
 
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/DCB.msh";
+    const char* mesh_file = "../../data/crack_square2d.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
@@ -168,25 +168,34 @@ int main( int argc, char* argv[] )
     {
         d.Set( i, new ConstantCoefficient( 0.0 ) );
     }
-
     Vector topDisp( pmesh->bdr_attributes.Max() );
     topDisp = .0;
-    topDisp( 11 ) = 4e-2;
-    topDisp( 12 ) = -4e-2;
-    d.Set( 1, new PWConstCoefficient( topDisp ) );
+    topDisp( 10 ) = 0;
+    topDisp( 11 ) = 1e-4;
+    d.Set( 0, new PWConstCoefficient( topDisp ) );
 
-    Vector activeBCX( pmesh->bdr_attributes.Max() );
-    activeBCX = 0.0;
-    activeBCX( 10 ) = 1e15;
-    Vector activeBCY( pmesh->bdr_attributes.Max() );
-    activeBCY = 0.0;
-    activeBCY( 10 ) = 1e15;
-    activeBCY( 11 ) = 1e15;
-    activeBCY( 12 ) = 1e15;
-
+    Vector activeBC( pmesh->bdr_attributes.Max() );
+    activeBC = 0.0;
+    activeBC( 10 ) = 1e16;
+    activeBC( 11 ) = 1e16;
     VectorArrayCoefficient hevi( dim );
-    hevi.Set( 0, new PWConstCoefficient( activeBCX ) );
-    hevi.Set( 1, new PWConstCoefficient( activeBCY ) );
+    for ( int i = 0; i < dim; i++ )
+    {
+        hevi.Set( i, new PWConstCoefficient( activeBC ) );
+    }
+
+    VectorArrayCoefficient d2( dim );
+    Vector sideDisp( pmesh->bdr_attributes.Max() );
+    sideDisp = .0;
+    d.Set( 1, new PWConstCoefficient( sideDisp ) );
+
+    Vector activeBC2( pmesh->bdr_attributes.Max() );
+    activeBC2 = 0.0;
+    activeBC2( 12 ) = 1e16;
+    activeBC2( 13 ) = 1e16;
+    activeBC2( 14 ) = 1e16;
+    VectorArrayCoefficient hevi2( dim );
+    hevi2.Set( 1, new PWConstCoefficient( activeBC ) );
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
     //    which satisfies the boundary conditions.
@@ -207,15 +216,15 @@ int main( int argc, char* argv[] )
 
     ParNonlinearForm* nlf = new ParNonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
-    auto dirichlet = new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi );
 
-    nlf->AddBdrFaceIntegrator( dirichlet );
+    nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
+    nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d2, hevi2 ) );
 
     GeneralResidualMonitor newton_monitor( fespace->GetComm(), "Newton", 1 );
 
     // Set up the Jacobian solver
-    mfem::Solver* lin_solver{ nullptr };
-    
+    mfem::Solver* lin_solver{nullptr};
+
     // {
     //     auto cg  = new mfem::CGSolver( MPI_COMM_WORLD );
     //     lin_solver = cg;
@@ -262,20 +271,21 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-8 );
-    newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 12 );
+    newton_solver->SetRelTol( 1e-18 );
+    newton_solver->SetMaxIter( 20 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( .00001 );
+    newton_solver->SetDelta( 1e-4 );
     newton_solver->SetPhi( 1 );
-    newton_solver->SetMaxDelta( 1e-3 );
-    newton_solver->SetMinDelta( 1e-12 );
+    newton_solver->SetMaxDelta( 1e-6 );
+    newton_solver->SetMinDelta( 1e-14 );
     newton_solver->SetMaxStep( 2000000 );
     newton_solver->SetAdaptiveL( true );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialRotADCZMIntegrator( mm, 324E5, 755.4E5, 4E-4, 4E-4 ) );
-    // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
+    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 );
+    nlf->AddInteriorFaceIntegrator( czm_intg );
+    mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
+    czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );
 
     Vector zero;
 
@@ -305,13 +315,10 @@ int main( int argc, char* argv[] )
     stress_grid.ProjectCoefficient( sc );
     paraview_dc.Save();
 
-    std::function<void( int, int, double )> func =
-        [&paraview_dc, &stress_grid, &sc, &x_gf, &u]( int step, int count, double time )
-    {
+    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc, &x_gf, &u]( int step, int count, double time ) {
         static int local_counter = 0;
         if ( count % 20 == 0 )
         {
-            
             x_gf.Distribute( u );
             paraview_dc.SetCycle( local_counter++ );
             paraview_dc.SetTime( time );
@@ -320,6 +327,39 @@ int main( int argc, char* argv[] )
         }
     };
     newton_solver->SetDataCollectionFunc( func );
+
+    newton_solver->SetLUpdateFunc( []( bool converged, int final_iter, double lambda, double& L ) {
+        double max_delta = 0;
+        if ( lambda < .2 )
+        {
+            max_delta = 1e-3;
+        }
+        else if ( lambda < .3 )
+        {
+            max_delta = 1e-4;
+        }
+        else if ( lambda < .31 )
+        {
+            max_delta = 1e-5;
+        }
+        else if ( lambda < .325 )
+        {
+            max_delta = 1e-6;
+        }
+        else
+        {
+            max_delta = 1e-8;
+        }
+        if ( converged )
+        {
+            L *= 1.2;
+            L = std::min( max_delta, L );
+        }
+        else
+        {
+            L /= 2;
+        }
+    } );
     newton_solver->Mult( zero, u );
     MPI_Finalize();
     return 0;
