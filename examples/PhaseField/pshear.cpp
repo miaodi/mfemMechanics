@@ -141,8 +141,8 @@ int main( int argc, char* argv[] )
 
     Vector activeBC( R_space.GetMesh()->bdr_attributes.Max() );
     activeBC = 0.0;
-    activeBC( 10 ) = 1e17;
-    activeBC( 11 ) = 1e17;
+    activeBC( 10 ) = 1e16;
+    activeBC( 11 ) = 1e16;
     VectorArrayCoefficient hevi( dim );
     for ( int i = 0; i < dim; i++ )
     {
@@ -156,9 +156,9 @@ int main( int argc, char* argv[] )
 
     Vector activeBC2( R_space.GetMesh()->bdr_attributes.Max() );
     activeBC2 = 0.0;
-    activeBC2( 12 ) = 1e17;
-    activeBC2( 13 ) = 1e17;
-    activeBC2( 14 ) = 1e17;
+    activeBC2( 12 ) = 1e16;
+    activeBC2( 13 ) = 1e16;
+    activeBC2( 14 ) = 1e16;
     VectorArrayCoefficient hevi2( dim );
     hevi2.Set( 1, new PWConstCoefficient( activeBC ) );
 
@@ -213,11 +213,25 @@ int main( int argc, char* argv[] )
     // PetscLinearSolver* petsc = new PetscLinearSolver( MPI_COMM_WORLD );
 
     mfem::Solver* lin_solver{ nullptr };
+    {
+        auto gmres  = new mfem::GMRESSolver( MPI_COMM_WORLD );
+        lin_solver = gmres;
+        // gmres->SetPrintLevel( -1 );
+        gmres->SetRelTol( 1e-13 );
+        gmres->SetMaxIter( 2000 );
+        gmres->SetKDim( 50 );
+        gmres->SetPrintLevel(0);
+
+        mfem::HypreBoomerAMG* prec = new mfem::HypreBoomerAMG();
+        prec->SetSystemsOptions( dim );
+        prec->SetPrintLevel(0);
+        gmres->SetPreconditioner( *prec );
+    }
     // {
     //     auto cg  = new mfem::CGSolver( MPI_COMM_WORLD );
     //     lin_solver = cg;
     //     // gmres->SetPrintLevel( -1 );
-    //     cg->SetRelTol( 1e-11 );
+    //     cg->SetRelTol( 1e-14 );
     //     cg->SetMaxIter( 200000 );
     //     cg->SetPrintLevel(0);
 
@@ -225,12 +239,12 @@ int main( int argc, char* argv[] )
     //     prec->SetPrintLevel(0);
     //     cg->SetPreconditioner( *prec );
     // }
-    {
-        auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
-        mumps->SetPrintLevel( 0 );
-        mumps->SetMatrixSymType( MUMPSSolver::MatType::UNSYMMETRIC );
-        lin_solver = mumps;
-    }
+    // {
+    //     auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
+    //     mumps->SetPrintLevel( 0 );
+    //     mumps->SetMatrixSymType( MUMPSSolver::MatType::UNSYMMETRIC );
+    //     lin_solver = mumps;
+    // }
 
     auto newton_solver = new plugin::MultiNewtonAdaptive( MPI_COMM_WORLD );
     intg->SetIterAux( newton_solver );
@@ -240,13 +254,13 @@ int main( int argc, char* argv[] )
     newton_solver->SetSolver( *lin_solver );
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetRelTol( 1e-7 );
+    newton_solver->SetRelTol( 1e-4 );
     newton_solver->SetAbsTol( 0 );
     newton_solver->SetMaxIter( 8 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( 1e-5 );
+    newton_solver->SetDelta( 1e-4 );
     newton_solver->SetMaxStep( 1000000 );
-    newton_solver->SetMaxDelta( 5e-5 );
+    newton_solver->SetMaxDelta( 1e-4 );
     newton_solver->SetMinDelta( 1e-14 );
     std::string outPutName = "p_phase_field_square_shear_hex_test_rp=" + std::to_string( par_ref_levels );
 
