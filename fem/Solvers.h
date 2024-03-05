@@ -1,6 +1,7 @@
 #pragma once
 #include "Material.h"
 #include "mfem.hpp"
+#include <CircularBuffer.hpp>
 #include <Eigen/Dense>
 #include <functional>
 #include <memory>
@@ -42,10 +43,10 @@ protected:
 
     mutable int step = 0; // step #
 
-    mutable std::function<void( int, int, double )> data_collect_func{nullptr};
+    mutable std::function<void( int, int, double )> data_collect_func{ nullptr };
 
     // args: converged, final_iter, lambda, L
-    mutable std::function<void( bool, int, double, double& )> L_update_func{nullptr};
+    mutable std::function<void( bool, int, double, double& )> L_update_func{ nullptr };
 };
 
 class NewtonLineSearch : public mfem::NewtonSolver, public IterAuxilliary
@@ -53,12 +54,12 @@ class NewtonLineSearch : public mfem::NewtonSolver, public IterAuxilliary
 protected:
     mutable mfem::Vector r_u, c_u;
     mutable mfem::Vector r_p, c_p;
-    double max_eta{10.};
-    double min_eta{.1};
-    double eta_coef{1.5};
-    int max_line_search_iter{10};
-    double tol{.006};
-    bool line_search{false};
+    double max_eta{ 10. };
+    double min_eta{ .1 };
+    double eta_coef{ 1.5 };
+    int max_line_search_iter{ 10 };
+    double tol{ .006 };
+    bool line_search{ false };
     mutable mfem::BlockNonlinearForm* blockOper;
     mfem::Array<int> block_trueOffsets;
 
@@ -191,31 +192,29 @@ public:
         adaptive_l = adapt;
     }
 
-    void SetRelaxFactor( const double relax )
-    {
-        relaxation_factor = relax;
-    }
-
     virtual bool Convergence() const
     {
         return converged;
     }
 
+    void PredictDirection() const;
+
 protected:
     mutable mfem::Vector r, delta_u, u_cur, q, delta_u_bar, delta_u_t, Delta_u;
     mutable mfem::Operator* grad;
 
-    mutable mfem::Vector Delta_u_prev;
+    mutable mfem::Vector u_direction_pred;
 
-    mutable double lambda, Delta_lambda, delta_lambda, delta_lambda_prev, Delta_lambda_prev, max_delta{1.},
-        min_delta{1.}, L{1}, phi{1}, L_prev;
+    mutable double lambda, Delta_lambda, delta_lambda, delta_lambda_prev, Delta_lambda_prev, max_delta{ 1. },
+        min_delta{ 1. }, L{ 1 }, phi{ 1 };
 
-    int max_steps{100};
+    int max_steps{ 100 };
 
-    bool check_conv_ratio{false};
-    bool adaptive_l{false};
-    mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{nullptr};
-    double relaxation_factor{1.0};
+    bool check_conv_ratio{ false };
+    bool adaptive_l{ false };
+    mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{ nullptr };
+
+    mutable CircularBuffer<std::tuple<double, double, mfem::Vector>, 20> solution_buffer;
 };
 
 class Crisfield : public ALMBase
@@ -288,12 +287,12 @@ public:
     }
 
 protected:
-    int max_steps{100};
-    mutable double delta_lambda{1.};
-    mutable mfem::IterativeSolver* prec{nullptr};
+    int max_steps{ 100 };
+    mutable double delta_lambda{ 1. };
+    mutable mfem::IterativeSolver* prec{ nullptr };
     mutable mfem::Vector cur;
-    const mfem::Operator* oper{nullptr};
+    const mfem::Operator* oper{ nullptr };
 
-    mutable double max_delta{1.}, min_delta{1.};
+    mutable double max_delta{ 1. }, min_delta{ 1. };
 };
 } // namespace plugin

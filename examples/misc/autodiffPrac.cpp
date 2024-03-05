@@ -4,6 +4,7 @@
 // autodiff include
 #include "Plugin.h"
 #include "mfem.hpp"
+#include <CircularBuffer.hpp>
 #include <Eigen/Dense>
 #include <SymmetricEigensolver3x3.hpp>
 #include <autodiff/forward/dual.hpp>
@@ -12,7 +13,6 @@
 #include <autodiff/forward/real/eigen.hpp>
 #include <cmath>
 #include <iomanip>
-#include <ringbuffer.hpp>
 #include <taco.h>
 #include <unsupported/Eigen/KroneckerProduct>
 using namespace autodiff;
@@ -247,6 +247,7 @@ mfem::HypreParMatrix* parnonlinear_getgredient( int dim, int num_elements, int o
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
 
     std::cout << fespace.GlobalTrueVSize() << std::endl;
+    std::cout << fespace.GetTrueVSize() << std::endl;
 
     ParNonlinearForm nlf( &fespace );
     nlf.AddDomainIntegrator( intg );
@@ -389,16 +390,16 @@ int main()
     // }
 
     // {
-    //     jnk0le::Ringbuffer<int, 8> ring;
-    //     for ( int i = 0; i < 10; i++ )
-    //     {
-    //         std::cout << i << " " << ring.insert( i ) << " " << *ring.peek() << std::endl;
-    //     }
-    //     for ( int i = 0; i < 8; i++ )
-    //     {
-    //         std::cout << i << " " << *ring.peek() << std::endl;
-    //         ring.remove();
-    //     }
+    //     CircularBuffer<double, 10> cb;
+    //     cb.unshift( 2 );
+    //     cb.unshift( 3 );
+    //     cb.unshift( 4 );
+    //     cb.unshift( 5 );
+    //     std::cout << cb[0] << " " << cb[1] << " " << cb.size() << " " << CircularBuffer<double, 10>::capacity << " "
+    //               << cb.first() << " " << cb.last() << std::endl;
+    //     cb.pop();
+    //     std::cout << cb[0] << " " << cb[1] << " " << cb.size() << " " << CircularBuffer<double, 10>::capacity << " "
+    //               << cb.first() << " " << cb.last() << std::endl;
     // }
 
     {

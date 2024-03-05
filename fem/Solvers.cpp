@@ -2,6 +2,7 @@
 #include "FEMPlugin.h"
 #include "PrettyPrint.h"
 #include "util.h"
+#include <Eigen/Dense>
 #include <deque>
 #include <slepc.h>
 #include <tuple>
@@ -110,7 +111,7 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
 
     double norm0_u, norm_u, norm_goal_u;
-    double norm0_p{0}, norm_p{0}, norm_goal_p{100};
+    double norm0_p{ 0 }, norm_p{ 0 }, norm_goal_p{ 100 };
     const bool have_b = ( b.Size() == Height() );
 
     if ( !iterative_mode )
@@ -292,7 +293,7 @@ void ALMBase::ResizeVectors( const int size ) const
     delta_u_bar.SetSize( size );
     delta_u_t.SetSize( size );
     Delta_u.SetSize( size );
-    Delta_u_prev.SetSize( size );
+    u_direction_pred.SetSize( size );
 }
 
 void ALMBase::InitializeVariables( const mfem::Vector& u ) const
@@ -306,6 +307,13 @@ void ALMBase::SetOperator( const mfem::Operator& op )
     height = op.Height();
     width = op.Width();
     MFEM_ASSERT( height == width, "square Operator is required." );
+}
+
+void ALMBase::PredictDirection() const
+{
+    Eigen::Matrix3d mass;
+    mass.setZero();
+    Eigen::Vector3d sol, rhs;
 }
 
 void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
@@ -334,7 +342,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     //     *u = 0.0;
     // }
     InitializeVariables( x );
-    Delta_u_prev = 0.;
+    u_direction_pred = 0.;
     Delta_lambda_prev = 0.;
 
     ProcessNewState( x );
@@ -369,19 +377,31 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
         }
 
-        MFEM_VERIFY( L > min_delta, "Required step size is smaller than the minimal bound." );
-
-        if ( step && adaptive_l )
-            phi = std::abs( Norm( Delta_u_prev ) / Delta_lambda_prev );
+        if ( L < min_delta )
+        {
+            MFEM_WARNING( "Required step size is smaller than the minimal bound, restart with previous solution." );
+            if ( solution_buffer.size() == 0 )
+            {
+                MFEM_ABORT( "Solution buffer is empty, end the simulation." );
+            }
+            // mfem::out << solution_buffer.size() << "\n";
+            // L = std::get<0>( solution_buffer[0] ) / goldenRatio;
+            // lambda = std::get<1>( solution_buffer[0] );
+            // Delta_lambda_prev = std::get<2>( solution_buffer[0] );
+            // *u = std::get<3>( solution_buffer[0] );
+            // u_direction_pred = std::get<4>( solution_buffer[0] );
+            // solution_buffer.shift();
+        }
 
         util::mfemOut( "L: ", L, ", phi: ", phi, "\n", util::Color::RESET );
 
         delta_u = 0.;
         Delta_u = 0.;
         delta_lambda = 0.;
-        delta_lambda_prev = 0.;
         Delta_lambda = 0.;
         it = 0;
+
+        PredictDirection();
 
         // mfem::out << std::setprecision( 16 ) << "time: " << lambda << std::endl;
         for ( ; true; it++ )
@@ -393,7 +413,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
 
             add( *u, Delta_u, u_cur );
-            delta_lambda_prev = delta_lambda; // needed for relaxation
 
             // compute r
             SetLambdaToIntegrators( oper, lambda + Delta_lambda );
@@ -461,13 +480,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 break;
             }
 
-            // relaxation Schweizerhof and Wriggers 1986
-            if ( relaxation_factor < 1 && delta_lambda_prev * delta_lambda < 0 && std::abs( delta_lambda ) <= std::abs( delta_lambda_prev ) )
-            {
-                delta_lambda *= relaxation_factor;
-                delta_u *= relaxation_factor;
-            }
-
             // update
             Delta_u += delta_u;
             Delta_lambda += delta_lambda;
@@ -496,7 +508,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 // {
                 //     mfem::out << "Refine mesh. Redo nonlinear step\n";
                 //     ResizeVectors( x.Size() );
-                //     Delta_u_prev.Update();
+                //     u_direction_pred.Update();
                 //     continue;
                 // }
                 // else
@@ -508,11 +520,12 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             lambda += Delta_lambda;
             *u += Delta_u;
             Delta_lambda_prev = Delta_lambda;
-            Delta_u_prev = Delta_u;
-            L_prev = L;
             step++;
             final_iter = it;
             final_norm = norm;
+
+            if ( adaptive_l )
+                phi = std::abs( Norm( Delta_u ) / Delta_lambda );
 
             if ( data_collect_func )
             {
@@ -522,6 +535,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 }
                 ( data_collect_func )( step, count, count );
             }
+            solution_buffer.unshift( std::make_tuple( L, lambda, *u ) );
             count++;
         }
         util::mfemOut( util::ProgressBar( lambda, converged ), '\n' );
@@ -622,7 +636,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
         }
         else
         {
-            if ( InnerProduct( delta_u_t, 1, Delta_u_prev, Delta_lambda_prev ) > 0 )
+            if ( Dot( delta_u_t, u_direction_pred ) > 0 )
             {
                 delta_lambda = delta_lambda1;
             }
@@ -658,19 +672,10 @@ bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem
     if ( it == 0 )
     {
         // predictor
-        if ( Norm( Delta_u_prev ) < tol && std::abs( Delta_lambda_prev ) < tol )
-        {
-            delta_u = delta_u_t;
-            const double L_pred = InnerProduct( delta_u, 1, delta_u, 1 );
-            delta_u *= frac * L / L_pred;
-            delta_lambda = frac * L / L_pred;
-        }
-        else
-        {
-            delta_u = Delta_u_prev;
-            delta_u *= L / L_prev * frac;
-            delta_lambda = Delta_lambda_prev * L / L_prev * frac;
-        }
+        delta_u = u_direction_pred;
+        delta_u *= L * frac;
+        // delta_lambda = Delta_lambda_prev * L / L_prev * frac;
+        delta_lambda = 0.;
     }
     else
     {

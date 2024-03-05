@@ -141,8 +141,8 @@ int main( int argc, char* argv[] )
 
     Vector activeBC( R_space.GetMesh()->bdr_attributes.Max() );
     activeBC = 0.0;
-    activeBC( 10 ) = 1e17;
-    activeBC( 11 ) = 1e17;
+    activeBC( 10 ) = 1e15;
+    activeBC( 11 ) = 1e15;
     VectorArrayCoefficient hevi( dim );
     for ( int i = 0; i < dim; i++ )
     {
@@ -156,9 +156,9 @@ int main( int argc, char* argv[] )
 
     Vector activeBC2( R_space.GetMesh()->bdr_attributes.Max() );
     activeBC2 = 0.0;
-    activeBC2( 12 ) = 1e17;
-    activeBC2( 13 ) = 1e17;
-    activeBC2( 14 ) = 1e17;
+    activeBC2( 12 ) = 1e15;
+    activeBC2( 13 ) = 1e15;
+    activeBC2( 14 ) = 1e15;
     VectorArrayCoefficient hevi2( dim );
     hevi2.Set( 1, new PWConstCoefficient( activeBC ) );
 
@@ -227,8 +227,9 @@ int main( int argc, char* argv[] )
     // }
     {
         auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
-        mumps->SetPrintLevel( 0 );
-        mumps->SetMatrixSymType( MUMPSSolver::MatType::UNSYMMETRIC );
+        mumps->SetMatrixSymType( MUMPSSolver::MatType::SYMMETRIC_INDEFINITE );
+        // mumps->SetReorderingStrategy( MUMPSSolver::ReorderingStrategy::PARMETIS );
+        mumps->SetPrintLevel( -1 );
         lin_solver = mumps;
     }
 
@@ -240,13 +241,13 @@ int main( int argc, char* argv[] )
     newton_solver->SetSolver( *lin_solver );
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetRelTol( 1e-7 );
+    newton_solver->SetRelTol( 1e-4 );
     newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 8 );
+    newton_solver->SetMaxIter( 100 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( 1e-5 );
     newton_solver->SetMaxStep( 1000000 );
-    newton_solver->SetMaxDelta( 5e-5 );
+    newton_solver->SetMaxDelta( 1e-4 );
     newton_solver->SetMinDelta( 1e-14 );
     std::string outPutName = "p_phase_field_square_shear_hex_test_rp=" + std::to_string( par_ref_levels );
 
