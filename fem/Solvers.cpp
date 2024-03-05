@@ -350,15 +350,23 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             converged = false;
             break;
         }
-        // initialize
-        if ( converged == false )
+
+        // update L
+        if ( L_update_func )
         {
-            L /= 10;
+            L_update_func( converged, final_iter, lambda, L );
         }
-        else if ( step )
+        else
         {
-            L *= std::pow( .9 * max_iter / final_iter, .6 );
-            L = std::min( L, max_delta );
+            if ( converged == false )
+            {
+                L /= goldenRatio;
+            }
+            else if ( step )
+            {
+                L *= std::min( 1.2, std::pow( .9 * max_iter / final_iter, .6 ) );
+                L = std::min( L, max_delta );
+            }
         }
 
         MFEM_VERIFY( L > min_delta, "Required step size is smaller than the minimal bound." );
@@ -512,7 +520,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 {
                     par_grid_x->Distribute( *u );
                 }
-                ( *data_collect_func )( step, count, count );
+                ( data_collect_func )( step, count, count );
             }
             count++;
         }
@@ -739,7 +747,7 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 {
                     par_grid_x->Distribute( *u );
                 }
-                ( *data_collect_func )( count, count, cur_lambda );
+                ( data_collect_func )( count, count, cur_lambda );
             }
             step++;
         }
