@@ -156,14 +156,10 @@ int main( int argc, char* argv[] )
 
     Vector activeBC2( R_space.GetMesh()->bdr_attributes.Max() );
     activeBC2 = 0.0;
+    
     activeBC2( 12 ) = 1e16;
     activeBC2( 13 ) = 1e16;
     activeBC2( 14 ) = 1e16;
-    VectorArrayCoefficient hevi2( dim );
-    hevi2.Set( 1, new PWConstCoefficient( activeBC ) );
-
-    //  Define the block structure of the solution vector (u then p)
-    Array<int> block_trueOffsets( 3 );
     block_trueOffsets[0] = 0;
     block_trueOffsets[1] = R_space.GetTrueVSize();
     block_trueOffsets[2] = W_space.GetTrueVSize();
@@ -239,27 +235,19 @@ int main( int argc, char* argv[] )
     //     prec->SetPrintLevel(0);
     //     cg->SetPreconditioner( *prec );
     // }
-    // {
-    //     auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
-    //     mumps->SetPrintLevel( 0 );
-    //     mumps->SetMatrixSymType( MUMPSSolver::MatType::UNSYMMETRIC );
-    //     lin_solver = mumps;
-    // }
+    {
+        auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
+        mumps->SetMatrixSymType( MUMPSSolver::MatType::SYMMETRIC_INDEFINITE );
+        // mumps->SetReorderingStrategy( MUMPSSolver::ReorderingStrategy::PARMETIS );
+        mumps->SetPrintLevel( -1 );
+        lin_solver = mumps;
+    }
 
     auto newton_solver = new plugin::MultiNewtonAdaptive( MPI_COMM_WORLD );
     intg->SetIterAux( newton_solver );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
-    newton_solver->SetSolver( *lin_solver );
-    newton_solver->SetOperator( *nlf );
-    newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetRelTol( 1e-4 );
-    newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 8 );
-    newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( 1e-4 );
-    newton_solver->SetMaxStep( 1000000 );
     newton_solver->SetMaxDelta( 1e-4 );
     newton_solver->SetMinDelta( 1e-14 );
     std::string outPutName = "p_phase_field_square_shear_hex_test_rp=" + std::to_string( par_ref_levels );

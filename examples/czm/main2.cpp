@@ -224,7 +224,6 @@ int main( int argc, char* argv[] )
     newton_solver->SetMinDelta( 1e-12 );
     newton_solver->SetMaxStep( 200000 );
     // newton_solver->SetCheckConvRatio( true );
-    newton_solver->SetRelaxFactor( .5 );
 
     nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
     nlf->AddInteriorFaceIntegrator( new plugin::ExponentialRotADCZMIntegrator( mm, 324E5, 755.4E5, 4E-4, 4E-4 ) );
