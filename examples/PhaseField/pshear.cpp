@@ -160,6 +160,11 @@ int main( int argc, char* argv[] )
     activeBC2( 12 ) = 1e16;
     activeBC2( 13 ) = 1e16;
     activeBC2( 14 ) = 1e16;
+    VectorArrayCoefficient hevi2( dim );
+    hevi2.Set( 1, new PWConstCoefficient( activeBC ) );
+
+    //  Define the block structure of the solution vector (u then p)
+    Array<int> block_trueOffsets( 3 );
     block_trueOffsets[0] = 0;
     block_trueOffsets[1] = R_space.GetTrueVSize();
     block_trueOffsets[2] = W_space.GetTrueVSize();

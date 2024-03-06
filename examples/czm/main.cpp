@@ -161,14 +161,14 @@ int main( int argc, char* argv[] )
     }
     Vector topDisp( mesh->bdr_attributes.Max() );
     topDisp = .0;
-    topDisp( 10 ) = 5e-4;
-    topDisp( 11 ) = 0;
+    topDisp( 10 ) = 0;
+    topDisp( 11 ) = 1e-4;
     d.Set( 0, new PWConstCoefficient( topDisp ) );
 
     Vector activeBC( mesh->bdr_attributes.Max() );
     activeBC = 0.0;
-    activeBC( 10 ) = 1e15;
-    activeBC( 11 ) = 1e15;
+    activeBC( 10 ) = 1e16;
+    activeBC( 11 ) = 1e16;
     VectorArrayCoefficient hevi( dim );
     for ( int i = 0; i < dim; i++ )
     {
@@ -178,6 +178,20 @@ int main( int argc, char* argv[] )
     printf( "Mesh is %i dimensional.\n", dim );
     printf( "Number of mesh attributes: %i\n", mesh->attributes.Size() );
     printf( "Number of boundary attributes: %i\n", mesh->bdr_attributes.Size() );
+
+    VectorArrayCoefficient d2( dim );
+    Vector sideDisp( mesh->bdr_attributes.Max() );
+    sideDisp = .0;
+    d.Set( 1, new PWConstCoefficient( sideDisp ) );
+
+    Vector activeBC2( mesh->bdr_attributes.Max() );
+    activeBC2 = 0.0;
+    
+    activeBC2( 12 ) = 1e16;
+    activeBC2( 13 ) = 1e16;
+    activeBC2( 14 ) = 1e16;
+    VectorArrayCoefficient hevi2( dim );
+    hevi2.Set( 1, new PWConstCoefficient( activeBC ) );
 
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
@@ -201,6 +215,7 @@ int main( int argc, char* argv[] )
     nlf->AddDomainIntegrator( intg );
 
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
+    nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d2, hevi2 ) );
 
     GeneralResidualMonitor newton_monitor( "Newton", 1 );
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
@@ -209,7 +224,7 @@ int main( int argc, char* argv[] )
     omp_set_num_threads( 12 );
     auto j_gmres = new UMFPackSolver();
 
-    auto newton_solver = new plugin::MultiNewtonAdaptive();
+    auto newton_solver = new plugin::ArcLengthLinearize();
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -219,23 +234,22 @@ int main( int argc, char* argv[] )
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-8 );
     newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 7 );
+    newton_solver->SetMaxIter( 12 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( 1e-4 );
-    // newton_solver->SetPhi( 1 );
-    // newton_solver->SetMaxDelta( 1e-2 );
-    // newton_solver->SetMinDelta( 1e-30 );
+    newton_solver->SetDelta( 1e-5 );
+    newton_solver->SetPhi( 1 );
+    newton_solver->SetMaxDelta( 1e-2 );
+    newton_solver->SetMinDelta( 1e-10 );
     newton_solver->SetMaxStep( 100000 );
     // newton_solver->SetAdaptiveL( true );
     // newton_solver->SetCheckConvRatio( true );
-    // newton_solver->SetRelaxFactor( .5 );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
-    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 1E-5, 1E-5 );
+    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 );
     nlf->AddInteriorFaceIntegrator( czm_intg );
     czm_intg->SetIterAux( newton_solver );
-    // mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
-    // czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );
+    mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
+    czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::ExponentialCZMIntegrator( mm, 324E5, 755.4E5, 4E-4, 4E-4 ) );
 
     Vector zero;
@@ -280,7 +294,7 @@ int main( int argc, char* argv[] )
 
     std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc]( int step, int count, double time )
     {
-        if ( step % 5 == 0 )
+        if ( step % 20 == 0 )
         {
             paraview_dc.SetCycle( count );
             paraview_dc.SetTime( count );

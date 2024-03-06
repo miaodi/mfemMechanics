@@ -112,6 +112,7 @@ public:
      * @warning Calling this operation on an empty buffer has an unpredictable behaviour.
      */
     const T& operator[]( size_t index ) const;
+    T& operator[]( size_t index );
 
     /**
      * @brief Returns how many elements are actually stored in the buffer.

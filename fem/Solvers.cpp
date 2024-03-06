@@ -6,6 +6,7 @@
 #include <deque>
 #include <slepc.h>
 #include <tuple>
+#include <mfem.hpp>
 
 namespace plugin
 {
@@ -311,9 +312,21 @@ void ALMBase::SetOperator( const mfem::Operator& op )
 
 void ALMBase::PredictDirection() const
 {
-    Eigen::Matrix3d mass;
-    mass.setZero();
-    Eigen::Vector3d sol, rhs;
+    // Eigen::Matrix3d mass;
+    // mass.setZero();
+    // Eigen::Vector3d sol, rhs;
+
+    if ( solution_buffer.size() <= 1 )
+    {
+        MFEM_ABORT( "Solution buffer is empty, end the simulation." );
+    }
+    subtract( std::get<2>( solution_buffer[0] ), std::get<2>( solution_buffer[1] ), u_direction_pred );
+    lambda_direction_pred = std::get<1>( solution_buffer[0] ) - std::get<1>( solution_buffer[1] );
+    u_direction_pred /= std::get<0>( solution_buffer[0] );
+    lambda_direction_pred /= std::get<0>( solution_buffer[0] );
+
+    if ( std::get<3>( solution_buffer[0] ) > 1 )
+        lambda_direction_pred *= -1;
 }
 
 void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
@@ -324,6 +337,9 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     const double goldenRatio = ( 1. + std::sqrt( 5 ) ) / 2;
     mfem::Vector* u;
     u = &x;
+
+    solution_buffer.unshift( std::make_tuple( L, 0, *u, 1 ) );
+    converged = false;
 
     // mfem::PetscSolver* petscPrec = nullptr;
     // if ( dynamic_cast<mfem::PetscSolver*>( prec ) )
@@ -343,7 +359,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     // }
     InitializeVariables( x );
     u_direction_pred = 0.;
-    Delta_lambda_prev = 0.;
+    lambda_direction_pred = 0.;
 
     ProcessNewState( x );
     // q.Print();
@@ -380,17 +396,21 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         if ( L < min_delta )
         {
             MFEM_WARNING( "Required step size is smaller than the minimal bound, restart with previous solution." );
-            if ( solution_buffer.size() == 0 )
+            if ( solution_buffer.size() <= 1 )
             {
                 MFEM_ABORT( "Solution buffer is empty, end the simulation." );
             }
-            // mfem::out << solution_buffer.size() << "\n";
-            // L = std::get<0>( solution_buffer[0] ) / goldenRatio;
-            // lambda = std::get<1>( solution_buffer[0] );
-            // Delta_lambda_prev = std::get<2>( solution_buffer[0] );
-            // *u = std::get<3>( solution_buffer[0] );
-            // u_direction_pred = std::get<4>( solution_buffer[0] );
-            // solution_buffer.shift();
+
+            util::mfemOut( "solution_buffer.size(): ", solution_buffer.size(), "\n" );
+
+            solution_buffer.shift();
+            *u = std::get<2>( solution_buffer[0] );
+            lambda = std::get<1>( solution_buffer[0] );
+            std::get<0>( solution_buffer[0] ) /= std::pow( goldenRatio, std::get<3>( solution_buffer[0] ) );
+            std::get<3>( solution_buffer[0] )++;
+            L = std::get<0>( solution_buffer[0] );
+
+            std::cout << std::setprecision( 16 ) << "L: " << L << ", phi: " << phi << "lambda: " << lambda << std::endl;
         }
 
         util::mfemOut( "L: ", L, ", phi: ", phi, "\n", util::Color::RESET );
@@ -400,8 +420,8 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         delta_lambda = 0.;
         Delta_lambda = 0.;
         it = 0;
-
-        PredictDirection();
+        if ( step )
+            PredictDirection();
 
         // mfem::out << std::setprecision( 16 ) << "time: " << lambda << std::endl;
         for ( ; true; it++ )
@@ -497,6 +517,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         // update
         if ( GetConverged() )
         {
+            std::cout << "converged!" << std::endl;
             if ( Delta_lambda < 0 )
             {
                 util::mfemOut( "alert !!! buckled!!\n" );
@@ -519,7 +540,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
             lambda += Delta_lambda;
             *u += Delta_u;
-            Delta_lambda_prev = Delta_lambda;
             step++;
             final_iter = it;
             final_norm = norm;
@@ -529,13 +549,11 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
             if ( data_collect_func )
             {
-                if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
-                {
-                    par_grid_x->Distribute( *u );
-                }
                 ( data_collect_func )( step, count, count );
             }
-            solution_buffer.unshift( std::make_tuple( L, lambda, *u ) );
+            
+        std::cout<<std::setprecision( 16 ) << "L: " << L << ", phi: " << phi<<" , lambda: "<<lambda << std::endl;
+            solution_buffer.unshift( std::make_tuple( L, lambda, *u, 1 ) );
             count++;
         }
         util::mfemOut( util::ProgressBar( lambda, converged ), '\n' );
@@ -636,7 +654,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
         }
         else
         {
-            if ( Dot( delta_u_t, u_direction_pred ) > 0 )
+            if ( InnerProduct( delta_u_t, 1, u_direction_pred, lambda_direction_pred ) > 0 )
             {
                 delta_lambda = delta_lambda1;
             }
@@ -649,7 +667,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
     else
     {
         // corrector
-        const double t = InnerProduct( Delta_u, Delta_lambda, delta_u_t, 1 );
+        const double t = InnerProduct( Delta_u, Delta_lambda, delta_u_t, 1. );
         if ( t * delta_lambda1 > t * delta_lambda2 )
         {
             delta_lambda = delta_lambda1;
@@ -667,15 +685,24 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
 
 bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const
 {
-    const double frac = .5;
-    const double tol = 1e-8;
+    const double frac = 1.;
+    const double tol = 1e-9;
     if ( it == 0 )
     {
         // predictor
-        delta_u = u_direction_pred;
-        delta_u *= L * frac;
-        // delta_lambda = Delta_lambda_prev * L / L_prev * frac;
-        delta_lambda = 0.;
+        if ( Norm( u_direction_pred ) < tol && std::abs( lambda_direction_pred ) < tol )
+        {
+            delta_u = delta_u_t;
+            const double L_pred = InnerProduct( delta_u, 1, delta_u, 1 );
+            delta_u *= frac * L / L_pred;
+            delta_lambda = frac * L / L_pred;
+        }
+        else
+        {
+            delta_u = u_direction_pred;
+            delta_u *= L * frac;
+            delta_lambda = L * frac * lambda_direction_pred;
+        }
     }
     else
     {

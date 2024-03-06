@@ -122,6 +122,14 @@ const T& CircularBuffer<T, S>::operator[]( size_t index ) const
 }
 
 template <typename T, size_t S>
+T& CircularBuffer<T, S>::operator[]( size_t index )
+{
+    if ( index >= count )
+        return *tail;
+    return *( buffer + ( ( head - buffer + index ) % capacity ) );
+}
+
+template <typename T, size_t S>
 size_t CircularBuffer<T, S>::size() const
 {
     return count;

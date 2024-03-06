@@ -197,6 +197,7 @@ public:
         return converged;
     }
 
+    // predict u_direction_pred and lambda_direction_pred
     void PredictDirection() const;
 
 protected:
@@ -205,8 +206,8 @@ protected:
 
     mutable mfem::Vector u_direction_pred;
 
-    mutable double lambda, Delta_lambda, delta_lambda, delta_lambda_prev, Delta_lambda_prev, max_delta{ 1. },
-        min_delta{ 1. }, L{ 1 }, phi{ 1 };
+    mutable double lambda, Delta_lambda, delta_lambda, max_delta{ 1. },
+        min_delta{ 1. }, L{ 1 }, phi{ 1 }, lambda_direction_pred{ 0. };
 
     int max_steps{ 100 };
 
@@ -214,7 +215,8 @@ protected:
     bool adaptive_l{ false };
     mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{ nullptr };
 
-    mutable CircularBuffer<std::tuple<double, double, mfem::Vector>, 20> solution_buffer;
+    // L, lambda, u
+    mutable CircularBuffer<std::tuple<double, double, mfem::Vector, int>, 20> solution_buffer;
 };
 
 class Crisfield : public ALMBase
