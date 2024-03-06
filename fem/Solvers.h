@@ -181,7 +181,11 @@ public:
         adaptive_mesh_refine_func = &f;
     }
 
-    virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const = 0;
+    virtual bool updateStep( const mfem::Vector& delta_u_bar,
+                             const mfem::Vector& delta_u_t,
+                             const int it,
+                             const int step,
+                             const double det ) const = 0;
 
     void SetCheckConvRatio( const bool check )
     {
@@ -206,8 +210,8 @@ protected:
 
     mutable mfem::Vector u_direction_pred;
 
-    mutable double lambda, Delta_lambda, delta_lambda, max_delta{ 1. },
-        min_delta{ 1. }, L{ 1 }, phi{ 1 }, lambda_direction_pred{ 0. };
+    mutable double lambda, Delta_lambda, delta_lambda, max_delta{ 1. }, min_delta{ 1. }, L{ 1 }, phi{ 1 },
+        lambda_direction_pred{ 0. };
 
     int max_steps{ 100 };
 
@@ -232,7 +236,7 @@ public:
     }
 #endif
 
-    virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const;
+    virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step, const double det ) const;
 };
 
 class ArcLengthLinearize : public ALMBase
@@ -248,7 +252,7 @@ public:
     }
 #endif
 
-    virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const;
+    virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step, const double det ) const;
 };
 
 class MultiNewtonAdaptive : public NewtonLineSearch

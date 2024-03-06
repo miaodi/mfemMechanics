@@ -4,9 +4,9 @@
 #include "util.h"
 #include <Eigen/Dense>
 #include <deque>
+#include <mfem.hpp>
 #include <slepc.h>
 #include <tuple>
-#include <mfem.hpp>
 
 namespace plugin
 {
@@ -324,9 +324,6 @@ void ALMBase::PredictDirection() const
     lambda_direction_pred = std::get<1>( solution_buffer[0] ) - std::get<1>( solution_buffer[1] );
     u_direction_pred /= std::get<0>( solution_buffer[0] );
     lambda_direction_pred /= std::get<0>( solution_buffer[0] );
-
-    if ( std::get<3>( solution_buffer[0] ) > 1 )
-        lambda_direction_pred *= -1;
 }
 
 void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
@@ -409,9 +406,10 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             std::get<0>( solution_buffer[0] ) /= std::pow( goldenRatio, std::get<3>( solution_buffer[0] ) );
             std::get<3>( solution_buffer[0] )++;
             L = std::get<0>( solution_buffer[0] );
-
-            std::cout << std::setprecision( 16 ) << "L: " << L << ", phi: " << phi << "lambda: " << lambda << std::endl;
         }
+        
+        if ( step )
+            PredictDirection();
 
         util::mfemOut( "L: ", L, ", phi: ", phi, "\n", util::Color::RESET );
 
@@ -420,8 +418,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         delta_lambda = 0.;
         Delta_lambda = 0.;
         it = 0;
-        if ( step )
-            PredictDirection();
 
         // mfem::out << std::setprecision( 16 ) << "time: " << lambda << std::endl;
         for ( ; true; it++ )
@@ -487,14 +483,14 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             // grad->PrintMatlab( myfile );
             // myfile.close();
             prec->SetOperator( *grad );
-
+            
             prec->Mult( q, delta_u_t );
             if ( it == 0 )
                 delta_u_bar = 0.;
             else
                 prec->Mult( r, delta_u_bar );
 
-            if ( !updateStep( delta_u_bar, delta_u_t, it, step ) )
+            if ( !updateStep( delta_u_bar, delta_u_t, it, step, prec->Det() ) )
             {
                 converged = false;
                 break;
@@ -517,7 +513,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         // update
         if ( GetConverged() )
         {
-            std::cout << "converged!" << std::endl;
             if ( Delta_lambda < 0 )
             {
                 util::mfemOut( "alert !!! buckled!!\n" );
@@ -551,8 +546,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             {
                 ( data_collect_func )( step, count, count );
             }
-            
-        std::cout<<std::setprecision( 16 ) << "L: " << L << ", phi: " << phi<<" , lambda: "<<lambda << std::endl;
             solution_buffer.unshift( std::make_tuple( L, lambda, *u, 1 ) );
             count++;
         }
@@ -560,7 +553,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     }
 }
 
-bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const
+bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step, const double det ) const
 {
     const double delta_u_bar_dot_delta_u_t = Dot( delta_u_bar, delta_u_t );
     const double delta_u_bar_dot_delta_u_bar = Dot( delta_u_bar, delta_u_bar );
@@ -648,21 +641,22 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
     if ( it == 0 )
     {
         // predictor
-        if ( step == 0 )
-        {
-            delta_lambda = delta_lambda1;
-        }
-        else
-        {
-            if ( InnerProduct( delta_u_t, 1, u_direction_pred, lambda_direction_pred ) > 0 )
-            {
-                delta_lambda = delta_lambda1;
-            }
-            else
-            {
-                delta_lambda = delta_lambda2;
-            }
-        }
+        // if ( step == 0 )
+        // {
+        //     delta_lambda = delta_lambda1;
+        // }
+        // else
+        // {
+        //     if ( Dot( delta_u_t, u_direction_pred ) > 0 )
+        //     {
+        //         delta_lambda = delta_lambda1;
+        //     }
+        //     else
+        //     {
+        //         delta_lambda = delta_lambda2;
+        //     }
+        // }
+        delta_lambda = det > 0. ? delta_lambda1 : delta_lambda2;
     }
     else
     {
@@ -683,7 +677,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
     return true;
 }
 
-bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step ) const
+bool ArcLengthLinearize::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step, const double det ) const
 {
     const double frac = 1.;
     const double tol = 1e-9;

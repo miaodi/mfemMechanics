@@ -162,7 +162,7 @@ int main( int argc, char* argv[] )
     Vector topDisp( mesh->bdr_attributes.Max() );
     topDisp = .0;
     topDisp( 10 ) = 0;
-    topDisp( 11 ) = 1e-4;
+    topDisp( 11 ) = 2e-4;
     d.Set( 0, new PWConstCoefficient( topDisp ) );
 
     Vector activeBC( mesh->bdr_attributes.Max() );
@@ -221,10 +221,10 @@ int main( int argc, char* argv[] )
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
 
     // Set up the Jacobian solver
-    omp_set_num_threads( 12 );
+    omp_set_num_threads( 10 );
     auto j_gmres = new UMFPackSolver();
 
-    auto newton_solver = new plugin::ArcLengthLinearize();
+    auto newton_solver = new plugin::Crisfield();
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -232,19 +232,15 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-8 );
+    newton_solver->SetRelTol( 1e-6 );
     newton_solver->SetAbsTol( 0 );
     newton_solver->SetMaxIter( 12 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( 1e-5 );
-    newton_solver->SetPhi( 1 );
-    newton_solver->SetMaxDelta( 1e-2 );
-    newton_solver->SetMinDelta( 1e-10 );
+    newton_solver->SetDelta( 1e-6 );
+    newton_solver->SetMaxDelta( 5e-4 );
+    newton_solver->SetMinDelta( 1e-13);
     newton_solver->SetMaxStep( 100000 );
-    // newton_solver->SetAdaptiveL( true );
-    // newton_solver->SetCheckConvRatio( true );
 
-    // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e14 ) );
     auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 );
     nlf->AddInteriorFaceIntegrator( czm_intg );
     czm_intg->SetIterAux( newton_solver );
@@ -329,6 +325,30 @@ int main( int argc, char* argv[] )
 
     newton_solver->SetDataCollectionFunc( func );
     // newton_solver->SetAMRFunc( func2 );
+
+    // newton_solver->SetLUpdateFunc(
+    //     []( bool converged, int final_iter, double lambda, double& L )
+    //     {
+    //         double max_delta = 0;
+    //         if ( lambda < .5120 )
+    //         {
+    //             max_delta = 1e-2;
+    //         }
+    //         else
+    //         {
+    //             max_delta = 1e-3;
+    //         }
+    //         if ( converged )
+    //         {
+    //             L *= 1.2;
+    //             L = std::min( max_delta, L );
+    //         }
+    //         else
+    //         {
+    //             L /= 2;
+    //         }
+    //     } );
+
     newton_solver->Mult( zero, u );
 
     return 0;

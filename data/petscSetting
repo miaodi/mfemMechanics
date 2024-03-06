@@ -1,6 +1,6 @@
 # Use a direct Cholesky solver
 # it needs PETSc configured with MUMPS
 -ksp_type preonly
--pc_type cholesky 
+-pc_type lu 
 -mat_partitioning_type parmetis
--pc_factor_mat_solver_type mumps 
+-pc_factor_mat_solver_type mkl_cpardiso 
