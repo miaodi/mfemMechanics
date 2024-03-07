@@ -171,7 +171,7 @@ int main( int argc, char* argv[] )
     Vector topDisp( pmesh->bdr_attributes.Max() );
     topDisp = .0;
     topDisp( 10 ) = 0;
-    topDisp( 11 ) = 1e-4;
+    topDisp( 11 ) = 2e-4;
     d.Set( 0, new PWConstCoefficient( topDisp ) );
 
     Vector activeBC( pmesh->bdr_attributes.Max() );
@@ -251,35 +251,36 @@ int main( int argc, char* argv[] )
     //     // prec->SetPrintLevel(0);
     //     // gmres->SetPreconditioner( *prec );
     // }
-    // {
-    //     auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
-    //     mumps->SetMatrixSymType( MUMPSSolver::MatType::UNSYMMETRIC );
-    //     // mumps->SetReorderingStrategy( MUMPSSolver::ReorderingStrategy::PARMETIS );
-    //     mumps->SetPrintLevel( -1 );
-    //     lin_solver = mumps;
-    // }
     {
-        nlf->SetGradientType( Operator::Type::PETSC_MATAIJ );
-        PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
-        lin_solver = petsc;
+        auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
+        mumps->SetMatrixSymType( MUMPSSolver::MatType::UNSYMMETRIC );
+        // mumps->SetReorderingStrategy( MUMPSSolver::ReorderingStrategy::PARMETIS );
+        mumps->SetPrintLevel( -1 );
+        mumps->SetDetComp( true );
+        lin_solver = mumps;
     }
+    // {
+    //     nlf->SetGradientType( Operator::Type::PETSC_MATAIJ );
+    //     PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
+    //     lin_solver = petsc;
+    // }
 
-    auto newton_solver = new plugin::ArcLengthLinearize( fespace->GetComm() );
+    auto newton_solver = new plugin::Crisfield( fespace->GetComm() );
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
     newton_solver->SetSolver( *lin_solver );
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-18 );
+    newton_solver->SetRelTol( 1e-6 );
+    newton_solver->SetAbsTol( 0 );
     newton_solver->SetMaxIter( 20 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( 1e-4 );
-    newton_solver->SetPhi( 1 );
-    newton_solver->SetMaxDelta( 1e-6 );
-    newton_solver->SetMinDelta( 1e-14 );
-    newton_solver->SetMaxStep( 2000000 );
-    newton_solver->SetAdaptiveL( true );
+    newton_solver->SetDelta( 1e-3);
+    newton_solver->SetMaxDelta( 1e-3 );
+    newton_solver->SetMinDelta( 1e-16);
+    newton_solver->SetMaxStep( 100000 );
+    // newton_solver->SetAdaptiveL( true );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
     auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 );
@@ -328,38 +329,38 @@ int main( int argc, char* argv[] )
     };
     newton_solver->SetDataCollectionFunc( func );
 
-    newton_solver->SetLUpdateFunc( []( bool converged, int final_iter, double lambda, double& L ) {
-        double max_delta = 0;
-        if ( lambda < .2 )
-        {
-            max_delta = 1e-3;
-        }
-        else if ( lambda < .3 )
-        {
-            max_delta = 1e-4;
-        }
-        else if ( lambda < .31 )
-        {
-            max_delta = 1e-5;
-        }
-        else if ( lambda < .325 )
-        {
-            max_delta = 1e-6;
-        }
-        else
-        {
-            max_delta = 1e-8;
-        }
-        if ( converged )
-        {
-            L *= 1.2;
-            L = std::min( max_delta, L );
-        }
-        else
-        {
-            L /= 2;
-        }
-    } );
+    // newton_solver->SetLUpdateFunc( []( bool converged, int final_iter, double lambda, double& L ) {
+    //     double max_delta = 0;
+    //     if ( lambda < .2 )
+    //     {
+    //         max_delta = 1e-3;
+    //     }
+    //     else if ( lambda < .3 )
+    //     {
+    //         max_delta = 1e-4;
+    //     }
+    //     else if ( lambda < .31 )
+    //     {
+    //         max_delta = 1e-5;
+    //     }
+    //     else if ( lambda < .325 )
+    //     {
+    //         max_delta = 1e-6;
+    //     }
+    //     else
+    //     {
+    //         max_delta = 1e-8;
+    //     }
+    //     if ( converged )
+    //     {
+    //         L *= 1.2;
+    //         L = std::min( max_delta, L );
+    //     }
+    //     else
+    //     {
+    //         L /= 2;
+    //     }
+    // } );
     newton_solver->Mult( zero, u );
     MPI_Finalize();
     return 0;

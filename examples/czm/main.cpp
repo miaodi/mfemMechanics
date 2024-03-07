@@ -234,11 +234,11 @@ int main( int argc, char* argv[] )
     newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-6 );
     newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 12 );
+    newton_solver->SetMaxIter( 20 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( 1e-6 );
-    newton_solver->SetMaxDelta( 5e-4 );
-    newton_solver->SetMinDelta( 1e-13);
+    newton_solver->SetDelta( 1e-3 );
+    newton_solver->SetMaxDelta( 1e-3 );
+    newton_solver->SetMinDelta( 1e-16);
     newton_solver->SetMaxStep( 100000 );
 
     auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 );

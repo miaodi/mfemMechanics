@@ -31,9 +31,7 @@ struct CZMGaussPointStorage
     mfem::Vector Shape1, Shape2;
     mfem::DenseMatrix GShapeFace1, GShapeFace2;
     mfem::DenseMatrix Jacobian;
-
-    double Lambda{0.};    // effective opening displacement            Ortiz and Pandolfi 1999
-    double CurLambda{0.}; // current effective opening displacement
+    util::AnyMap PointData;
 };
 
 // TODO: should rewrite Memorize class so that Initialize can be registered by integrators.
@@ -68,12 +66,12 @@ public:
         mFaceStorage = std::vector<std::unique_ptr<std::vector<CZMGaussPointStorage>>>( m->GetNumFaces() );
     }
 
-    const CZMGaussPointStorage& GetCZMPointStorage( const int gauss ) const
+    const CZMGaussPointStorage& GetFacePointStorage( const int gauss ) const
     {
         return ( *mFaceStorage[mElementNo] )[gauss];
     }
 
-    CZMGaussPointStorage& GetCZMPointStorage( const int gauss )
+    CZMGaussPointStorage& GetFacePointStorage( const int gauss )
     {
         return ( *mFaceStorage[mElementNo] )[gauss];
     }
@@ -86,6 +84,16 @@ public:
     util::AnyMap& GetBodyPointData( const int gauss )
     {
         return ( *mEleStorage[mElementNo] )[gauss].PointData;
+    }
+    
+    const util::AnyMap& GetFacePointData( const int gauss ) const
+    {
+        return ( *mFaceStorage[mElementNo] )[gauss].PointData;
+    }
+
+    util::AnyMap& GetFacePointData( const int gauss )
+    {
+        return ( *mFaceStorage[mElementNo] )[gauss].PointData;
     }
 
 private:

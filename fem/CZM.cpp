@@ -47,7 +47,7 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
         matrixB( dof1, dof2, shape1, shape2, gshape1, gshape2, vdim );
         Eigen::VectorXd Delta = mB * u;
         Eigen::VectorXd T;
-        Traction( Delta, mMemo.GetFaceJacobian( i ), vdim, T );
+        Traction( Delta, i, vdim, T );
         eigenVec += mB.transpose() * T * mMemo.GetFaceWeight( i );
     }
 }
@@ -95,7 +95,7 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
         Eigen::VectorXd Delta = mB * u;
 
         Eigen::MatrixXd H;
-        TractionStiffTangent( Delta, mMemo.GetFaceJacobian( i ), vdim, H );
+        TractionStiffTangent( Delta, i, vdim, H );
         eigenMat += mB.transpose() * H * mB * mMemo.GetFaceWeight( i );
     }
 }
@@ -127,7 +127,48 @@ void CZMIntegrator::matrixB( const int dof1,
     }
 }
 
-void LinearCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::VectorXd& T ) const
+void CZMIntegrator::Update( const int gauss, double& delta_t, double& delta_n )
+{
+    auto& pd = mMemo.GetFacePointData( gauss );
+    // historical strain energy+ for KKT condition
+    if ( mIterAux->IterNumber() == 0 )
+    {
+        if ( mIterAux->StepNumber() == 0 )
+        {
+            if ( !pd.get_val<PointData>( "delta" ).has_value() )
+                pd.set_val<PointData>( "delta", std::move( PointData() ) );
+        }
+        else
+        {
+            auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
+            if ( mIterAux->Convergence() )
+            {
+                if ( mIterAux->StepNumber() > delta_data.success_step )
+                {
+                    delta_data.delta_t_max_bac = delta_data.delta_t_max;
+                    delta_data.delta_n_max_bac = delta_data.delta_n_max;
+                    delta_data.success_step = mIterAux->StepNumber();
+                }
+            }
+            else
+            {
+                delta_data.delta_t_max = delta_data.delta_t_max_bac;
+                delta_data.delta_n_max = delta_data.delta_n_max_bac;
+            }
+        }
+    }
+    else
+    {
+        auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
+        delta_data.delta_t_max = std::max( delta_data.delta_t_max, std::abs( delta_t ) );
+        if ( delta_n > 0 )
+            delta_data.delta_n_max = std::max( delta_data.delta_n_max, delta_n );
+    }
+    delta_t = pd.get_val<PointData>( "delta" ).value().get().delta_t_max;
+    delta_n = pd.get_val<PointData>( "delta" ).value().get().delta_n_max;
+}
+
+void LinearCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::VectorXd& T ) const
 {
     if ( dim == 2 )
     {
@@ -165,10 +206,7 @@ void LinearCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const mfem::De
     }
 }
 
-void LinearCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta,
-                                                const mfem::DenseMatrix& Jacobian,
-                                                const int dim,
-                                                Eigen::MatrixXd& H ) const
+void LinearCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::MatrixXd& H ) const
 {
     if ( dim == 2 )
     {
@@ -230,12 +268,12 @@ void ExponentialCZMIntegrator::DeltaToTNMat( const mfem::DenseMatrix& Jacobian, 
     }
 }
 
-void ExponentialCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::VectorXd& T ) const
+void ExponentialCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::VectorXd& T ) const
 {
     double q = mPhiT / mPhiN;
     double r = 0.;
     Eigen::MatrixXd DeltaToTN;
-    DeltaToTNMat( Jacobian, dim, DeltaToTN );
+    DeltaToTNMat( mMemo.GetFaceJacobian( i ), dim, DeltaToTN );
     Eigen::VectorXd DeltaRot = DeltaToTN.transpose() * Delta;
     if ( dim == 2 )
     {
@@ -273,15 +311,12 @@ void ExponentialCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const mfe
     T = DeltaToTN * T;
 }
 
-void ExponentialCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta,
-                                                     const mfem::DenseMatrix& Jacobian,
-                                                     const int dim,
-                                                     Eigen::MatrixXd& H ) const
+void ExponentialCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::MatrixXd& H ) const
 {
     double q = mPhiT / mPhiN;
     double r = 0.;
     Eigen::MatrixXd DeltaToTN;
-    DeltaToTNMat( Jacobian, dim, DeltaToTN );
+    DeltaToTNMat( mMemo.GetFaceJacobian( i ), dim, DeltaToTN );
     Eigen::VectorXd DeltaRot = DeltaToTN.transpose() * Delta;
     if ( dim == 2 )
     {
@@ -347,14 +382,13 @@ void ExponentialCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delt
     H = DeltaToTN * H * DeltaToTN.transpose();
 }
 
-void ADCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::VectorXd& T ) const
+void ADCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::VectorXd& T ) const
 {
     if ( dim == 2 )
     {
         autodiff::VectorXdual2nd delta( Delta );
-        autodiff::VectorXdual2nd params = Parameters( Jacobian );
         autodiff::dual2nd u;
-        T = autodiff::gradient( potential, autodiff::wrt( delta ), autodiff::at( delta, params ), u );
+        T = autodiff::gradient( potential, autodiff::wrt( delta ), autodiff::at( delta, i ), u );
     }
     else if ( dim == 3 )
     {
@@ -364,18 +398,14 @@ void ADCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const mfem::DenseM
     }
 }
 
-void ADCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta,
-                                            const mfem::DenseMatrix& Jacobian,
-                                            const int dim,
-                                            Eigen::MatrixXd& H ) const
+void ADCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::MatrixXd& H ) const
 {
     if ( dim == 2 )
     {
         autodiff::VectorXdual2nd delta( Delta );
-        autodiff::VectorXdual2nd params = Parameters( Jacobian );
         autodiff::dual2nd u;
         autodiff::VectorXdual g;
-        H = autodiff::hessian( potential, autodiff::wrt( delta ), autodiff::at( delta, params ), u, g );
+        H = autodiff::hessian( potential, autodiff::wrt( delta ), autodiff::at( delta, i ), u, g );
     }
     else if ( dim == 3 )
     {
@@ -383,47 +413,31 @@ void ADCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta,
             "ADCZMIntegrator::Traction\n"
             "   is not implemented for this class." );
     }
-}
-
-autodiff::VectorXdual2nd ExponentialADCZMIntegrator::Parameters( const mfem::DenseMatrix& Jacobian ) const
-{
-    autodiff::VectorXdual2nd params( 8 );
-    params << mDeltaT, mDeltaN, mPhiN, mPhiT, Jacobian( 0, 0 ), Jacobian( 1, 0 ), Jacobian( 0, 0 ), Jacobian( 1, 0 );
-    return params;
 }
 
 OrtizIrreversibleADCZMIntegrator::OrtizIrreversibleADCZMIntegrator( Memorize& memo ) : ADCZMIntegrator( memo )
 {
-    // x: diffX, diffY
-    // p: deltaT, deltaN, phiT, phiN, dA1x, dA1y, dA2x, dA2y
-    potential = [this]( const autodiff::VectorXdual2nd& x, const autodiff::VectorXdual2nd& p )
-    {
-        Eigen::Map<const autodiff::VectorXdual2nd> dA1( p.data() + 4, 2 );
-        Eigen::Map<const autodiff::VectorXdual2nd> dA2( p.data() + 6, 2 );
+    // // x: diffX, diffY
+    // // p: deltaT, deltaN, phiT, phiN, dA1x, dA1y, dA2x, dA2y
+    // potential = [this]( const autodiff::VectorXdual2nd& x, const autodiff::VectorXdual2nd& p, const int i )
+    // {
+    //     Eigen::Map<const autodiff::VectorXdual2nd> dA1( p.data() + 4, 2 );
+    //     Eigen::Map<const autodiff::VectorXdual2nd> dA2( p.data() + 6, 2 );
 
-        autodiff::VectorXdual2nd directionT = dA1;
-        directionT.normalize();
+    //     autodiff::VectorXdual2nd directionT = dA1;
+    //     directionT.normalize();
 
-        static Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
-        autodiff::VectorXdual2nd directionN = rot.toRotationMatrix() * directionT;
-        const autodiff::dual2nd DeltaT = directionT.dot( x );
-        const autodiff::dual2nd DeltaN = directionN.dot( x );
+    //     static Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
+    //     autodiff::VectorXdual2nd directionN = rot.toRotationMatrix() * directionT;
+    //     const autodiff::dual2nd DeltaT = directionT.dot( x );
+    //     const autodiff::dual2nd DeltaN = directionN.dot( x );
 
-        const autodiff::dual2nd delta = autodiff::detail::sqrt( mBeta * mBeta * DeltaT * DeltaT + DeltaN * DeltaN );
+    //     const autodiff::dual2nd delta = autodiff::detail::sqrt( mBeta * mBeta * DeltaT * DeltaT + DeltaN * DeltaN );
 
-        autodiff::dual2nd res = autodiff::detail::exp( 1. ) * mSgimaC * mDeltaC *
-                                ( 1 - ( 1 + delta / mDeltaC ) * autodiff::detail::exp( -delta / mDeltaC ) );
-        return res;
-    };
-}
-
-void OrtizIrreversibleADCZMIntegrator::UpdateMemo( const int ind )
-{
-    auto& czm_gps = mMemo.GetCZMPointStorage( ind );
-    if ( czm_gps.Lambda < czm_gps.CurLambda )
-    {
-        czm_gps.Lambda = czm_gps.CurLambda;
-    }
+    //     autodiff::dual2nd res = autodiff::detail::exp( 1. ) * mSgimaC * mDeltaC *
+    //                             ( 1 - ( 1 + delta / mDeltaC ) * autodiff::detail::exp( -delta / mDeltaC ) );
+    //     return res;
+    // };
 }
 
 ExponentialADCZMIntegrator::ExponentialADCZMIntegrator(
@@ -438,16 +452,13 @@ ExponentialADCZMIntegrator::ExponentialADCZMIntegrator(
 {
     // x: diffX, diffY
     // p: deltaT, deltaN, phiT, phiN, dA1x, dA1y, dA2x, dA2y
-    potential = []( const autodiff::VectorXdual2nd& x, const autodiff::VectorXdual2nd& p )
+    potential = [this]( const autodiff::VectorXdual2nd& x, const int i )
     {
-        const autodiff::dual2nd& deltaT = p( 0 );
-        const autodiff::dual2nd& deltaN = p( 1 );
-        const autodiff::dual2nd& phiT = p( 2 );
-        const autodiff::dual2nd& phiN = p( 3 );
+        const auto& Jacobian = this->mMemo.GetFaceJacobian( i );
 
-        Eigen::Map<const autodiff::VectorXdual2nd> dA1( p.data() + 4, 2 );
-        Eigen::Map<const autodiff::VectorXdual2nd> dA2( p.data() + 6, 2 );
-        const autodiff::dual2nd q = phiT / phiN;
+        autodiff::VectorXdual2nd dA1( 2 );
+        dA1 << Jacobian( 0, 0 ), Jacobian( 1, 0 );
+        const autodiff::dual2nd q = mPhiT / mPhiN;
         const autodiff::dual2nd r = 0.;
 
         autodiff::VectorXdual2nd directionT = dA1;
@@ -458,11 +469,11 @@ ExponentialADCZMIntegrator::ExponentialADCZMIntegrator(
         const autodiff::dual2nd DeltaT = directionT.dot( x );
         const autodiff::dual2nd DeltaN = directionN.dot( x );
 
-        autodiff::dual2nd res = phiN + phiN * autodiff::detail::exp( -DeltaN / deltaN ) *
-                                           ( ( autodiff::dual2nd( 1. ) - r + DeltaN / deltaN ) *
-                                                 ( autodiff::dual2nd( 1. ) - q ) / ( r - autodiff::dual2nd( 1. ) ) -
-                                             ( q + ( r - q ) / ( r - autodiff::dual2nd( 1. ) ) * DeltaN / deltaN ) *
-                                                 autodiff::detail::exp( -DeltaT * DeltaT / deltaT / deltaT ) );
+        autodiff::dual2nd res = mPhiN + mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
+                                            ( ( autodiff::dual2nd( 1. ) - r + DeltaN / mDeltaN ) *
+                                                  ( autodiff::dual2nd( 1. ) - q ) / ( r - autodiff::dual2nd( 1. ) ) -
+                                              ( q + ( r - q ) / ( r - autodiff::dual2nd( 1. ) ) * DeltaN / mDeltaN ) *
+                                                  autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) );
         return res;
     };
 }
@@ -472,22 +483,21 @@ ExponentialRotADCZMIntegrator::ExponentialRotADCZMIntegrator(
     : ExponentialADCZMIntegrator( memo, sigmaMax, tauMax, deltaN, deltaT )
 {
     // x: u1x, u1y, u2x, u2y, du1x, du1y, du2x, du2y
-    // p: deltaT, deltaN, phiT, phiN, dA1x, dA1y, dA2x, dA2y
-    potential = [this]( const autodiff::VectorXdual2nd& x, const autodiff::VectorXdual2nd& p )
+    potential = [this]( const autodiff::VectorXdual2nd& x, const int i )
     {
         Eigen::Map<const autodiff::VectorXdual2nd> U1( x.data(), 2 );
         Eigen::Map<const autodiff::VectorXdual2nd> U2( x.data() + 2, 2 );
         Eigen::Map<const autodiff::VectorXdual2nd> dU1( x.data() + 4, 2 );
         Eigen::Map<const autodiff::VectorXdual2nd> dU2( x.data() + 6, 2 );
+        const auto& Jacobian = this->mMemo.GetFaceJacobian( i );
+        const auto& pd = this->mMemo.GetFacePointData( i );
 
-        Eigen::Map<const autodiff::VectorXdual2nd> dA1( p.data() + 4, 2 );
-        Eigen::Map<const autodiff::VectorXdual2nd> dA2( p.data() + 6, 2 );
+        autodiff::VectorXdual2nd dA1( 2 );
+        dA1 << Jacobian( 0, 0 ), Jacobian( 1, 0 );
         const double q = mPhiT / mPhiN;
-
         const double r = 0.;
-
         autodiff::VectorXdual2nd diff = U1 - U2;
-        autodiff::VectorXdual2nd directionT = dA1 + dA2 + dU1 + dU2;
+        autodiff::VectorXdual2nd directionT = dA1 + dA1 + dU1 + dU2;
         directionT.normalize();
 
         static Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
@@ -495,12 +505,19 @@ ExponentialRotADCZMIntegrator::ExponentialRotADCZMIntegrator(
         const autodiff::dual2nd DeltaT = directionT.dot( diff );
         const autodiff::dual2nd DeltaN = directionN.dot( diff );
 
+        double delta_t_max = autodiff::detail::val( DeltaT );
+        double delta_n_max = autodiff::detail::val( DeltaN );
+        // Update( i, delta_t_max, delta_n_max );
+        // std::cout << delta_t_max << " " << delta_n_max << std::endl;
         autodiff::dual2nd res = mPhiN + mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
                                             ( ( 1. - r + DeltaN / mDeltaN ) * ( 1. - q ) / ( r - 1. ) -
                                               ( q + ( r - q ) / ( r - 1. ) * DeltaN / mDeltaN ) *
                                                   autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) );
+        // if ( delta_n_max > 5 * mDeltaN )
+        //     res = 0;
+
         if ( DeltaN < 0 )
-            res += 1e17 * DeltaN * DeltaN;
+            res += 1e20 * DeltaN * DeltaN;
         return res;
     };
 }

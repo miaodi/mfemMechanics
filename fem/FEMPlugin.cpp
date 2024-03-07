@@ -58,6 +58,7 @@ void smallDeformMatrixB( const int dof, const int dim, const Eigen::MatrixXd& gs
         MFEM_WARNING( "It is not for 1D analysis." );
     }
 }
+
 void largeDeformMatrixB( const int dof,
                          const int dim,
                          const Eigen::MatrixXd& gshape,

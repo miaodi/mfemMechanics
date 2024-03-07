@@ -407,7 +407,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             std::get<3>( solution_buffer[0] )++;
             L = std::get<0>( solution_buffer[0] );
         }
-        
+
         if ( step )
             PredictDirection();
 
@@ -440,6 +440,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 normPrevPrev = normPrev;
                 normPrev = norm;
                 norm = Norm( delta_u );
+                // delta_u.Print();
                 if ( it == 1 )
                 {
                     norm_goal = std::max( rel_tol * norm, abs_tol );
@@ -483,7 +484,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             // grad->PrintMatlab( myfile );
             // myfile.close();
             prec->SetOperator( *grad );
-            
+
             prec->Mult( q, delta_u_t );
             if ( it == 0 )
                 delta_u_bar = 0.;
@@ -593,7 +594,7 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
         double beta2 = ( -bs - std::sqrt( det ) ) / ( 2 * as );
         if ( beta1 > beta2 )
             std::swap( beta1, beta2 );
-        util::mfemOut( util::Color::YELLOW, "beta1: ", beta1, ", beta2: ", beta2, '\n', util::Color::RESET );
+        util::mfemOut( util::Color::YELLOW, std::setprecision( 16 ), "beta1: ", beta1, ", beta2: ", beta2, '\n', util::Color::RESET );
         const double xi = beta2 - beta1;
 
         // Zhou 1995
@@ -637,17 +638,18 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
         delta_lambda2 = ( -1. * b - std::sqrt( b * b - 4 * a * c ) ) / ( 2. * a );
     }
 
-    // util::mfemOut( "delta_lambda1: ", delta_lambda1, ", delta_lambda2: ", delta_lambda2, "\n", util::Color::RESET );
+    util::mfemOut( "delta_lambda1: ", delta_lambda1, ", delta_lambda2: ", delta_lambda2, ", det", ( det > 0 ), "\n",
+                   util::Color::RESET );
     if ( it == 0 )
     {
-        // predictor
+        // // predictor Ritto-Corrêa and Dinar Camotim
         // if ( step == 0 )
         // {
         //     delta_lambda = delta_lambda1;
         // }
         // else
         // {
-        //     if ( Dot( delta_u_t, u_direction_pred ) > 0 )
+        //     if ( InnerProduct( delta_u_t, 1, u_direction_pred, lambda_direction_pred ) > 0 )
         //     {
         //         delta_lambda = delta_lambda1;
         //     }
@@ -656,11 +658,12 @@ bool Crisfield::updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector&
         //         delta_lambda = delta_lambda2;
         //     }
         // }
+
         delta_lambda = det > 0. ? delta_lambda1 : delta_lambda2;
     }
     else
     {
-        // corrector
+        // corrector Ritto-Corrêa and Dinar Camotim
         const double t = InnerProduct( Delta_u, Delta_lambda, delta_u_t, 1. );
         if ( t * delta_lambda1 > t * delta_lambda2 )
         {

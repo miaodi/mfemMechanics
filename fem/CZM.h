@@ -16,6 +16,16 @@ class Memorize;
 
 class CZMIntegrator : public NonlinearFormIntegratorLambda
 {
+protected:
+    struct PointData
+    {
+        double delta_t_max{ 0. };
+        double delta_n_max{ 0. };
+        double delta_t_max_bac{ 0. };
+        double delta_n_max_bac{ 0. };
+        int success_step{ 0 };
+    };
+
 public:
     CZMIntegrator( Memorize& memo ) : NonlinearFormIntegratorLambda(), mMemo{ memo }
     {
@@ -41,16 +51,12 @@ public:
                           const mfem::DenseMatrix& gshape2,
                           const int dim );
 
-    virtual void Traction( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::VectorXd& T ) const = 0;
+    virtual void Traction( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::VectorXd& T ) const = 0;
 
-    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta,
-                                       const mfem::DenseMatrix& Jacobian,
-                                       const int dim,
-                                       Eigen::MatrixXd& H ) const = 0;
+    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::MatrixXd& H ) const = 0;
 
-    virtual void UpdateMemo( const int ind )
-    {
-    }
+protected:
+    void Update( const int gauss, double& delta_t, double& delta_n );
 
 protected:
     Memorize& mMemo;
@@ -80,9 +86,9 @@ public:
         mTauMax = tauMax;
     }
 
-    virtual void Traction( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::VectorXd& T ) const;
+    virtual void Traction( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::VectorXd& T ) const;
 
-    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::MatrixXd& H ) const;
+    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::MatrixXd& H ) const;
 
 protected:
     double mDeltaNMax{ 0. };
@@ -109,12 +115,9 @@ public:
     {
     }
 
-    virtual void Traction( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::VectorXd& T ) const override;
+    virtual void Traction( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::VectorXd& T ) const;
 
-    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta,
-                                       const mfem::DenseMatrix& Jacobian,
-                                       const int dim,
-                                       Eigen::MatrixXd& H ) const override;
+    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::MatrixXd& H ) const;
 
 protected:
     void DeltaToTNMat( const mfem::DenseMatrix& Jacobian, const int dim, Eigen::MatrixXd& DeltaToTN ) const;
@@ -134,17 +137,12 @@ public:
     {
     }
 
-    virtual void Traction( const Eigen::VectorXd& Delta, const mfem::DenseMatrix& Jacobian, const int dim, Eigen::VectorXd& T ) const override;
+    virtual void Traction( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::VectorXd& T ) const;
 
-    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta,
-                                       const mfem::DenseMatrix& Jacobian,
-                                       const int dim,
-                                       Eigen::MatrixXd& H ) const override;
-
-    virtual autodiff::VectorXdual2nd Parameters( const mfem::DenseMatrix& Jacobian ) const = 0;
+    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::MatrixXd& H ) const;
 
 protected:
-    std::function<autodiff::dual2nd( const autodiff::VectorXdual2nd&, const autodiff::VectorXdual2nd& )> potential;
+    std::function<autodiff::dual2nd( const autodiff::VectorXdual2nd&, const int )> potential;
 };
 
 class ExponentialADCZMIntegrator : public ADCZMIntegrator
@@ -160,8 +158,6 @@ public:
     //                       const mfem::DenseMatrix& gshape2,
     //                       const int dim );
 
-    virtual autodiff::VectorXdual2nd Parameters( const mfem::DenseMatrix& Jacobian ) const override;
-
 protected:
     double mSigmaMax{ 0. };
     double mTauMax{ 0. };
@@ -175,7 +171,6 @@ class OrtizIrreversibleADCZMIntegrator : public ADCZMIntegrator
 {
 public:
     OrtizIrreversibleADCZMIntegrator( Memorize& memo );
-    virtual void UpdateMemo( const int ind ) override;
 
 protected:
     double mBeta{ .2 };
