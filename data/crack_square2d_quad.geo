@@ -1,7 +1,7 @@
 // Gmsh project created on Tue Jan 17 13:21:26 2023
 // 0 for triangles, 1 for quads
 tri_or_quad = 1;
-dt = .5e-4;
+dt = 10e-4;
 
 Point(1)   ={-5e-4 ,-5e-4      ,0,dt};
 Point(2)   ={-5e-4 ,-5e-6      ,0,dt};
