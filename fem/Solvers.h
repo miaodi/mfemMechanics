@@ -117,6 +117,13 @@ protected:
 
     void InitializeVariables( const mfem::Vector& u ) const;
 
+    struct Stat
+    {
+        double L{ 0. };
+        double lambda{ 0. };
+        mfem::Vector u;
+    };
+
 public:
     ALMBase() : IterAuxilliary()
     {
@@ -181,11 +188,7 @@ public:
         adaptive_mesh_refine_func = &f;
     }
 
-    virtual bool updateStep( const mfem::Vector& delta_u_bar,
-                             const mfem::Vector& delta_u_t,
-                             const int it,
-                             const int step,
-                             const double det ) const = 0;
+    virtual bool updateStep( const int it, const int step, const double det ) const = 0;
 
     void SetCheckConvRatio( const bool check )
     {
@@ -220,7 +223,7 @@ protected:
     mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{ nullptr };
 
     // L, lambda, u
-    mutable CircularBuffer<std::tuple<double, double, mfem::Vector, int>, 20> solution_buffer;
+    mutable CircularBuffer<Stat, 20> solution_buffer;
 };
 
 class Crisfield : public ALMBase
@@ -236,7 +239,7 @@ public:
     }
 #endif
 
-    virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step, const double det ) const;
+    virtual bool updateStep( const int it, const int step, const double det ) const;
 };
 
 class ArcLengthLinearize : public ALMBase
@@ -252,7 +255,7 @@ public:
     }
 #endif
 
-    virtual bool updateStep( const mfem::Vector& delta_u_bar, const mfem::Vector& delta_u_t, const int it, const int step, const double det ) const;
+    virtual bool updateStep( const int it, const int step, const double det ) const;
 };
 
 class MultiNewtonAdaptive : public NewtonLineSearch

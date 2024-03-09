@@ -150,7 +150,7 @@ int main( int argc, char* argv[] )
     //    associated with the mesh nodes.
     FiniteElementCollection* fec;
     ParFiniteElementSpace* fespace;
-    fec = new DG_FECollection( order, dim );
+    fec = new DG_FECollection( order, dim, mfem::BasisType::GaussLobatto );
     fespace = new ParFiniteElementSpace( pmesh, fec, dim, Ordering::byVDIM );
     HYPRE_BigInt size = fespace->GlobalTrueVSize();
 
@@ -204,7 +204,7 @@ int main( int argc, char* argv[] )
     PWConstCoefficient nu_func( Nu );
 
     Vector E( pmesh->attributes.Max() );
-    E = 324E7;
+    E = 324E9;
     PWConstCoefficient E_func( E );
 
     IsotropicElasticMaterial iem( E_func, nu_func );
@@ -272,13 +272,13 @@ int main( int argc, char* argv[] )
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
     newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-6 );
+    newton_solver->SetRelTol( 1e-4 );
     newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 20 );
+    newton_solver->SetMaxIter( 10 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( 1e-3);
-    newton_solver->SetMaxDelta( 1e-3 );
-    newton_solver->SetMinDelta( 1e-16);
+    newton_solver->SetDelta( 1e-5);
+    newton_solver->SetMaxDelta( 1e-4 );
+    newton_solver->SetMinDelta( 1e-14);
     newton_solver->SetMaxStep( 100000 );
     // newton_solver->SetAdaptiveL( true );
 

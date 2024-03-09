@@ -48,6 +48,32 @@ bool CircularBuffer<T, S>::unshift( const T& value )
 }
 
 template <typename T, size_t S>
+bool CircularBuffer<T, S>::unshift()
+{
+    if ( head == buffer )
+    {
+        head = buffer + capacity;
+    }
+    --head;
+    if ( count == capacity )
+    {
+        if ( tail-- == buffer )
+        {
+            tail = buffer + capacity - 1;
+        }
+        return false;
+    }
+    else
+    {
+        if ( count++ == 0 )
+        {
+            tail = head;
+        }
+        return true;
+    }
+}
+
+template <typename T, size_t S>
 bool CircularBuffer<T, S>::push( const T& value )
 {
     if ( ++tail == buffer + capacity )

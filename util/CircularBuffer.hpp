@@ -68,6 +68,7 @@ public:
      * @return `false` iff the addition caused overwriting to an existing element.
      */
     bool unshift( const T& value );
+    bool unshift();
 
     /**
      * @brief Adds an element to the end of buffer.
