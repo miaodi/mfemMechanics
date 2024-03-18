@@ -85,10 +85,10 @@ public:
                                    const mfem::Array<const mfem::Vector*>& elfun,
                                    const mfem::Array2D<mfem::DenseMatrix*>& elmats );
 
-    virtual void SetLambda( const double lambda ) const override
+    virtual void SetIterAux( IterAuxilliary const* ptr )
     {
-        mLambda = lambda;
-        mIntegrator.SetLambda( lambda );
+        mIterAux = ptr;
+        mIntegrator.SetIterAux( ptr );
     }
 
 protected:

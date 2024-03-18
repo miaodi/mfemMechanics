@@ -8,52 +8,6 @@
 using namespace std;
 using namespace mfem;
 
-class GeneralResidualMonitor : public IterativeSolverMonitor
-{
-public:
-    GeneralResidualMonitor( MPI_Comm comm, const std::string& prefix_, int print_lvl ) : prefix( prefix_ )
-    {
-#ifndef MFEM_USE_MPI
-        print_level = print_lvl;
-#else
-        int rank;
-        MPI_Comm_rank( comm, &rank );
-        if ( rank == 0 )
-        {
-            print_level = print_lvl;
-        }
-        else
-        {
-            print_level = -1;
-        }
-#endif
-    }
-
-    virtual void MonitorResidual( int it, double norm, const Vector& r, bool final );
-
-private:
-    const std::string prefix;
-    int print_level;
-    mutable double norm0;
-};
-
-void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector& r, bool final )
-{
-    if ( print_level == 1 || ( print_level == 3 && ( final || it == 0 ) ) )
-    {
-        mfem::out << prefix << " iteration " << setw( 2 ) << it << " : ||r|| = " << norm;
-        if ( it > 1 )
-        {
-            mfem::out << ",  ||r||/||r_0|| = " << norm / norm0;
-        }
-        else
-        {
-            norm0 = norm;
-        }
-        mfem::out << '\n';
-    }
-}
-
 int main( int argc, char* argv[] )
 {
     // 1. Initialize MPI.
@@ -171,7 +125,7 @@ int main( int argc, char* argv[] )
     Vector topDisp( pmesh->bdr_attributes.Max() );
     topDisp = .0;
     topDisp( 10 ) = 0;
-    topDisp( 11 ) = 2e-4;
+    topDisp( 11 ) = 1e-4;
     d.Set( 0, new PWConstCoefficient( topDisp ) );
 
     Vector activeBC( pmesh->bdr_attributes.Max() );
@@ -212,7 +166,7 @@ int main( int argc, char* argv[] )
     plugin::Memorize mm( pmesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
-    intg->setNonlinear( true );
+    // intg->setNonlinear( true );
 
     ParNonlinearForm* nlf = new ParNonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
@@ -220,10 +174,13 @@ int main( int argc, char* argv[] )
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d2, hevi2 ) );
 
-    GeneralResidualMonitor newton_monitor( fespace->GetComm(), "Newton", 1 );
+    auto czm_intg = new plugin::ExponentialADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 );
+    nlf->AddInteriorFaceIntegrator( czm_intg );
+    mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
+    czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );
 
     // Set up the Jacobian solver
-    mfem::Solver* lin_solver{nullptr};
+    mfem::Solver* lin_solver{ nullptr };
 
     // {
     //     auto cg  = new mfem::CGSolver( MPI_COMM_WORLD );
@@ -265,28 +222,21 @@ int main( int argc, char* argv[] )
     //     lin_solver = petsc;
     // }
 
-    auto newton_solver = new plugin::Crisfield( fespace->GetComm() );
+    auto newton_solver = new plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch>( fespace->GetComm() );
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
     newton_solver->SetSolver( *lin_solver );
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-4 );
     newton_solver->SetAbsTol( 0 );
     newton_solver->SetMaxIter( 10 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( 1e-5);
-    newton_solver->SetMaxDelta( 1e-4 );
-    newton_solver->SetMinDelta( 1e-14);
+    newton_solver->SetDelta( 1e-5 );
+    newton_solver->SetMaxDelta( 1e-3 );
+    newton_solver->SetMinDelta( 1e-14 );
     newton_solver->SetMaxStep( 100000 );
     // newton_solver->SetAdaptiveL( true );
-
-    // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
-    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 );
-    nlf->AddInteriorFaceIntegrator( czm_intg );
-    mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
-    czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );
 
     Vector zero;
 
@@ -316,9 +266,10 @@ int main( int argc, char* argv[] )
     stress_grid.ProjectCoefficient( sc );
     paraview_dc.Save();
 
-    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc, &x_gf, &u]( int step, int count, double time ) {
+    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc, &x_gf, &u]( int step, int count, double time )
+    {
         static int local_counter = 0;
-        if ( count % 20 == 0 )
+        if ( count % 5 == 0 )
         {
             x_gf.Distribute( u );
             paraview_dc.SetCycle( local_counter++ );

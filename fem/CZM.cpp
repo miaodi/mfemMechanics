@@ -10,6 +10,10 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
                                         const mfem::Vector& elfun,
                                         mfem::Vector& elvect )
 {
+    if ( mIterAux == nullptr )
+    {
+        mfem::mfem_error( "IterAux is not provided yet.\n" );
+    }
     int vdim = Tr.GetSpaceDim();
     int dof1 = el1.GetDof();
     int dof2 = el2.GetDof();
@@ -58,6 +62,10 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
                                       const mfem::Vector& elfun,
                                       mfem::DenseMatrix& elmat )
 {
+    if ( mIterAux == nullptr )
+    {
+        mfem::mfem_error( "IterAux is not provided yet.\n" );
+    }
     int vdim = Tr.GetSpaceDim();
     int dof1 = el1.GetDof();
     int dof2 = el2.GetDof();
@@ -127,45 +135,18 @@ void CZMIntegrator::matrixB( const int dof1,
     }
 }
 
-void CZMIntegrator::Update( const int gauss, double& delta_t, double& delta_n )
+void CZMIntegrator::Update( const int gauss, const double delta_n, const double delta_t )
 {
     auto& pd = mMemo.GetFacePointData( gauss );
     // historical strain energy+ for KKT condition
-    if ( mIterAux->IterNumber() == 0 )
-    {
-        if ( mIterAux->StepNumber() == 0 )
-        {
-            if ( !pd.get_val<PointData>( "delta" ).has_value() )
-                pd.set_val<PointData>( "delta", std::move( PointData() ) );
-        }
-        else
-        {
-            auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
-            if ( mIterAux->Convergence() )
-            {
-                if ( mIterAux->StepNumber() > delta_data.success_step )
-                {
-                    delta_data.delta_t_max_bac = delta_data.delta_t_max;
-                    delta_data.delta_n_max_bac = delta_data.delta_n_max;
-                    delta_data.success_step = mIterAux->StepNumber();
-                }
-            }
-            else
-            {
-                delta_data.delta_t_max = delta_data.delta_t_max_bac;
-                delta_data.delta_n_max = delta_data.delta_n_max_bac;
-            }
-        }
-    }
+    if ( !pd.get_val<PointData>( "delta" ).has_value() )
+        pd.set_val<PointData>( "delta", std::move( PointData( delta_n, delta_t ) ) );
     else
     {
         auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
-        delta_data.delta_t_max = std::max( delta_data.delta_t_max, std::abs( delta_t ) );
-        if ( delta_n > 0 )
-            delta_data.delta_n_max = std::max( delta_data.delta_n_max, delta_n );
+        delta_data.delta_n_prev = delta_n;
+        delta_data.delta_t_prev = delta_t;
     }
-    delta_t = pd.get_val<PointData>( "delta" ).value().get().delta_t_max;
-    delta_n = pd.get_val<PointData>( "delta" ).value().get().delta_n_max;
 }
 
 void LinearCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::VectorXd& T ) const
@@ -455,6 +436,7 @@ ExponentialADCZMIntegrator::ExponentialADCZMIntegrator(
     potential = [this]( const autodiff::VectorXdual2nd& x, const int i )
     {
         const auto& Jacobian = this->mMemo.GetFaceJacobian( i );
+        const auto& pd = this->mMemo.GetFacePointData( i );
 
         autodiff::VectorXdual2nd dA1( 2 );
         dA1 << Jacobian( 0, 0 ), Jacobian( 1, 0 );
@@ -469,11 +451,22 @@ ExponentialADCZMIntegrator::ExponentialADCZMIntegrator(
         const autodiff::dual2nd DeltaT = directionT.dot( x );
         const autodiff::dual2nd DeltaN = directionN.dot( x );
 
-        autodiff::dual2nd res = mPhiN + mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
-                                            ( ( autodiff::dual2nd( 1. ) - r + DeltaN / mDeltaN ) *
-                                                  ( autodiff::dual2nd( 1. ) - q ) / ( r - autodiff::dual2nd( 1. ) ) -
-                                              ( q + ( r - q ) / ( r - autodiff::dual2nd( 1. ) ) * DeltaN / mDeltaN ) *
-                                                  autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) );
+        if ( mIterAux->IterNumber() == 0 )
+        {
+            Update( i, autodiff::detail::val( DeltaN ), autodiff::detail::val( DeltaT ) );
+        }
+        const auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
+
+        autodiff::dual2nd res = mPhiN +
+                                mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
+                                    ( ( autodiff::dual2nd( 1. ) - r + DeltaN / mDeltaN ) *
+                                          ( autodiff::dual2nd( 1. ) - q ) / ( r - autodiff::dual2nd( 1. ) ) -
+                                      ( q + ( r - q ) / ( r - autodiff::dual2nd( 1. ) ) * DeltaN / mDeltaN ) *
+                                          autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) ) +
+                                xi_n * ( DeltaN - delta_data.delta_n_prev ) * ( DeltaN - delta_data.delta_n_prev ) /
+                                    mDeltaN / mIterAux->GetDeltaLambda() +
+                                xi_t * ( DeltaT - delta_data.delta_t_prev ) * ( DeltaT - delta_data.delta_t_prev ) /
+                                    mDeltaT / mIterAux->GetDeltaLambda();
         return res;
     };
 }
@@ -504,17 +497,26 @@ ExponentialRotADCZMIntegrator::ExponentialRotADCZMIntegrator(
         autodiff::VectorXdual2nd directionN = rot.toRotationMatrix() * directionT;
         const autodiff::dual2nd DeltaT = directionT.dot( diff );
         const autodiff::dual2nd DeltaN = directionN.dot( diff );
-
-        double delta_t_max = autodiff::detail::val( DeltaT );
-        double delta_n_max = autodiff::detail::val( DeltaN );
-        // Update( i, delta_t_max, delta_n_max );
-        // std::cout << delta_t_max << " " << delta_n_max << std::endl;
-        autodiff::dual2nd res = mPhiN + mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
-                                            ( ( 1. - r + DeltaN / mDeltaN ) * ( 1. - q ) / ( r - 1. ) -
-                                              ( q + ( r - q ) / ( r - 1. ) * DeltaN / mDeltaN ) *
-                                                  autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) );
-        // if ( delta_n_max > 5 * mDeltaN )
-        //     res = 0;
+        if ( mIterAux->IterNumber() == 0 )
+        {
+            Update( i, autodiff::detail::val( DeltaN ), autodiff::detail::val( DeltaT ) );
+        }
+        const auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
+        // std::cout << delta_data.delta_n_prev << " " << delta_data.delta_t_prev << std::endl;
+        // autodiff::dual2nd res = mPhiN +
+        //                         mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
+        //                             ( ( 1. - r + DeltaN / mDeltaN ) * ( 1. - q ) / ( r - 1. ) -
+        //                               ( q + ( r - q ) / ( r - 1. ) * DeltaN / mDeltaN ) *
+        //                                   autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) ) +
+        //                         xi_n * ( DeltaN - delta_data.delta_n_prev ) * ( DeltaN - delta_data.delta_n_prev ) /
+        //                             mDeltaN / mIterAux->GetDeltaLambda() +
+        //                         xi_t * ( DeltaT - delta_data.delta_t_prev ) * ( DeltaT - delta_data.delta_t_prev ) /
+        //                             mDeltaT / mIterAux->GetDeltaLambda();
+        autodiff::dual2nd res = mPhiN +
+                                mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
+                                    ( ( 1. - r + DeltaN / mDeltaN ) * ( 1. - q ) / ( r - 1. ) -
+                                      ( q + ( r - q ) / ( r - 1. ) * DeltaN / mDeltaN ) *
+                                          autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) );
 
         if ( DeltaN < 0 )
             res += 1e20 * DeltaN * DeltaN;

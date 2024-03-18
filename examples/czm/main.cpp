@@ -8,45 +8,6 @@
 using namespace std;
 using namespace mfem;
 
-class GeneralResidualMonitor : public IterativeSolverMonitor
-{
-public:
-    GeneralResidualMonitor( const std::string& prefix_, int print_lvl ) : prefix( prefix_ )
-    {
-        print_level = print_lvl;
-    }
-
-    virtual void MonitorResidual( int it, double norm, const Vector& r, bool final );
-
-private:
-    const std::string prefix;
-    int print_level;
-    mutable double norm0;
-};
-
-void ReferenceConfiguration( const Vector& x, Vector& y )
-{
-    // Set the reference, stress free, configuration
-    y = x;
-}
-
-void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector& r, bool final )
-{
-    if ( print_level == 1 || ( print_level == 3 && ( final || it == 0 ) ) )
-    {
-        mfem::out << prefix << " iteration " << setw( 2 ) << it << " : ||r|| = " << norm;
-        if ( it > 1 )
-        {
-            mfem::out << ",  ||r||/||r_0|| = " << norm / norm0;
-        }
-        else
-        {
-            norm0 = norm;
-        }
-        mfem::out << '\n';
-    }
-}
-
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
@@ -186,7 +147,7 @@ int main( int argc, char* argv[] )
 
     Vector activeBC2( mesh->bdr_attributes.Max() );
     activeBC2 = 0.0;
-    
+
     activeBC2( 12 ) = 1e16;
     activeBC2( 13 ) = 1e16;
     activeBC2( 14 ) = 1e16;
@@ -217,35 +178,30 @@ int main( int argc, char* argv[] )
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d2, hevi2 ) );
 
-    GeneralResidualMonitor newton_monitor( "Newton", 1 );
-    GeneralResidualMonitor j_monitor( "GMRES", 3 );
+    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 );
+    nlf->AddInteriorFaceIntegrator( czm_intg );
+    mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
+    czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );
 
     // Set up the Jacobian solver
     omp_set_num_threads( 10 );
     auto j_gmres = new UMFPackSolver();
 
-    auto newton_solver = new plugin::Crisfield();
+    auto newton_solver = new plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch>();
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
     newton_solver->SetSolver( *j_gmres );
     newton_solver->SetOperator( *nlf );
     newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetMonitor( newton_monitor );
     newton_solver->SetRelTol( 1e-6 );
     newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 20 );
+    newton_solver->SetMaxIter( 7 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( 1e-3 );
-    newton_solver->SetMaxDelta( 1e-3 );
-    newton_solver->SetMinDelta( 1e-16);
+    newton_solver->SetMaxDelta( 1e-2 );
+    newton_solver->SetMinDelta( 1e-16 );
     newton_solver->SetMaxStep( 100000 );
-
-    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 );
-    nlf->AddInteriorFaceIntegrator( czm_intg );
-    czm_intg->SetIterAux( newton_solver );
-    mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
-    czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::ExponentialCZMIntegrator( mm, 324E5, 755.4E5, 4E-4, 4E-4 ) );
 
     Vector zero;

@@ -19,11 +19,11 @@ class CZMIntegrator : public NonlinearFormIntegratorLambda
 protected:
     struct PointData
     {
-        double delta_t_max{ 0. };
-        double delta_n_max{ 0. };
-        double delta_t_max_bac{ 0. };
-        double delta_n_max_bac{ 0. };
-        int success_step{ 0 };
+        PointData( const double delta_n, const double delta_t ) : delta_n_prev( delta_n ), delta_t_prev( delta_t )
+        {
+        }
+        double delta_n_prev{ 0. };
+        double delta_t_prev{ 0. };
     };
 
 public:
@@ -56,7 +56,7 @@ public:
     virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::MatrixXd& H ) const = 0;
 
 protected:
-    void Update( const int gauss, double& delta_t, double& delta_n );
+    void Update( const int gauss, const double delta_n, const double delta_t );
 
 protected:
     Memorize& mMemo;
@@ -165,6 +165,8 @@ protected:
     double mDeltaT{ 0. };
     double mPhiN{ 0. };
     double mPhiT{ 0. };
+    double xi_n{ 1e4 };
+    double xi_t{ 1e4 };
 };
 
 class OrtizIrreversibleADCZMIntegrator : public ADCZMIntegrator

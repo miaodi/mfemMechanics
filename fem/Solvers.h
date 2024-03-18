@@ -38,10 +38,34 @@ public:
         return step;
     }
 
+    double GetCurLambda() const
+    {
+        return lambda + Delta_lambda;
+    }
+
+    double GetDeltaLambda() const
+    {
+        return Delta_lambda;
+    }
+
+    virtual void SetDelta( const double delta )
+    {
+        Delta_lambda = delta;
+    }
+
+    void SetPrevLambda( const double _lambda ) const
+    {
+        lambda = _lambda;
+    }
+
+    void RegisterToIntegrators( const mfem::Operator* oper ) const;
+
 protected:
     mutable int it = 0; // iter # of each step
 
     mutable int step = 0; // step #
+
+    mutable double lambda = 0., Delta_lambda = 0;
 
     mutable std::function<void( int, int, double )> data_collect_func{ nullptr };
 
@@ -52,21 +76,24 @@ protected:
 class NewtonLineSearch : public mfem::NewtonSolver, public IterAuxilliary
 {
 protected:
-    mutable mfem::Vector r_u, c_u;
-    mutable mfem::Vector r_p, c_p;
     double max_eta{ 10. };
     double min_eta{ .1 };
     double eta_coef{ 1.5 };
     int max_line_search_iter{ 10 };
     double tol{ .006 };
     bool line_search{ false };
-    mutable mfem::BlockNonlinearForm* blockOper;
-    mfem::Array<int> block_trueOffsets;
+    mutable mfem::Vector aux_line_search;
 
 public:
     NewtonLineSearch() : IterAuxilliary()
     {
     }
+
+#ifdef MFEM_USE_MPI
+    NewtonLineSearch( MPI_Comm comm_ ) : NewtonSolver( comm_ )
+    {
+    }
+#endif
 
     void SetLineSearchTol( const double t )
     {
@@ -92,12 +119,6 @@ public:
         return converged;
     }
 
-#ifdef MFEM_USE_MPI
-    NewtonLineSearch( MPI_Comm comm_ ) : NewtonSolver( comm_ )
-    {
-    }
-#endif
-
     int MyRank() const;
 
     virtual double ComputeScalingFactor( const mfem::Vector& x, const mfem::Vector& b ) const;
@@ -105,8 +126,28 @@ public:
     virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;
 };
 
-void SetLambdaToIntegrators( const mfem::Operator*, const double l );
-// void UpdateIntegrators( const mfem::Operator* );
+class NewtonForPhaseField : public NewtonLineSearch
+{
+protected:
+    mutable mfem::Vector r_u, c_u;
+    mutable mfem::Vector r_p, c_p;
+    mutable mfem::BlockNonlinearForm* blockOper;
+    mfem::Array<int> block_trueOffsets;
+
+public:
+    NewtonForPhaseField() : NewtonLineSearch()
+    {
+    }
+
+#ifdef MFEM_USE_MPI
+    NewtonForPhaseField( MPI_Comm comm_ ) : NewtonLineSearch( comm_ )
+    {
+    }
+#endif
+
+    virtual void SetOperator( const mfem::Operator& op );
+    virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;
+};
 
 class ALMBase : public mfem::IterativeSolver, public IterAuxilliary
 {
@@ -156,7 +197,7 @@ public:
     {
     }
 
-    void SetDelta( const double l )
+    virtual void SetDelta( const double l )
     {
         L = l;
         max_delta = l * 1e2;
@@ -213,8 +254,7 @@ protected:
 
     mutable mfem::Vector u_direction_pred;
 
-    mutable double lambda, Delta_lambda, delta_lambda, max_delta{ 1. }, min_delta{ 1. }, L{ 1 }, phi{ 1 },
-        lambda_direction_pred{ 0. };
+    mutable double delta_lambda, max_delta{ 1. }, min_delta{ 1. }, L{ 1 }, phi{ 1 }, lambda_direction_pred{ 0. };
 
     int max_steps{ 100 };
 
@@ -258,7 +298,8 @@ public:
     virtual bool updateStep( const int it, const int step, const double det ) const;
 };
 
-class MultiNewtonAdaptive : public NewtonLineSearch
+template <typename Newton>
+class MultiNewtonAdaptive : public Newton
 {
 public:
     void SetMaxStep( const int step )
@@ -266,16 +307,12 @@ public:
         max_steps = step;
     }
 
-    void SetDelta( const double delta )
-    {
-        delta_lambda = delta;
-    }
-    MultiNewtonAdaptive() : NewtonLineSearch()
+    MultiNewtonAdaptive() : Newton()
     {
     }
 
 #ifdef MFEM_USE_MPI
-    MultiNewtonAdaptive( MPI_Comm comm_ ) : NewtonLineSearch( comm_ )
+    MultiNewtonAdaptive( MPI_Comm comm_ ) : Newton( comm_ )
     {
     }
 #endif
@@ -297,11 +334,9 @@ public:
 
 protected:
     int max_steps{ 100 };
-    mutable double delta_lambda{ 1. };
     mutable mfem::IterativeSolver* prec{ nullptr };
-    mutable mfem::Vector cur;
     const mfem::Operator* oper{ nullptr };
-
+    mutable mfem::Vector cur;
     mutable double max_delta{ 1. }, min_delta{ 1. };
 };
 } // namespace plugin

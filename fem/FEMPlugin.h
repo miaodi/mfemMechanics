@@ -26,7 +26,7 @@ struct GaussPointStorage
 
 struct CZMGaussPointStorage
 {
-    double Weight{0.};
+    double Weight{ 0. };
 
     mfem::Vector Shape1, Shape2;
     mfem::DenseMatrix GShapeFace1, GShapeFace2;
@@ -85,7 +85,7 @@ public:
     {
         return ( *mEleStorage[mElementNo] )[gauss].PointData;
     }
-    
+
     const util::AnyMap& GetFacePointData( const int gauss ) const
     {
         return ( *mFaceStorage[mElementNo] )[gauss].PointData;
@@ -100,7 +100,7 @@ private:
     std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mEleStorage;
     std::vector<std::unique_ptr<std::vector<CZMGaussPointStorage>>> mFaceStorage;
     mfem::DenseMatrix mDShape1, mDShape2, mGShape1, mGShape2;
-    int mElementNo{0};
+    int mElementNo{ 0 };
 };
 
 class ElasticityIntegrator : public mfem::BilinearFormIntegrator
@@ -117,24 +117,14 @@ public:
 protected:
     mfem::DenseMatrix mDShape, mGShape;
 
-    ElasticMaterial* mMaterialModel{nullptr};
+    ElasticMaterial* mMaterialModel{ nullptr };
 };
 
 class NonlinearFormIntegratorLambda : public mfem::NonlinearFormIntegrator
 {
 public:
-    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator(), mLambda{1.}
+    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator()
     {
-    }
-
-    virtual void SetLambda( const double lambda ) const
-    {
-        mLambda = lambda;
-    }
-
-    double GetLambda() const
-    {
-        return mLambda;
     }
 
     virtual ~NonlinearFormIntegratorLambda()
@@ -147,47 +137,13 @@ public:
     }
 
 protected:
-    mutable double mLambda;
-    IterAuxilliary const* mIterAux{nullptr};
+    IterAuxilliary const* mIterAux{ nullptr };
 };
 
-class NonlinearFormMaterialIntegratorLambda : public NonlinearFormIntegratorLambda
+class NonlinearElasticityIntegrator : public NonlinearFormIntegratorLambda
 {
 public:
-    NonlinearFormMaterialIntegratorLambda( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{&m}
-    {
-    }
-
-    virtual void SetLambda( const double lambda ) const
-    {
-        NonlinearFormIntegratorLambda::SetLambda( lambda );
-        mMaterialModel->setLambda( lambda );
-    }
-    void setNonlinear( const bool flg )
-    {
-        mNonlinear = flg;
-        mMaterialModel->setLargeDeformation( flg );
-    }
-
-    bool isNonlinear() const
-    {
-        return mNonlinear;
-    }
-
-    virtual ~NonlinearFormMaterialIntegratorLambda()
-    {
-    }
-
-protected:
-    ElasticMaterial* mMaterialModel{nullptr};
-    bool mNonlinear{true};
-};
-
-class NonlinearElasticityIntegrator : public NonlinearFormMaterialIntegratorLambda
-{
-public:
-    NonlinearElasticityIntegrator( ElasticMaterial& m, Memorize& memo )
-        : NonlinearFormMaterialIntegratorLambda( m ), mMemo{memo}
+    NonlinearElasticityIntegrator( ElasticMaterial& m, Memorize& memo ) : mMaterialModel( &m ), mMemo{ memo }
     {
     }
 
@@ -220,12 +176,25 @@ public:
         return mOnlyGeomStiff;
     }
 
+    void setNonlinear( const bool flg )
+    {
+        mNonlinear = flg;
+        mMaterialModel->setLargeDeformation( flg );
+    }
+
+    bool isNonlinear() const
+    {
+        return mNonlinear;
+    }
+
 protected:
     Eigen::Matrix<double, 3, 3> mdxdX;
     Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
     Eigen::MatrixXd mGeomStiff;
+    ElasticMaterial* mMaterialModel{ nullptr };
     Memorize& mMemo;
-    bool mOnlyGeomStiff{false};
+    bool mOnlyGeomStiff{ false };
+    bool mNonlinear{ true };
 };
 
 class NonlinearVectorBoundaryLFIntegrator : public NonlinearFormIntegratorLambda
@@ -279,48 +248,6 @@ protected:
     mfem::Coefficient& Q;
 };
 
-class NonlinearCompositeSolidShellIntegrator : public NonlinearFormMaterialIntegratorLambda
-{
-public:
-    NonlinearCompositeSolidShellIntegrator( ElasticMaterial& m ) : NonlinearFormMaterialIntegratorLambda( m )
-    {
-        mL.resize( 5, 24 );
-        mH.resize( 5, 5 );
-        mAlpha.resize( 5 );
-        mGeomStiff.resize( 24, 24 );
-    }
-
-    // virtual void AssembleElementVector( const mfem::FiniteElement& el,
-    //                                     mfem::ElementTransformation& Ttr,
-    //                                     const mfem::Vector& elfun,
-    //                                     mfem::Vector& elvect );
-
-    virtual void AssembleElementGrad( const mfem::FiniteElement& el,
-                                      mfem::ElementTransformation& Ttr,
-                                      const mfem::Vector& elfun,
-                                      mfem::DenseMatrix& elmat );
-
-    void matrixB( const int dof, const int dim, const mfem::IntegrationPoint& ip );
-
-    /** @brief Computes the integral of W(Jacobian(Trt)) over a target zone
-        @param[in] el     Type of FiniteElement.
-        @param[in] Ttr    Represents ref->target coordinates transformation.
-        @param[in] elfun  Physical coordinates of the zone. */
-    virtual double GetElementEnergy( const mfem::FiniteElement& el, mfem::ElementTransformation& Ttr, const mfem::Vector& elfun )
-    {
-        return 0;
-    }
-
-protected:
-    Eigen::Matrix<double, 3, 3> mg, mGCovariant, mGContravariant, mgA, mgB, mgC, mgD, mgA1, mgA2, mgA3, mgA4;
-    Eigen::Matrix<double, 6, 24> mB;
-    Eigen::MatrixXd mGeomStiff;
-    Eigen::Matrix<double, 8, 3> mDShape, mDShapeA, mDShapeB, mDShapeC, mDShapeD, mDShapeA1, mDShapeA2, mDShapeA3, mDShapeA4;
-    Eigen::Matrix6d mStiffModuli, mTransform;
-    Eigen::MatrixXd mL, mH;
-    Eigen::VectorXd mAlpha;
-};
-
 class NonlinearDirichletPenaltyIntegrator : public NonlinearFormIntegratorLambda
 {
 public:
@@ -366,7 +293,7 @@ protected:
 class NonlinearInternalPenaltyIntegrator : public mfem::NonlinearFormIntegrator
 {
 public:
-    NonlinearInternalPenaltyIntegrator( const double penalty = 1e10 ) : mfem::NonlinearFormIntegrator(), p{penalty}
+    NonlinearInternalPenaltyIntegrator( const double penalty = 1e10 ) : mfem::NonlinearFormIntegrator(), p{ penalty }
     {
     }
 
@@ -414,7 +341,7 @@ protected:
 class BlockNonlinearFormIntegratorLambda : public mfem::BlockNonlinearFormIntegrator
 {
 public:
-    BlockNonlinearFormIntegratorLambda() : mfem::BlockNonlinearFormIntegrator(), mLambda{1.}
+    BlockNonlinearFormIntegratorLambda() : mfem::BlockNonlinearFormIntegrator(), mLambda{ 1. }
     {
     }
 
@@ -432,13 +359,13 @@ public:
     {
     }
 
-    void SetIterAux( IterAuxilliary const* ptr )
+    virtual void SetIterAux( IterAuxilliary const* ptr )
     {
         mIterAux = ptr;
     }
 
 protected:
     mutable double mLambda;
-    IterAuxilliary const* mIterAux{nullptr};
+    IterAuxilliary const* mIterAux{ nullptr };
 };
 } // namespace plugin

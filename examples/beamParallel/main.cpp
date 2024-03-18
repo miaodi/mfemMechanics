@@ -190,7 +190,7 @@ int main( int argc, char* argv[] )
     // Set up the Jacobian solver
     PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
 
-    auto newton_solver = new plugin::MultiNewtonAdaptive( fespace->GetComm() );
+    auto newton_solver = new plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch>( fespace->GetComm() );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;

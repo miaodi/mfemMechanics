@@ -133,13 +133,13 @@ int main( int argc, char* argv[] )
     IsotropicElasticMaterial iem( E_func, nu_func );
 
     
-    plugin::Memorize mm( mesh );
-    auto intg = new plugin::NonlinearCompositeSolidShellIntegrator( iem );
-    NonlinearForm* nlf = new NonlinearForm( fespace );
-    nlf->AddDomainIntegrator( intg );
-    Vector X( fespace->GetTrueVSize() );
-    X = 0.;
-    X(1) = 1;
-    nlf->GetGradient( X );
+    // plugin::Memorize mm( mesh );
+    // auto intg = new plugin::NonlinearCompositeSolidShellIntegrator( iem );
+    // NonlinearForm* nlf = new NonlinearForm( fespace );
+    // nlf->AddDomainIntegrator( intg );
+    // Vector X( fespace->GetTrueVSize() );
+    // X = 0.;
+    // X(1) = 1;
+    // nlf->GetGradient( X );
     return 0;
 }

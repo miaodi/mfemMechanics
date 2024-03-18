@@ -10,22 +10,66 @@
 
 namespace plugin
 {
+
+void IterAuxilliary::RegisterToIntegrators( const mfem::Operator* oper ) const
+{
+    if ( auto nonlinearform = dynamic_cast<mfem::NonlinearForm*>( const_cast<mfem::Operator*>( oper ) ) )
+    {
+        auto bfnfi = nonlinearform->GetBdrFaceIntegrators();
+        for ( int i = 0; i < bfnfi.Size(); i++ )
+        {
+            if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( bfnfi[i] ) )
+            {
+                with_lambda->SetIterAux( this );
+            }
+        }
+
+        auto& dnfi = *nonlinearform->GetDNFI();
+        for ( int i = 0; i < dnfi.Size(); i++ )
+        {
+            if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( dnfi[i] ) )
+            {
+                with_lambda->SetIterAux( this );
+            }
+        }
+
+        auto& fnfi = nonlinearform->GetInteriorFaceIntegrators();
+        for ( int i = 0; i < fnfi.Size(); i++ )
+        {
+            if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( fnfi[i] ) )
+            {
+                with_lambda->SetIterAux( this );
+            }
+        }
+    }
+
+    if ( auto nonlinearform = dynamic_cast<mfem::BlockNonlinearForm*>( const_cast<mfem::Operator*>( oper ) ) )
+    {
+        auto bfnfi = nonlinearform->GetBdrFaceIntegrators();
+        for ( int i = 0; i < bfnfi.Size(); i++ )
+        {
+            if ( auto with_lambda = dynamic_cast<BlockNonlinearFormIntegratorLambda*>( bfnfi[i] ) )
+            {
+                with_lambda->SetIterAux( this );
+            }
+        }
+
+        auto& dnfi = *nonlinearform->GetDNFI();
+        for ( int i = 0; i < dnfi.Size(); i++ )
+        {
+            if ( auto with_lambda = dynamic_cast<BlockNonlinearFormIntegratorLambda*>( dnfi[i] ) )
+            {
+                with_lambda->SetIterAux( this );
+            }
+        }
+    }
+}
+
 void NewtonLineSearch::SetOperator( const mfem::Operator& op )
 {
-    blockOper = static_cast<mfem::BlockNonlinearForm*>( const_cast<mfem::Operator*>( &op ) );
-    block_trueOffsets = blockOper->GetBlockTrueOffsets();
-    oper = &op;
-    height = op.Height();
-    width = op.Width();
-    MFEM_ASSERT( height == width, "square Operator is required." );
-
-    r.SetSize( width );
-    c.SetSize( width );
-    r_u = mfem::Vector( r.GetData() + block_trueOffsets[0], block_trueOffsets[1] - block_trueOffsets[0] );
-    c_u = mfem::Vector( c.GetData() + block_trueOffsets[0], block_trueOffsets[1] - block_trueOffsets[0] );
-    r_p = mfem::Vector( r.GetData() + block_trueOffsets[1], block_trueOffsets[2] - block_trueOffsets[1] );
-    c_p = mfem::Vector( c.GetData() + block_trueOffsets[1], block_trueOffsets[2] - block_trueOffsets[1] );
-    // std::cout<<block_trueOffsets[0]<<", "<<block_trueOffsets[1]<<", "<<block_trueOffsets[2]<<std::endl;
+    mfem::NewtonSolver::SetOperator( op );
+    RegisterToIntegrators( this->oper );
+    aux_line_search.SetSize( width );
 }
 
 int NewtonLineSearch::MyRank() const
@@ -46,66 +90,185 @@ int NewtonLineSearch::MyRank() const
 
 double NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, const mfem::Vector& b ) const
 {
-    // if ( !line_search )
-    //     return 1.;
+    if ( !line_search )
+        return 1.;
 
-    // // initialize
-    // const bool have_b = ( b.Size() == Height() );
-    // double sL, sR, s;
-    // double etaL = 0., etaR = 1., eta = 1., ratio = 1.;
-    // auto CalcS = [&b, &x, have_b, this]( const double eta ) {
-    //     add( x, -eta, c, this->cur );
-    //     this->oper->Mult( this->cur, this->r );
-    //     if ( have_b )
-    //     {
-    //         this->r -= b;
-    //     }
-    //     return this->r * this->c;
-    // };
-    // oper->Mult( x, r );
-    // if ( have_b )
-    // {
-    //     r -= b;
-    // }
-    // sL = CalcS( etaL );
-    // const double s0 = sL;
+    // initialize
+    const bool have_b = ( b.Size() == Height() );
+    double sL, sR, s;
+    double etaL = 0., etaR = 1., eta = 1., ratio = 1.;
+    auto CalcS = [&b, &x, have_b, this]( const double eta )
+    {
+        add( x, -eta, c, aux_line_search );
+        this->oper->Mult( aux_line_search, this->r );
+        if ( have_b )
+        {
+            this->r -= b;
+        }
+        return this->r * this->c;
+    };
+    oper->Mult( x, r );
+    if ( have_b )
+    {
+        r -= b;
+    }
+    sL = CalcS( etaL );
+    const double s0 = sL;
 
-    // sR = CalcS( etaR );
+    sR = CalcS( etaR );
 
-    // // first find the right span
-    // while ( sL * sR > 0 && etaR < max_eta )
-    // {
-    //     etaR *= eta_coef;
+    // first find the right span
+    while ( sL * sR > 0 && etaR < max_eta )
+    {
+        etaR *= eta_coef;
 
-    //     sR = CalcS( etaR );
-    // }
+        sR = CalcS( etaR );
+    }
 
-    // int iter = 0;
-    // while ( sL * sR < 0 && ratio > tol && iter++ < max_line_search_iter && eta > min_eta )
-    // {
-    //     eta = .5 * ( etaL + etaR );
-    //     s = CalcS( eta );
-    //     ratio = fabs( s / s0 );
-    //     if ( s * sL > 0 )
-    //     {
-    //         sL = s;
-    //         etaL = eta;
-    //     }
-    //     else
-    //     {
-    //         sR = s;
-    //         etaR = eta;
-    //     }
-    // }
-    // if ( ratio > tol || sL * sR > 0 )
-    // {
-    //     eta = 1.;
-    // }
-    // std::cout << "eta: " << eta << std::endl;
-    // return eta;
+    int iter = 0;
+    while ( sL * sR < 0 && ratio > tol && iter++ < max_line_search_iter && eta > min_eta )
+    {
+        eta = .5 * ( etaL + etaR );
+        s = CalcS( eta );
+        ratio = fabs( s / s0 );
+        if ( s * sL > 0 )
+        {
+            sL = s;
+            etaL = eta;
+        }
+        else
+        {
+            sR = s;
+            etaR = eta;
+        }
+    }
+    if ( ratio > tol || sL * sR > 0 )
+    {
+        eta = 1.;
+    }
+    std::cout << "eta: " << eta << std::endl;
+    return eta;
 }
 
 void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
+{
+    using namespace mfem;
+    MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
+    MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
+
+    double norm0, norm, norm_goal;
+    const bool have_b = ( b.Size() == Height() );
+
+    if ( !iterative_mode )
+    {
+        x = 0.0;
+    }
+
+    ProcessNewState( x );
+
+    oper->Mult( x, r );
+    if ( have_b )
+    {
+        r -= b;
+    }
+
+    norm0 = norm = Norm( r );
+    norm_goal = std::max( rel_tol * norm, abs_tol );
+
+    prec->iterative_mode = false;
+
+    // x_{i+1} = x_i - [DF(x_i)]^{-1} [F(x_i)-b]
+    for ( it = 0; true; it++ )
+    {
+        if ( MyRank() == 0 )
+        {
+            mfem::out << "Newton iteration " << std::setw( 2 ) << it << " : ||r|| = " << norm;
+            if ( it > 0 )
+            {
+                mfem::out << ", ||r||/||r_0|| = " << norm / norm0;
+            }
+            mfem::out << '\n';
+        }
+
+        if ( !mfem::IsFinite( norm ) )
+        {
+            converged = false;
+            break;
+        }
+        if ( norm <= norm_goal )
+        {
+            converged = true;
+            break;
+        }
+
+        if ( it >= max_iter )
+        {
+            converged = false;
+            break;
+        }
+
+        grad = &oper->GetGradient( x );
+        // {
+        //     std::ofstream myfile;
+        //     myfile.open( "mat1.txt" );
+        //     grad->PrintMatlab( myfile );
+        //     myfile.close();
+        // }
+
+        prec->SetOperator( *grad );
+
+        if ( lin_rtol_type )
+        {
+            AdaptiveLinRtolPreSolve( x, it, norm );
+        }
+
+        prec->Mult( r, c ); // c = [DF(x_i)]^{-1} [F(x_i)-b]
+
+        if ( lin_rtol_type )
+        {
+            AdaptiveLinRtolPostSolve( c, r, it, norm );
+        }
+
+        const double c_scale = ComputeScalingFactor( x, b );
+        if ( c_scale == 0.0 )
+        {
+            converged = false;
+            break;
+        }
+        add( x, -c_scale, c, x );
+
+        ProcessNewState( x );
+
+        oper->Mult( x, r );
+        if ( have_b )
+        {
+            r -= b;
+        }
+        norm = Norm( r );
+    }
+
+    final_iter = it;
+    final_norm = norm;
+
+    if ( !converged && MyRank() == 0 )
+    {
+        mfem::out << "Newton: No convergence!\n";
+    }
+}
+
+void NewtonForPhaseField::SetOperator( const mfem::Operator& op )
+{
+    NewtonLineSearch::SetOperator( op );
+    blockOper = static_cast<mfem::BlockNonlinearForm*>( const_cast<mfem::Operator*>( &op ) );
+    block_trueOffsets = blockOper->GetBlockTrueOffsets();
+
+    r_u = mfem::Vector( r.GetData() + block_trueOffsets[0], block_trueOffsets[1] - block_trueOffsets[0] );
+    c_u = mfem::Vector( c.GetData() + block_trueOffsets[0], block_trueOffsets[1] - block_trueOffsets[0] );
+    r_p = mfem::Vector( r.GetData() + block_trueOffsets[1], block_trueOffsets[2] - block_trueOffsets[1] );
+    c_p = mfem::Vector( c.GetData() + block_trueOffsets[1], block_trueOffsets[2] - block_trueOffsets[1] );
+}
+
+void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 {
     using namespace mfem;
     MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
@@ -166,7 +329,6 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             converged = true;
             break;
         }
-
         prec->SetOperator( static_cast<mfem::BlockOperator&>( blockOper->GetGradient( x ) ).GetBlock( 0, 0 ) );
         prec->Mult( r_u, c_u ); // c = [DF(x_i)]^{-1} [F(x_i)-b]
         add( cur_u, -1., c_u, cur_u );
@@ -202,84 +364,6 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     }
 }
 
-void SetLambdaToIntegrators( const mfem::Operator* oper, const double l )
-{
-    if ( auto nonlinearform = dynamic_cast<mfem::NonlinearForm*>( const_cast<mfem::Operator*>( oper ) ) )
-    {
-        auto bfnfi = nonlinearform->GetBdrFaceIntegrators();
-        for ( int i = 0; i < bfnfi.Size(); i++ )
-        {
-            if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( bfnfi[i] ) )
-            {
-                with_lambda->SetLambda( l );
-            }
-        }
-
-        auto& dnfi = *nonlinearform->GetDNFI();
-        for ( int i = 0; i < dnfi.Size(); i++ )
-        {
-            if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( dnfi[i] ) )
-            {
-                with_lambda->SetLambda( l );
-            }
-        }
-    }
-
-    if ( auto nonlinearform = dynamic_cast<mfem::BlockNonlinearForm*>( const_cast<mfem::Operator*>( oper ) ) )
-    {
-        auto bfnfi = nonlinearform->GetBdrFaceIntegrators();
-        for ( int i = 0; i < bfnfi.Size(); i++ )
-        {
-            if ( auto with_lambda = dynamic_cast<BlockNonlinearFormIntegratorLambda*>( bfnfi[i] ) )
-            {
-                with_lambda->SetLambda( l );
-            }
-        }
-
-        auto& dnfi = *nonlinearform->GetDNFI();
-        for ( int i = 0; i < dnfi.Size(); i++ )
-        {
-            if ( auto with_lambda = dynamic_cast<BlockNonlinearFormIntegratorLambda*>( dnfi[i] ) )
-            {
-                with_lambda->SetLambda( l );
-            }
-        }
-    }
-}
-
-// void UpdateIntegrators( const mfem::Operator* oper )
-// {
-//     if ( auto nonlinearform = dynamic_cast<mfem::NonlinearForm*>( const_cast<mfem::Operator*>( oper ) ) )
-//     {
-//         auto bfnfi = nonlinearform->GetBdrFaceIntegrators();
-//         for ( int i = 0; i < bfnfi.Size(); i++ )
-//         {
-//             if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( bfnfi[i] ) )
-//             {
-//                 with_lambda->Update();
-//             }
-//         }
-
-//         auto& dnfi = *nonlinearform->GetDNFI();
-//         for ( int i = 0; i < dnfi.Size(); i++ )
-//         {
-//             if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( dnfi[i] ) )
-//             {
-//                 with_lambda->Update();
-//             }
-//         }
-
-//         const auto& fnfi = nonlinearform->GetInteriorFaceIntegrators();
-//         for ( int i = 0; i < fnfi.Size(); i++ )
-//         {
-//             if ( auto with_lambda = dynamic_cast<const NonlinearFormIntegratorLambda*>( fnfi[i] ) )
-//             {
-//                 with_lambda->Update();
-//             }
-//         }
-//     }
-// }
-
 double ALMBase::InnerProduct( const mfem::Vector& a, const double la, const mfem::Vector& b, const double lb ) const
 {
     return Dot( a, b ) + la * lb * phi;
@@ -308,6 +392,7 @@ void ALMBase::SetOperator( const mfem::Operator& op )
     height = op.Height();
     width = op.Width();
     MFEM_ASSERT( height == width, "square Operator is required." );
+    RegisterToIntegrators( this->oper );
 }
 
 void ALMBase::PredictDirection() const
@@ -433,7 +518,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             add( *u, Delta_u, u_cur );
 
             // compute r
-            SetLambdaToIntegrators( oper, lambda + Delta_lambda );
             oper->Mult( u_cur, r );
 
             if ( it > 0 )
@@ -446,8 +530,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 if ( it == 1 )
                 {
                     norm_goal = std::max( rel_tol * norm, abs_tol );
-                    if ( L < 1e-12 )
-                        norm_goal *= 5;
                 }
                 if ( !mfem::IsFinite( norm ) )
                 {
@@ -472,8 +554,9 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
 
             // compute q
-            SetLambdaToIntegrators( oper, 1. + lambda + Delta_lambda );
+            lambda += 1.;
             oper->Mult( u_cur, q );
+            lambda -= 1.;
 
             q -= r;
             q.Neg();
@@ -723,26 +806,20 @@ bool ArcLengthLinearize::updateStep( const int it, const int step, const double 
     return true;
 }
 
-void MultiNewtonAdaptive::SetOperator( const mfem::Operator& op )
+template <typename Newton>
+void MultiNewtonAdaptive<Newton>::SetOperator( const mfem::Operator& op )
 {
-    NewtonLineSearch::SetOperator( op );
-    cur.SetSize( width );
+    Newton::SetOperator( op );
+    cur.SetSize( Newton::width );
 }
 
-void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
+template <typename Newton>
+void MultiNewtonAdaptive<Newton>::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 {
-    double cur_lambda = 0.;
+    Newton::lambda = 0.;
 
     mfem::Vector* u;
-    if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
-    {
-        u = new mfem::Vector( par_grid_x->ParFESpace()->GetTrueVSize() );
-        par_grid_x->ParallelProject( *u );
-    }
-    else
-    {
-        u = &x;
-    }
+    u = &x;
 
     cur = *u;
     for ( int count = 0; true; count++ )
@@ -751,63 +828,46 @@ void MultiNewtonAdaptive::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         {
             break;
         }
-        if ( cur_lambda >= 1. )
+        if ( Newton::lambda >= 1. )
         {
             break;
         }
         if ( count )
         {
-            if ( !GetConverged() )
-                delta_lambda /= 2;
+            if ( !Newton::GetConverged() )
+                Newton::Delta_lambda /= 2;
             else
             {
-                delta_lambda *= std::pow( this->max_iter / GetNumIterations(), .2 );
-                delta_lambda = std::min( delta_lambda, max_delta );
+                Newton::Delta_lambda *= std::min( 1.2, std::pow( this->max_iter / Newton::GetNumIterations(), .2 ) );
+                Newton::Delta_lambda = std::min( Newton::Delta_lambda, max_delta );
             }
         }
-        MFEM_VERIFY( delta_lambda > min_delta, "Required step size is smaller than the minimal bound." );
+        MFEM_VERIFY( Newton::Delta_lambda > min_delta, "Required step size is smaller than the minimal bound." );
 
-        util::mfemOut( "L: ", delta_lambda, "\n", util::Color::RESET );
-        delta_lambda = std::min( delta_lambda, 1. - cur_lambda );
-        SetLambdaToIntegrators( blockOper, delta_lambda + cur_lambda );
+        util::mfemOut( "L: ", Newton::Delta_lambda, "\n", util::Color::RESET );
+        Newton::Delta_lambda = std::min( Newton::Delta_lambda, 1. - Newton::lambda );
 
-        plugin::NewtonLineSearch::Mult( b, *u );
-        if ( GetConverged() )
+        Newton::Mult( b, *u );
+        if ( Newton::GetConverged() )
         {
-            cur_lambda += delta_lambda;
+            Newton::lambda += Newton::Delta_lambda;
             cur = *u;
 
-            if ( data_collect_func )
+            if ( Newton::data_collect_func )
             {
-                if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
-                {
-                    par_grid_x->Distribute( *u );
-                }
-                ( data_collect_func )( count, count, cur_lambda );
+                ( Newton::data_collect_func )( count, count, Newton::lambda );
             }
-            step++;
+            Newton::step++;
         }
         else
         {
             *u = cur;
         }
-
-#ifdef MFEM_USE_MPI
-        int rank = 0;
-        if ( this->GetComm() != MPI_COMM_NULL )
-            MPI_Comm_rank( this->GetComm(), &rank );
-        if ( rank == 0 )
-        {
-            mfem::out << util::ProgressBar( cur_lambda ) << '\n';
-        }
-#else
-        mfem::out << util::ProgressBar( cur_lambda ) << '\n';
-#endif
-    }
-    if ( auto par_grid_x = dynamic_cast<mfem::ParGridFunction*>( &x ) )
-    {
-        par_grid_x->Distribute( *u );
-        delete u;
+        util::mfemOut( util::ProgressBar( Newton::lambda, Newton::GetConverged() ), '\n' );
     }
 }
+
+template class MultiNewtonAdaptive<NewtonLineSearch>;
+
+template class MultiNewtonAdaptive<NewtonForPhaseField>;
 } // namespace plugin
