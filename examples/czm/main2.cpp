@@ -153,18 +153,21 @@ int main( int argc, char* argv[] )
         d.Set( i, new ConstantCoefficient( 0.0 ) );
     }
 
-    // Vector topDisp( mesh->bdr_attributes.Max() );
-    // topDisp = .0;
-    // topDisp( 11 ) = 4e-2;
-    // topDisp( 12 ) = -4e-2;
-    // d.Set( 1, new PWConstCoefficient( topDisp ) );
+    Vector topDisp( mesh->bdr_attributes.Max() );
+    topDisp = .0;
+    topDisp( 11 ) = 5e-2;
+    topDisp( 12 ) = -5e-2;
+    d.Set( 1, new PWConstCoefficient( topDisp ) );
 
     Vector activeBCX( mesh->bdr_attributes.Max() );
     activeBCX = 0.0;
     activeBCX( 10 ) = 1e15;
+
     Vector activeBCY( mesh->bdr_attributes.Max() );
     activeBCY = 0.0;
     activeBCY( 10 ) = 1e15;
+    activeBCY( 11 ) = 1e15;
+    activeBCY( 12 ) = 1e15;
 
     VectorArrayCoefficient hevi( dim );
     hevi.Set( 0, new PWConstCoefficient( activeBCX ) );
@@ -196,22 +199,27 @@ int main( int argc, char* argv[] )
     NonlinearForm* nlf = new NonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 ) );
-    nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
-    VectorArrayCoefficient f( dim );
-    for ( int i = 0; i < dim - 1; i++ )
-    {
-        f.Set( i, new ConstantCoefficient( 0.0 ) );
-    }
-    {
-        Vector pull_force( mesh->bdr_attributes.Max() );
-        pull_force = 0.0;
-        pull_force( 11 ) = 1e8;
-        pull_force( 12 ) = -1e8;
-        f.Set( dim - 1, new PWConstCoefficient( pull_force ) );
-    }
 
-    nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
+    auto czm_intg = new plugin::ExponentialADCZMIntegrator( mm, 324E6, 755.4E6, 4E-6, 4E-6 );
+    nlf->AddInteriorFaceIntegrator( czm_intg );
+    // mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
+    // czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );
+
+    nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e17 ) );
+    // VectorArrayCoefficient f( dim );
+    // for ( int i = 0; i < dim - 1; i++ )
+    // {
+    //     f.Set( i, new ConstantCoefficient( 0.0 ) );
+    // }
+    // {
+    //     Vector pull_force( mesh->bdr_attributes.Max() );
+    //     pull_force = 0.0;
+    //     pull_force( 11 ) = 1e8;
+    //     pull_force( 12 ) = -1e8;
+    //     f.Set( dim - 1, new PWConstCoefficient( pull_force ) );
+    // }
+
+    // nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
 
     GeneralResidualMonitor newton_monitor( "Newton", 1 );
     GeneralResidualMonitor j_monitor( "GMRES", 3 );
@@ -219,7 +227,7 @@ int main( int argc, char* argv[] )
     // Set up the Jacobian solver
     auto j_gmres = new UMFPackSolver();
 
-    auto newton_solver = new plugin::Crisfield();
+    auto newton_solver = new plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch>();
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -231,11 +239,10 @@ int main( int argc, char* argv[] )
     newton_solver->SetAbsTol( 0 );
     newton_solver->SetMaxIter( 10 );
     newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( .001 );
-    newton_solver->SetPhi( 1 );
-    newton_solver->SetMaxDelta( .01 );
-    newton_solver->SetMinDelta( 1e-15 );
-    newton_solver->SetMaxStep( 200000 );
+    newton_solver->SetDelta( 1e-5 );
+    newton_solver->SetMaxDelta( 1e-2 );
+    newton_solver->SetMinDelta( 1e-14 );
+    newton_solver->SetMaxStep( 100000 );
     // newton_solver->SetCheckConvRatio( true );
 
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
@@ -246,7 +253,7 @@ int main( int argc, char* argv[] )
     u = 0.;
 
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "CZM DCB 2D", mesh );
+    ParaViewDataCollection paraview_dc( "CZM DCB 2D damp", mesh );
     paraview_dc.SetPrefixPath( "ParaView" );
     paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetDataFormat( VTKFormat::BINARY );
@@ -254,7 +261,6 @@ int main( int argc, char* argv[] )
     paraview_dc.RegisterField( "Displace", &u );
 
     auto stress_fec = new DG_FECollection( order, dim, mfem::BasisType::GaussLobatto );
-
     auto stress_fespace = new FiniteElementSpace( mesh, stress_fec, 7 );
     GridFunction stress_grid( stress_fespace );
     plugin::StressCoefficient sc( dim, iem );

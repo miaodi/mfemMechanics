@@ -17,12 +17,13 @@ int main( int argc, char* argv[] )
     Hypre::Init();
 
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/crack_square2d.msh";
+    const char* mesh_file = "../../data/crack_square2d_quad.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
     int ser_ref_levels = -1, par_ref_levels = -1;
     const char* petscrc_file = "../../data/petscSetting";
+    std::string problem_type = "tensile";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -113,43 +114,6 @@ int main( int argc, char* argv[] )
         cout << "Number of finite element unknowns: " << size << endl << "Assembling: " << endl;
     }
 
-    // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
-    //    In this example, the boundary conditions are defined by marking only
-    //    boundary attribute 1 from the mesh as essential and converting it to a
-    //    list of true dofs.
-    VectorArrayCoefficient d( dim );
-    for ( int i = 0; i < dim; i++ )
-    {
-        d.Set( i, new ConstantCoefficient( 0.0 ) );
-    }
-    Vector topDisp( pmesh->bdr_attributes.Max() );
-    topDisp = .0;
-    topDisp( 10 ) = 0;
-    topDisp( 11 ) = 1e-4;
-    d.Set( 0, new PWConstCoefficient( topDisp ) );
-
-    Vector activeBC( pmesh->bdr_attributes.Max() );
-    activeBC = 0.0;
-    activeBC( 10 ) = 1e16;
-    activeBC( 11 ) = 1e16;
-    VectorArrayCoefficient hevi( dim );
-    for ( int i = 0; i < dim; i++ )
-    {
-        hevi.Set( i, new PWConstCoefficient( activeBC ) );
-    }
-
-    VectorArrayCoefficient d2( dim );
-    Vector sideDisp( pmesh->bdr_attributes.Max() );
-    sideDisp = .0;
-    d.Set( 1, new PWConstCoefficient( sideDisp ) );
-
-    Vector activeBC2( pmesh->bdr_attributes.Max() );
-    activeBC2 = 0.0;
-    activeBC2( 12 ) = 1e16;
-    activeBC2( 13 ) = 1e16;
-    activeBC2( 14 ) = 1e16;
-    VectorArrayCoefficient hevi2( dim );
-    hevi2.Set( 1, new PWConstCoefficient( activeBC ) );
     // 8. Define the solution vector x as a finite element grid function
     //    corresponding to fespace. Initialize x with initial guess of zero,
     //    which satisfies the boundary conditions.
@@ -171,8 +135,54 @@ int main( int argc, char* argv[] )
     ParNonlinearForm* nlf = new ParNonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
 
-    nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
-    nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d2, hevi2 ) );
+    if ( problem_type == "shear" )
+    {
+        static VectorArrayCoefficient d( dim );
+        for ( int i = 0; i < dim; i++ )
+        {
+            d.Set( i, new ConstantCoefficient( 0.0 ) );
+        }
+        Vector topDisp( pmesh->bdr_attributes.Max() );
+        topDisp = .0;
+        topDisp( 11 ) = 2e-5;
+        d.Set( 0, new PWConstCoefficient( topDisp ) );
+        Vector sideDisp( pmesh->bdr_attributes.Max() );
+        sideDisp = .0;
+        d.Set( 1, new PWConstCoefficient( sideDisp ) );
+        Vector activeBCX( pmesh->bdr_attributes.Max() );
+        activeBCX = 0.0;
+        activeBCX( 10 ) = 1e16;
+        activeBCX( 11 ) = 1e16;
+        Vector activeBCY( pmesh->bdr_attributes.Max() );
+        activeBCY = 0.0;
+        activeBCY( 12 ) = 1e16;
+        activeBCY( 13 ) = 1e16;
+        activeBCY( 14 ) = 1e16;
+        static VectorArrayCoefficient hevi( dim );
+        hevi.Set( 0, new PWConstCoefficient( activeBCX ) );
+        hevi.Set( 1, new PWConstCoefficient( activeBCY ) );
+        nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
+    }
+    else if ( problem_type == "tensile" )
+    {
+        static VectorArrayCoefficient d( dim );
+        for ( int i = 0; i < dim; i++ )
+        {
+            d.Set( i, new ConstantCoefficient( 0.0 ) );
+        }
+        Vector topDisp( pmesh->bdr_attributes.Max() );
+        topDisp = .0;
+        topDisp( 11 ) = 2e-5;
+        d.Set( 1, new PWConstCoefficient( topDisp ) );
+        Vector activeBC( pmesh->bdr_attributes.Max() );
+        activeBC = 0.0;
+        activeBC( 10 ) = 1e16;
+        activeBC( 11 ) = 1e16;
+        static VectorArrayCoefficient hevi( dim );
+        hevi.Set( 0, new PWConstCoefficient( activeBC ) );
+        hevi.Set( 1, new PWConstCoefficient( activeBC ) );
+        nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
+    }
 
     auto czm_intg = new plugin::ExponentialADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 );
     nlf->AddInteriorFaceIntegrator( czm_intg );
@@ -180,7 +190,7 @@ int main( int argc, char* argv[] )
     czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );
 
     // Set up the Jacobian solver
-    mfem::Solver* lin_solver{ nullptr };
+    mfem::Solver* lin_solver{nullptr};
 
     // {
     //     auto cg  = new mfem::CGSolver( MPI_COMM_WORLD );
@@ -248,13 +258,12 @@ int main( int argc, char* argv[] )
 
     ParaViewDataCollection paraview_dc( outPutName, pmesh );
     paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
     paraview_dc.SetCycle( 0 );
     paraview_dc.SetDataFormat( VTKFormat::BINARY );
     paraview_dc.SetHighOrderOutput( true );
     paraview_dc.SetTime( 0.0 ); // set the time
 
-    auto stress_fec = new DG_FECollection( order, dim );
+    auto stress_fec = new DG_FECollection( order - 1, dim );
     auto stress_fespace = new ParFiniteElementSpace( pmesh, stress_fec, 7 );
     ParGridFunction stress_grid( stress_fespace );
     plugin::StressCoefficient sc( dim, iem );
@@ -266,8 +275,7 @@ int main( int argc, char* argv[] )
     stress_grid.ProjectCoefficient( sc );
     paraview_dc.Save();
 
-    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc, &x_gf, &u]( int step, int count, double time )
-    {
+    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc, &x_gf, &u]( int step, int count, double time ) {
         static int local_counter = 0;
         if ( count % 5 == 0 )
         {

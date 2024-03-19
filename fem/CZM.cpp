@@ -432,7 +432,6 @@ ExponentialADCZMIntegrator::ExponentialADCZMIntegrator(
       mPhiT{ std::sqrt( std::exp( 1. ) / 2 ) * tauMax * deltaT }
 {
     // x: diffX, diffY
-    // p: deltaT, deltaN, phiT, phiN, dA1x, dA1y, dA2x, dA2y
     potential = [this]( const autodiff::VectorXdual2nd& x, const int i )
     {
         const auto& Jacobian = this->mMemo.GetFaceJacobian( i );
@@ -503,20 +502,20 @@ ExponentialRotADCZMIntegrator::ExponentialRotADCZMIntegrator(
         }
         const auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
         // std::cout << delta_data.delta_n_prev << " " << delta_data.delta_t_prev << std::endl;
-        // autodiff::dual2nd res = mPhiN +
-        //                         mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
-        //                             ( ( 1. - r + DeltaN / mDeltaN ) * ( 1. - q ) / ( r - 1. ) -
-        //                               ( q + ( r - q ) / ( r - 1. ) * DeltaN / mDeltaN ) *
-        //                                   autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) ) +
-        //                         xi_n * ( DeltaN - delta_data.delta_n_prev ) * ( DeltaN - delta_data.delta_n_prev ) /
-        //                             mDeltaN / mIterAux->GetDeltaLambda() +
-        //                         xi_t * ( DeltaT - delta_data.delta_t_prev ) * ( DeltaT - delta_data.delta_t_prev ) /
-        //                             mDeltaT / mIterAux->GetDeltaLambda();
         autodiff::dual2nd res = mPhiN +
                                 mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
                                     ( ( 1. - r + DeltaN / mDeltaN ) * ( 1. - q ) / ( r - 1. ) -
                                       ( q + ( r - q ) / ( r - 1. ) * DeltaN / mDeltaN ) *
-                                          autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) );
+                                          autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) ) +
+                                xi_n * ( DeltaN - delta_data.delta_n_prev ) * ( DeltaN - delta_data.delta_n_prev ) /
+                                    mDeltaN / mIterAux->GetDeltaLambda() +
+                                xi_t * ( DeltaT - delta_data.delta_t_prev ) * ( DeltaT - delta_data.delta_t_prev ) /
+                                    mDeltaT / mIterAux->GetDeltaLambda();
+        // autodiff::dual2nd res = mPhiN +
+        //                         mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
+        //                             ( ( 1. - r + DeltaN / mDeltaN ) * ( 1. - q ) / ( r - 1. ) -
+        //                               ( q + ( r - q ) / ( r - 1. ) * DeltaN / mDeltaN ) *
+        //                                   autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) );
 
         if ( DeltaN < 0 )
             res += 1e20 * DeltaN * DeltaN;

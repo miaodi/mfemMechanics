@@ -165,8 +165,8 @@ protected:
     double mDeltaT{ 0. };
     double mPhiN{ 0. };
     double mPhiT{ 0. };
-    double xi_n{ 1e4 };
-    double xi_t{ 1e4 };
+    double xi_n{ 1e2 };
+    double xi_t{ 1e2 };
 };
 
 class OrtizIrreversibleADCZMIntegrator : public ADCZMIntegrator
