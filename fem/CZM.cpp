@@ -35,13 +35,10 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
-        // // Set the integration point in the face and the neighboring element
-        // const mfem::IntegrationPoint& ip = ir->IntPoint( i );
-        // Tr.SetAllIntPoints( &ip );
-        // mfem::Vector phy;
-        // Tr.Transform( ip, phy );
-        // if ( std::abs( phy( 1 ) ) > 1e-10 )
-        //     continue;
+        // Set the integration point in the face and the neighboring element
+        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+        Tr.SetAllIntPoints( &ip );
+        EvalCZMLaw( Tr, ip );
 
         const mfem::Vector& shape1 = mMemo.GetFace1Shape( i );
         const mfem::Vector& shape2 = mMemo.GetFace2Shape( i );
@@ -86,13 +83,10 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
     mMemo.InitializeFace( el1, el2, Tr, *ir );
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
-        // // Set the integration point in the face and the neighboring element
-        // const mfem::IntegrationPoint& ip = ir->IntPoint( i );
-        // Tr.SetAllIntPoints( &ip );
-        // mfem::Vector phy;
-        // Tr.Transform( ip, phy );
-        // if ( std::abs( phy( 1 ) ) > 1e-10 )
-        //     continue;
+        // Set the integration point in the face and the neighboring element
+        const mfem::IntegrationPoint& ip = ir->IntPoint( i );
+        Tr.SetAllIntPoints( &ip );
+        EvalCZMLaw( Tr, ip );
 
         const mfem::Vector& shape1 = mMemo.GetFace1Shape( i );
         const mfem::Vector& shape2 = mMemo.GetFace2Shape( i );
@@ -396,50 +390,27 @@ void ADCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta, const 
     }
 }
 
-OrtizIrreversibleADCZMIntegrator::OrtizIrreversibleADCZMIntegrator( Memorize& memo ) : ADCZMIntegrator( memo )
+void ExponentialADCZMIntegrator::EvalCZMLaw( mfem::ElementTransformation& Tr, const mfem::IntegrationPoint& ip )
 {
-    // // x: diffX, diffY
-    // // p: deltaT, deltaN, phiT, phiN, dA1x, dA1y, dA2x, dA2y
-    // potential = [this]( const autodiff::VectorXdual2nd& x, const autodiff::VectorXdual2nd& p, const int i )
-    // {
-    //     Eigen::Map<const autodiff::VectorXdual2nd> dA1( p.data() + 4, 2 );
-    //     Eigen::Map<const autodiff::VectorXdual2nd> dA2( p.data() + 6, 2 );
-
-    //     autodiff::VectorXdual2nd directionT = dA1;
-    //     directionT.normalize();
-
-    //     static Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
-    //     autodiff::VectorXdual2nd directionN = rot.toRotationMatrix() * directionT;
-    //     const autodiff::dual2nd DeltaT = directionT.dot( x );
-    //     const autodiff::dual2nd DeltaN = directionN.dot( x );
-
-    //     const autodiff::dual2nd delta = autodiff::detail::sqrt( mBeta * mBeta * DeltaT * DeltaT + DeltaN * DeltaN );
-
-    //     autodiff::dual2nd res = autodiff::detail::exp( 1. ) * mSgimaC * mDeltaC *
-    //                             ( 1 - ( 1 + delta / mDeltaC ) * autodiff::detail::exp( -delta / mDeltaC ) );
-    //     return res;
-    // };
+    mCZMLawConst.sigma_max = mSigmaMax->Eval( Tr, ip );
+    mCZMLawConst.tau_max = mTauMax->Eval( Tr, ip );
+    mCZMLawConst.delta_n = mDeltaN->Eval( Tr, ip );
+    mCZMLawConst.delta_t = mDeltaT->Eval( Tr, ip );
+    mCZMLawConst.update_phi();
 }
 
 ExponentialADCZMIntegrator::ExponentialADCZMIntegrator(
-    Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT )
-    : ADCZMIntegrator( memo ),
-      mSigmaMax{ sigmaMax },
-      mTauMax{ tauMax },
-      mDeltaN{ deltaN },
-      mDeltaT{ deltaT },
-      mPhiN{ std::exp( 1. ) * sigmaMax * deltaN },
-      mPhiT{ std::sqrt( std::exp( 1. ) / 2 ) * tauMax * deltaT }
+    Memorize& memo, mfem::Coefficient& sigmaMax, mfem::Coefficient& tauMax, mfem::Coefficient& deltaN, mfem::Coefficient& deltaT )
+    : ADCZMIntegrator( memo ), mSigmaMax{&sigmaMax}, mTauMax{&tauMax}, mDeltaN{&deltaN}, mDeltaT{&deltaT}
 {
     // x: diffX, diffY
-    potential = [this]( const autodiff::VectorXdual2nd& x, const int i )
-    {
+    potential = [this]( const autodiff::VectorXdual2nd& x, const int i ) {
         const auto& Jacobian = this->mMemo.GetFaceJacobian( i );
         const auto& pd = this->mMemo.GetFacePointData( i );
 
         autodiff::VectorXdual2nd dA1( 2 );
         dA1 << Jacobian( 0, 0 ), Jacobian( 1, 0 );
-        const autodiff::dual2nd q = mPhiT / mPhiN;
+        const autodiff::dual2nd q = mCZMLawConst.phi_t / mCZMLawConst.phi_n;
         const autodiff::dual2nd r = 0.;
 
         autodiff::VectorXdual2nd directionT = dA1;
@@ -454,29 +425,30 @@ ExponentialADCZMIntegrator::ExponentialADCZMIntegrator(
         {
             Update( i, autodiff::detail::val( DeltaN ), autodiff::detail::val( DeltaT ) );
         }
+
         const auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
 
-        autodiff::dual2nd res = mPhiN +
-                                mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
-                                    ( ( autodiff::dual2nd( 1. ) - r + DeltaN / mDeltaN ) *
-                                          ( autodiff::dual2nd( 1. ) - q ) / ( r - autodiff::dual2nd( 1. ) ) -
-                                      ( q + ( r - q ) / ( r - autodiff::dual2nd( 1. ) ) * DeltaN / mDeltaN ) *
-                                          autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) ) +
-                                xi_n * ( DeltaN - delta_data.delta_n_prev ) * ( DeltaN - delta_data.delta_n_prev ) /
-                                    mDeltaN / mIterAux->GetDeltaLambda() +
-                                xi_t * ( DeltaT - delta_data.delta_t_prev ) * ( DeltaT - delta_data.delta_t_prev ) /
-                                    mDeltaT / mIterAux->GetDeltaLambda();
+        autodiff::dual2nd res =
+            mCZMLawConst.phi_n +
+            mCZMLawConst.phi_n * autodiff::detail::exp( -DeltaN / mCZMLawConst.delta_n ) *
+                ( ( autodiff::dual2nd( 1. ) - r + DeltaN / mCZMLawConst.delta_n ) * ( autodiff::dual2nd( 1. ) - q ) /
+                      ( r - autodiff::dual2nd( 1. ) ) -
+                  ( q + ( r - q ) / ( r - autodiff::dual2nd( 1. ) ) * DeltaN / mCZMLawConst.delta_n ) *
+                      autodiff::detail::exp( -DeltaT * DeltaT / mCZMLawConst.delta_t / mCZMLawConst.delta_t ) ) +
+            xi_n * ( DeltaN - delta_data.delta_n_prev ) * ( DeltaN - delta_data.delta_n_prev ) / mCZMLawConst.delta_n /
+                mIterAux->GetDeltaLambda() +
+            xi_t * ( DeltaT - delta_data.delta_t_prev ) * ( DeltaT - delta_data.delta_t_prev ) / mCZMLawConst.delta_t /
+                mIterAux->GetDeltaLambda();
         return res;
     };
 }
 
 ExponentialRotADCZMIntegrator::ExponentialRotADCZMIntegrator(
-    Memorize& memo, const double sigmaMax, const double tauMax, const double deltaN, const double deltaT )
+    Memorize& memo, mfem::Coefficient& sigmaMax, mfem::Coefficient& tauMax, mfem::Coefficient& deltaN, mfem::Coefficient& deltaT )
     : ExponentialADCZMIntegrator( memo, sigmaMax, tauMax, deltaN, deltaT )
 {
     // x: u1x, u1y, u2x, u2y, du1x, du1y, du2x, du2y
-    potential = [this]( const autodiff::VectorXdual2nd& x, const int i )
-    {
+    potential = [this]( const autodiff::VectorXdual2nd& x, const int i ) {
         Eigen::Map<const autodiff::VectorXdual2nd> U1( x.data(), 2 );
         Eigen::Map<const autodiff::VectorXdual2nd> U2( x.data() + 2, 2 );
         Eigen::Map<const autodiff::VectorXdual2nd> dU1( x.data() + 4, 2 );
@@ -486,7 +458,7 @@ ExponentialRotADCZMIntegrator::ExponentialRotADCZMIntegrator(
 
         autodiff::VectorXdual2nd dA1( 2 );
         dA1 << Jacobian( 0, 0 ), Jacobian( 1, 0 );
-        const double q = mPhiT / mPhiN;
+        const double q = mCZMLawConst.phi_t / mCZMLawConst.phi_n;
         const double r = 0.;
         autodiff::VectorXdual2nd diff = U1 - U2;
         autodiff::VectorXdual2nd directionT = dA1 + dA1 + dU1 + dU2;
@@ -501,21 +473,22 @@ ExponentialRotADCZMIntegrator::ExponentialRotADCZMIntegrator(
             Update( i, autodiff::detail::val( DeltaN ), autodiff::detail::val( DeltaT ) );
         }
         const auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
-        // std::cout << delta_data.delta_n_prev << " " << delta_data.delta_t_prev << std::endl;
-        autodiff::dual2nd res = mPhiN +
-                                mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
-                                    ( ( 1. - r + DeltaN / mDeltaN ) * ( 1. - q ) / ( r - 1. ) -
-                                      ( q + ( r - q ) / ( r - 1. ) * DeltaN / mDeltaN ) *
-                                          autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) ) +
-                                xi_n * ( DeltaN - delta_data.delta_n_prev ) * ( DeltaN - delta_data.delta_n_prev ) /
-                                    mDeltaN / mIterAux->GetDeltaLambda() +
-                                xi_t * ( DeltaT - delta_data.delta_t_prev ) * ( DeltaT - delta_data.delta_t_prev ) /
-                                    mDeltaT / mIterAux->GetDeltaLambda();
-        // autodiff::dual2nd res = mPhiN +
-        //                         mPhiN * autodiff::detail::exp( -DeltaN / mDeltaN ) *
-        //                             ( ( 1. - r + DeltaN / mDeltaN ) * ( 1. - q ) / ( r - 1. ) -
-        //                               ( q + ( r - q ) / ( r - 1. ) * DeltaN / mDeltaN ) *
-        //                                   autodiff::detail::exp( -DeltaT * DeltaT / mDeltaT / mDeltaT ) );
+
+        autodiff::dual2nd res =
+            mCZMLawConst.phi_n +
+            mCZMLawConst.phi_n * autodiff::detail::exp( -DeltaN / mCZMLawConst.delta_n ) *
+                ( ( 1. - r + DeltaN / mCZMLawConst.delta_n ) * ( 1. - q ) / ( r - 1. ) -
+                  ( q + ( r - q ) / ( r - 1. ) * DeltaN / mCZMLawConst.delta_n ) *
+                      autodiff::detail::exp( -DeltaT * DeltaT / mCZMLawConst.delta_t / mCZMLawConst.delta_t ) ) +
+            xi_n * ( DeltaN - delta_data.delta_n_prev ) * ( DeltaN - delta_data.delta_n_prev ) / mCZMLawConst.delta_n /
+                mIterAux->GetDeltaLambda() +
+            xi_t * ( DeltaT - delta_data.delta_t_prev ) * ( DeltaT - delta_data.delta_t_prev ) / mCZMLawConst.delta_t /
+                mIterAux->GetDeltaLambda();
+        // autodiff::dual2nd res = mCZMLawConst.phi_n +
+        //                         mCZMLawConst.phi_n * autodiff::detail::exp( -DeltaN / mCZMLawConst.delta_n ) *
+        //                             ( ( 1. - r + DeltaN / mCZMLawConst.delta_n ) * ( 1. - q ) / ( r - 1. ) -
+        //                               ( q + ( r - q ) / ( r - 1. ) * DeltaN / mCZMLawConst.delta_n ) *
+        //                                   autodiff::detail::exp( -DeltaT * DeltaT / mCZMLawConst.delta_t / mCZMLawConst.delta_t ) );
 
         if ( DeltaN < 0 )
             res += 1e20 * DeltaN * DeltaN;
