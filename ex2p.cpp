@@ -1,10 +1,17 @@
 //                       MFEM Example 2 - Parallel Version
-//                              PETSc Modification
 //
 // Compile with: make ex2p
 //
-// Sample runs:
-//    mpirun -np 4 ex2p -m ../../data/beam-quad.mesh --petscopts rc_ex2p
+// Sample runs:  mpirun -np 4 ex2p -m ../data/beam-tri.mesh
+//               mpirun -np 4 ex2p -m ../data/beam-quad.mesh
+//               mpirun -np 4 ex2p -m ../data/beam-tet.mesh
+//               mpirun -np 4 ex2p -m ../data/beam-hex.mesh
+//               mpirun -np 4 ex2p -m ../data/beam-wedge.mesh
+//               mpirun -np 4 ex2p -m ../data/beam-tri.mesh -o 2 -sys
+//               mpirun -np 4 ex2p -m ../data/beam-quad.mesh -o 3 -elast
+//               mpirun -np 4 ex2p -m ../data/beam-quad.mesh -o 3 -sc
+//               mpirun -np 4 ex2p -m ../data/beam-quad-nurbs.mesh
+//               mpirun -np 4 ex2p -m ../data/beam-hex-nurbs.mesh
 //
 // Description:  This example code solves a simple linear elasticity problem
 //               describing a multi-material cantilever beam.
@@ -28,12 +35,7 @@
 //               finite element spaces with the linear elasticity bilinear form,
 //               meshes with curved elements, and the definition of piece-wise
 //               constant and vector coefficient objects. Static condensation is
-//               also illustrated. The example also shows how to form a linear
-//               system using a PETSc matrix and solve with a PETSc solver.
-//
-//               The example also show how to use the non-overlapping feature of
-//               the ParBilinearForm class to obtain the linear operator in
-//               a format suitable for the BDDC preconditioner in PETSc.
+//               also illustrated.
 //
 //               We recommend viewing Example 1 before viewing this example.
 
@@ -41,38 +43,28 @@
 #include <fstream>
 #include <iostream>
 
-#ifndef MFEM_USE_PETSC
-#error This example requires that MFEM is built with MFEM_USE_PETSC=YES
-#endif
-
 using namespace std;
 using namespace mfem;
 
 int main( int argc, char* argv[] )
 {
-    // 1. Initialize MPI.
-    int num_procs, myid;
-    MPI_Init( &argc, &argv );
-    MPI_Comm_size( MPI_COMM_WORLD, &num_procs );
-    MPI_Comm_rank( MPI_COMM_WORLD, &myid );
+    // 1. Initialize MPI and HYPRE.
+    Mpi::Init( argc, argv );
+    int num_procs = Mpi::WorldSize();
+    int myid = Mpi::WorldRank();
+    Hypre::Init();
 
     // 2. Parse command-line options.
-    const char* mesh_file = "../../data/beam-tri.mesh";
+    const char* mesh_file = "../../data/twoElementTensile.mesh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
     bool amg_elast = 0;
-    bool use_petsc = true;
-    const char* petscrc_file = "";
-    bool use_nonoverlapping = false;
-    int ser_ref_levels = -1, par_ref_levels = 1;
+    bool reorder_space = false;
+    const char* device_config = "cpu";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
-    args.AddOption( &ser_ref_levels, "-rs", "--refine-serial",
-                    "Number of times to refine the mesh uniformly in serial." );
-    args.AddOption( &par_ref_levels, "-rp", "--refine-parallel",
-                    "Number of times to refine the mesh uniformly in parallel." );
     args.AddOption( &order, "-o", "--order", "Finite element order (polynomial degree)." );
     args.AddOption( &amg_elast, "-elast", "--amg-for-elasticity", "-sys", "--amg-for-systems",
                     "Use the special AMG elasticity solver (GM/LN approaches), "
@@ -81,13 +73,9 @@ int main( int argc, char* argv[] )
                     "Enable static condensation." );
     args.AddOption( &visualization, "-vis", "--visualization", "-no-vis", "--no-visualization",
                     "Enable or disable GLVis visualization." );
-    args.AddOption( &use_petsc, "-usepetsc", "--usepetsc", "-no-petsc", "--no-petsc",
-                    "Use or not PETSc to solve the linear system." );
-    args.AddOption( &petscrc_file, "-petscopts", "--petscopts", "PetscOptions file to use." );
-    args.AddOption( &use_nonoverlapping, "-nonoverlapping", "--nonoverlapping", "-no-nonoverlapping",
-                    "--no-nonoverlapping",
-                    "Use or not the block diagonal PETSc's matrix format "
-                    "for non-overlapping domain decomposition." );
+    args.AddOption( &reorder_space, "-nodes", "--by-nodes", "-vdim", "--by-vdim",
+                    "Use byNODES ordering of vector space instead of byVDIM" );
+    args.AddOption( &device_config, "-d", "--device", "Device configuration string, see Device::Configure()." );
     args.Parse();
     if ( !args.Good() )
     {
@@ -95,7 +83,6 @@ int main( int argc, char* argv[] )
         {
             args.PrintUsage( cout );
         }
-        MPI_Finalize();
         return 1;
     }
     if ( myid == 0 )
@@ -103,60 +90,26 @@ int main( int argc, char* argv[] )
         args.PrintOptions( cout );
     }
 
-    // 2b. We initialize PETSc
-    if ( use_petsc )
+    // 3. Enable hardware devices such as GPUs, and programming models such as
+    //    CUDA, OCCA, RAJA and OpenMP based on command line options.
+    Device device( device_config );
+    if ( myid == 0 )
     {
-        MFEMInitializePetsc( NULL, NULL, petscrc_file, NULL );
+        device.Print();
     }
 
-    // 3. Read the (serial) mesh from the given mesh file on all processors.  We
+    // 4. Read the (serial) mesh from the given mesh file on all processors.  We
     //    can handle triangular, quadrilateral, tetrahedral, hexahedral, surface
     //    and volume meshes with the same code.
     Mesh* mesh = new Mesh( mesh_file, 1, 1 );
     int dim = mesh->Dimension();
-
-    if ( mesh->attributes.Max() < 2 || mesh->bdr_attributes.Max() < 2 )
-    {
-        if ( myid == 0 )
-            cerr << "\nInput mesh should have at least two materials and "
-                 << "two boundary attributes! (See schematic in ex2.cpp)\n"
-                 << endl;
-        MPI_Finalize();
-        return 3;
-    }
-
-    // 4. Select the order of the finite element discretization space. For NURBS
-    //    meshes, we increase the order by degree elevation.
-    if ( mesh->NURBSext )
-    {
-        mesh->DegreeElevate( order, order );
-    }
-
-    // 5. Refine the serial mesh on all processors to increase the resolution. In
-    //    this example we do 'ref_levels' of uniform refinement. We choose
-    //    'ref_levels' to be the largest number that gives a final mesh with no
-    //    more than 1,000 elements.
-    {
-        int ref_levels = ser_ref_levels >= 0 ? ser_ref_levels : (int)floor( log( 1000. / mesh->GetNE() ) / log( 2. ) / dim );
-        for ( int l = 0; l < ref_levels; l++ )
-        {
-            mesh->UniformRefinement();
-        }
-    }
-
-    // 6. Define a parallel mesh by a partitioning of the serial mesh. Refine
+    // 7. Define a parallel mesh by a partitioning of the serial mesh. Refine
     //    this mesh further in parallel to increase the resolution. Once the
     //    parallel mesh is defined, the serial mesh can be deleted.
     ParMesh* pmesh = new ParMesh( MPI_COMM_WORLD, *mesh );
     delete mesh;
-    {
-        for ( int l = 0; l < par_ref_levels; l++ )
-        {
-            pmesh->UniformRefinement();
-        }
-    }
 
-    // 7. Define a parallel finite element space on the parallel mesh. Here we
+    // 8. Define a parallel finite element space on the parallel mesh. Here we
     //    use vector finite elements, i.e. dim copies of a scalar finite element
     //    space. We use the ordering by vector dimension (the last argument of
     //    the FiniteElementSpace constructor) which is expected in the systems
@@ -173,7 +126,14 @@ int main( int argc, char* argv[] )
     else
     {
         fec = new H1_FECollection( order, dim );
-        fespace = new ParFiniteElementSpace( pmesh, fec, dim, Ordering::byVDIM );
+        if ( reorder_space )
+        {
+            fespace = new ParFiniteElementSpace( pmesh, fec, dim, Ordering::byNODES );
+        }
+        else
+        {
+            fespace = new ParFiniteElementSpace( pmesh, fec, dim, Ordering::byVDIM );
+        }
     }
     HYPRE_BigInt size = fespace->GlobalTrueVSize();
     if ( myid == 0 )
@@ -181,23 +141,23 @@ int main( int argc, char* argv[] )
         cout << "Number of finite element unknowns: " << size << endl << "Assembling: " << flush;
     }
 
-    // 8. Determine the list of true (i.e. parallel conforming) essential
+    // 9. Determine the list of true (i.e. parallel conforming) essential
     //    boundary dofs. In this example, the boundary conditions are defined by
     //    marking only boundary attribute 1 from the mesh as essential and
     //    converting it to a list of true dofs.
     Array<int> ess_tdof_list, ess_bdr( pmesh->bdr_attributes.Max() );
     ess_bdr = 0;
     ess_bdr[0] = 1;
-    fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
+    // fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
 
-    // 9. Set up the parallel linear form b(.) which corresponds to the
-    //    right-hand side of the FEM linear system. In this case, b_i equals the
-    //    boundary integral of f*phi_i where f represents a "pull down" force on
-    //    the Neumann part of the boundary and phi_i are the basis functions in
-    //    the finite element fespace. The force is defined by the object f, which
-    //    is a vector of Coefficient objects. The fact that f is non-zero on
-    //    boundary attribute 2 is indicated by the use of piece-wise constants
-    //    coefficient for its last component.
+    // 10. Set up the parallel linear form b(.) which corresponds to the
+    //     right-hand side of the FEM linear system. In this case, b_i equals the
+    //     boundary integral of f*phi_i where f represents a "pull down" force on
+    //     the Neumann part of the boundary and phi_i are the basis functions in
+    //     the finite element fespace. The force is defined by the object f, which
+    //     is a vector of Coefficient objects. The fact that f is non-zero on
+    //     boundary attribute 2 is indicated by the use of piece-wise constants
+    //     coefficient for its last component.
     VectorArrayCoefficient f( dim );
     for ( int i = 0; i < dim - 1; i++ )
     {
@@ -218,28 +178,22 @@ int main( int argc, char* argv[] )
     }
     b->Assemble();
 
-    // 10. Define the solution vector x as a parallel finite element grid
+    // 11. Define the solution vector x as a parallel finite element grid
     //     function corresponding to fespace. Initialize x with initial guess of
     //     zero, which satisfies the boundary conditions.
     ParGridFunction x( fespace );
     x = 0.0;
 
-    // 11. Set up the parallel bilinear form a(.,.) on the finite element space
+    // 12. Set up the parallel bilinear form a(.,.) on the finite element space
     //     corresponding to the linear elasticity integrator with piece-wise
     //     constants coefficient lambda and mu.
-    Vector lambda( pmesh->attributes.Max() );
-    lambda = 1.0;
-    lambda( 0 ) = lambda( 1 ) * 50;
-    PWConstCoefficient lambda_func( lambda );
-    Vector mu( pmesh->attributes.Max() );
-    mu = 1.0;
-    mu( 0 ) = mu( 1 ) * 50;
-    PWConstCoefficient mu_func( mu );
+    ConstantCoefficient lambda_func( 1. );
+    ConstantCoefficient mu_func( 1. );
 
     ParBilinearForm* a = new ParBilinearForm( fespace );
     a->AddDomainIntegrator( new ElasticityIntegrator( lambda_func, mu_func ) );
 
-    // 12. Assemble the parallel bilinear form and the corresponding linear
+    // 13. Assemble the parallel bilinear form and the corresponding linear
     //     system, applying any necessary transformations such as: parallel
     //     assembly, eliminating boundary conditions, applying conforming
     //     constraints for non-conforming AMR, static condensation, etc.
@@ -253,136 +207,95 @@ int main( int argc, char* argv[] )
     }
     a->Assemble();
 
+    HypreParMatrix A;
     Vector B, X;
-    if ( !use_petsc )
+    a->FormLinearSystem( ess_tdof_list, x, *b, A, X, B );
+    if ( myid == 0 )
     {
-        HypreParMatrix A;
-        a->FormLinearSystem( ess_tdof_list, x, *b, A, X, B );
-        if ( myid == 0 )
-        {
-            cout << "done." << endl;
-            cout << "Size of linear system: " << A.GetGlobalNumRows() << endl;
-        }
+        cout << "done." << endl;
+        cout << "Size of linear system: " << A.GetGlobalNumRows() << endl;
+        cout << "GetNumRows " << A.GetNumRows() << endl;
+        A.Print( "A" );
+        const auto& P = fespace->GetProlongationMatrix();
+        P->PrintMatlab( mfem::out );
+        std::cout << P->Height() << " " << P->Width() << std::endl;
+    }
+    MPI_Barrier( MPI_COMM_WORLD );
+    if ( myid == 1 )
+    {
+        A.Print( "A" );
+        cout << "GetNumRows " << A.GetNumRows() << endl;
+        const auto& P = fespace->GetProlongationMatrix();
+        P->PrintMatlab( mfem::out );
+        std::cout << P->Height() << " " << P->Width() << std::endl;
+    }
 
-        // 13. Define and apply a parallel PCG solver for A X = B with the BoomerAMG
-        //     preconditioner from hypre.
-        HypreBoomerAMG* amg = new HypreBoomerAMG( A );
-        if ( amg_elast && !a->StaticCondensationIsEnabled() )
-        {
-            amg->SetElasticityOptions( fespace );
-        }
-        else
-        {
-            amg->SetSystemsOptions( dim );
-        }
-        HyprePCG* pcg = new HyprePCG( A );
-        pcg->SetTol( 1e-8 );
-        pcg->SetMaxIter( 500 );
-        pcg->SetPrintLevel( 2 );
-        pcg->SetPreconditioner( *amg );
-        pcg->Mult( B, X );
-        delete pcg;
-        delete amg;
+    // 14. Define and apply a parallel PCG solver for A X = B with the BoomerAMG
+    //     preconditioner from hypre.
+    HypreBoomerAMG* amg = new HypreBoomerAMG( A );
+    if ( amg_elast && !a->StaticCondensationIsEnabled() )
+    {
+        amg->SetElasticityOptions( fespace );
     }
     else
     {
-      // 13b. Use PETSc to solve the linear system.
-      //      Assemble a PETSc matrix, so that PETSc solvers can be used natively.
-      PetscParMatrix A;
-      a->SetOperatorType(use_nonoverlapping ?
-                         Operator::PETSC_MATIS : Operator::PETSC_MATAIJ);
-      a->FormLinearSystem(ess_tdof_list, x, *b, A, X, B);
-      if (myid == 0)
-      {
-         cout << "done." << endl;
-         cout << "Size of linear system: " << A.M() << endl;
-      }
-      PetscPCGSolver *pcg = new PetscPCGSolver(A);
-
-      // The preconditioner for the PCG solver defined below is specified in the
-      // PETSc config file, rc_ex2p, since a Krylov solver in PETSc can also
-      // customize its preconditioner.
-      PetscPreconditioner *prec = NULL;
-      if (use_nonoverlapping)
-      {
-         // Compute dofs belonging to the natural boundary
-         Array<int> nat_tdof_list, nat_bdr(pmesh->bdr_attributes.Max());
-         nat_bdr = 1;
-         nat_bdr[0] = 0;
-         fespace->GetEssentialTrueDofs(nat_bdr, nat_tdof_list);
-
-         // Auxiliary class for BDDC customization
-         PetscBDDCSolverParams opts;
-         // Inform the solver about the finite element space
-         opts.SetSpace(fespace);
-         // Inform the solver about essential dofs
-         opts.SetEssBdrDofs(&ess_tdof_list);
-         // Inform the solver about natural dofs
-         opts.SetNatBdrDofs(&nat_tdof_list);
-         // Create a BDDC solver with parameters
-         prec = new PetscBDDCSolver(A,opts);
-         pcg->SetPreconditioner(*prec);
-      }
-
-      pcg->SetMaxIter(500);
-      pcg->SetTol(1e-8);
-      pcg->SetPrintLevel(2);
-      pcg->Mult(B, X);
-      delete pcg;
-      delete prec;
+        amg->SetSystemsOptions( dim, reorder_space );
     }
+    // HyprePCG* pcg = new HyprePCG( A );
+    // pcg->SetTol( 1e-8 );
+    // pcg->SetMaxIter( 500 );
+    // pcg->SetPrintLevel( 2 );
+    // pcg->SetPreconditioner( *amg );
+    // pcg->Mult( B, X );
 
-    // 14. Recover the parallel grid function corresponding to X. This is the
-    //     local finite element solution on each processor.
-    a->RecoverFEMSolution( X, *b, x );
+    // // 15. Recover the parallel grid function corresponding to X. This is the
+    // //     local finite element solution on each processor.
+    // a->RecoverFEMSolution( X, *b, x );
 
-    // 15. For non-NURBS meshes, make the mesh curved based on the finite element
-    //     space. This means that we define the mesh elements through a fespace
-    //     based transformation of the reference element.  This allows us to save
-    //     the displaced mesh as a curved mesh when using high-order finite
-    //     element displacement field. We assume that the initial mesh (read from
-    //     the file) is not higher order curved mesh compared to the chosen FE
-    //     space.
-    if ( !use_nodal_fespace )
-    {
-        pmesh->SetNodalFESpace( fespace );
-    }
+    // // 16. For non-NURBS meshes, make the mesh curved based on the finite element
+    // //     space. This means that we define the mesh elements through a fespace
+    // //     based transformation of the reference element.  This allows us to save
+    // //     the displaced mesh as a curved mesh when using high-order finite
+    // //     element displacement field. We assume that the initial mesh (read from
+    // //     the file) is not higher order curved mesh compared to the chosen FE
+    // //     space.
+    // if ( !use_nodal_fespace )
+    // {
+    //     pmesh->SetNodalFESpace( fespace );
+    // }
 
-    // 16. Save in parallel the displaced mesh and the inverted solution (which
-    //     gives the backward displacements to the original grid). This output
-    //     can be viewed later using GLVis: "glvis -np <np> -m mesh -g sol".
-    {
-        GridFunction* nodes = pmesh->GetNodes();
-        *nodes += x;
-        x *= -1;
-    }
-    ParaViewDataCollection paraview_dc( "test", pmesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x );
-    paraview_dc.Save();
+    // // 17. Save in parallel the displaced mesh and the inverted solution (which
+    // //     gives the backward displacements to the original grid). This output
+    // //     can be viewed later using GLVis: "glvis -np <np> -m mesh -g sol".
+    // {
+    //     GridFunction* nodes = pmesh->GetNodes();
+    //     *nodes += x;
+    //     x *= -1;
 
-    // 18. Free the used memory.
-    delete a;
-    delete b;
-    if ( fec )
-    {
-        delete fespace;
-        delete fec;
-    }
-    delete pmesh;
+    //     ostringstream mesh_name, sol_name;
+    //     mesh_name << "mesh." << setfill( '0' ) << setw( 6 ) << myid;
+    //     sol_name << "sol." << setfill( '0' ) << setw( 6 ) << myid;
 
-    // We finalize PETSc
-    if ( use_petsc )
-    {
-        MFEMFinalizePetsc();
-    }
+    //     ofstream mesh_ofs( mesh_name.str().c_str() );
+    //     mesh_ofs.precision( 8 );
+    //     pmesh->Print( mesh_ofs );
 
-    MPI_Finalize();
+    //     ofstream sol_ofs( sol_name.str().c_str() );
+    //     sol_ofs.precision( 8 );
+    //     x.Save( sol_ofs );
+    // }
+
+    // // 19. Free the used memory.
+    // delete pcg;
+    // delete amg;
+    // delete a;
+    // delete b;
+    // if ( fec )
+    // {
+    //     delete fespace;
+    //     delete fec;
+    // }
+    // delete pmesh;
 
     return 0;
 }

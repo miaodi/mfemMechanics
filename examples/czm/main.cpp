@@ -178,7 +178,13 @@ int main( int argc, char* argv[] )
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
     nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d2, hevi2 ) );
 
-    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 );
+    mfem::ConstantCoefficient sigma_max{ 324E6 };
+    mfem::ConstantCoefficient tau_max{ 755.4E6 };
+    mfem::ConstantCoefficient delta_n{ 4E-7 };
+    mfem::ConstantCoefficient delta_t{ 4E-7 };
+
+    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, sigma_max, tau_max, delta_n, delta_t );
+
     nlf->AddInteriorFaceIntegrator( czm_intg );
     mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
     czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );

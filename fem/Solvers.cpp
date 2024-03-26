@@ -838,7 +838,7 @@ void MultiNewtonAdaptive<Newton>::Mult( const mfem::Vector& b, mfem::Vector& x )
                 Newton::Delta_lambda /= 2;
             else
             {
-                Newton::Delta_lambda *= std::min( 1.2, std::pow( this->max_iter / Newton::GetNumIterations(), .2 ) );
+                Newton::Delta_lambda *= std::min( 1.2, std::pow( this->max_iter * .8 / Newton::GetNumIterations(), .5 ) );
                 Newton::Delta_lambda = std::min( Newton::Delta_lambda, max_delta );
             }
         }

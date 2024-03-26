@@ -17,13 +17,14 @@ int main( int argc, char* argv[] )
     Hypre::Init();
 
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/crack_square2d_quad.msh";
+    const char* mesh_file = "../../data/crack_square2d.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
     int ser_ref_levels = -1, par_ref_levels = -1;
     const char* petscrc_file = "../../data/petscSetting";
     std::string problem_type = "tensile";
+    int localRefineLvl = 0;
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -37,6 +38,7 @@ int main( int argc, char* argv[] )
     args.AddOption( &par_ref_levels, "-rp", "--refine-parallel",
                     "Number of times to refine the mesh uniformly in parallel." );
     args.AddOption( &petscrc_file, "-petscopts", "--petscopts", "PetscOptions file to use." );
+    args.AddOption( &localRefineLvl, "-lr", "--local-refine-level", "Finite element local refine level." );
     args.Parse();
 
     if ( !args.Good() )
@@ -77,6 +79,27 @@ int main( int argc, char* argv[] )
         {
             mesh->UniformRefinement();
         }
+    }
+    for ( int k = 0; k < localRefineLvl; k++ )
+    {
+        int ne = mesh->GetNE();
+        auto eles = mesh->GetElementsArray();
+        Array<Refinement> refinements;
+        for ( int i = 0; i < ne; i++ )
+        {
+            double* node{ nullptr };
+            for ( int j = 0; j < eles[i]->GetNVertices(); j++ )
+            {
+                const int vi = eles[i]->GetVertices()[j];
+                node = mesh->GetVertex( vi );
+                if ( std::abs( std::sqrt( std::pow( node[0] - .00025, 2 ) + std::pow( node[1], 2 ) ) - .0001 ) < .000005 )
+                {
+                    refinements.Append( i );
+                    break;
+                }
+            }
+        }
+        mesh->GeneralRefinement( refinements );
     }
     // 6. Define a parallel mesh by a partitioning of the serial mesh. Refine
     //    this mesh further in parallel to increase the resolution. Once the
@@ -184,13 +207,38 @@ int main( int argc, char* argv[] )
         nlf->AddBdrFaceIntegrator( new plugin::NonlinearDirichletPenaltyIntegrator( d, hevi ) );
     }
 
-    auto czm_intg = new plugin::ExponentialADCZMIntegrator( mm, 324E6, 755.4E6, 4E-7, 4E-7 );
+    mfem::FunctionCoefficient sigma_max{ []( const mfem::Vector& x )
+                                         {
+                                             if ( std::sqrt( std::pow( x( 0 ) - .00025, 2 ) + std::pow( x( 1 ), 2 ) ) <= .0001 )
+                                             {
+                                                 return 324E6 * 5;
+                                             }
+                                             else
+                                             {
+                                                 return 324E6;
+                                             }
+                                         } };
+    mfem::FunctionCoefficient tau_max{ []( const mfem::Vector& x )
+                                       {
+                                           if ( std::sqrt( std::pow( x( 0 ) - .00025, 2 ) + std::pow( x( 1 ), 2 ) ) <= .0001 )
+                                           {
+                                               return 755.4E6 * 5;
+                                           }
+                                           else
+                                           {
+                                               return 755.4E6;
+                                           }
+                                       } };
+    mfem::ConstantCoefficient delta_n{ 4E-7 };
+    mfem::ConstantCoefficient delta_t{ 4E-7 };
+
+    auto czm_intg = new plugin::ExponentialADCZMIntegrator( mm, sigma_max, tau_max, delta_n, delta_t );
     nlf->AddInteriorFaceIntegrator( czm_intg );
     mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
     czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );
 
     // Set up the Jacobian solver
-    mfem::Solver* lin_solver{nullptr};
+    mfem::Solver* lin_solver{ nullptr };
 
     // {
     //     auto cg  = new mfem::CGSolver( MPI_COMM_WORLD );
@@ -243,7 +291,7 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxIter( 10 );
     newton_solver->SetPrintLevel( 0 );
     newton_solver->SetDelta( 1e-5 );
-    newton_solver->SetMaxDelta( 1e-3 );
+    newton_solver->SetMaxDelta( 1e-2 );
     newton_solver->SetMinDelta( 1e-14 );
     newton_solver->SetMaxStep( 100000 );
     // newton_solver->SetAdaptiveL( true );
@@ -275,7 +323,8 @@ int main( int argc, char* argv[] )
     stress_grid.ProjectCoefficient( sc );
     paraview_dc.Save();
 
-    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc, &x_gf, &u]( int step, int count, double time ) {
+    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc, &x_gf, &u]( int step, int count, double time )
+    {
         static int local_counter = 0;
         if ( count % 5 == 0 )
         {

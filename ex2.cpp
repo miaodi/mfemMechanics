@@ -79,43 +79,7 @@ int main( int argc, char* argv[] )
     //    quadrilateral, tetrahedral or hexahedral elements with the same code.
     Mesh* mesh = new Mesh( mesh_file, 1, 1 );
     int dim = mesh->Dimension();
-
-    // 3. Select the order of the finite element discretization space. For NURBS
-    //    meshes, we increase the order by degree elevation.
-    if ( mesh->NURBSext )
-    {
-        mesh->DegreeElevate( order, order );
-    }
-
-    //  4. Mesh refinement
-    for ( int k = 0; k < refineLvl; k++ )
-        mesh->UniformRefinement();
-
-    for ( int k = 0; k < localRefineLvl; k++ )
-    {
-        int ne = mesh->GetNE();
-        auto eles = mesh->GetElementsArray();
-        Array<Refinement> refinements;
-        for ( int i = 0; i < ne; i++ )
-        {
-            double* node{ nullptr };
-            for ( int j = 0; j < eles[i]->GetNVertices(); j++ )
-            {
-                const int vi = eles[i]->GetVertices()[j];
-                node = mesh->GetVertex( vi );
-                if ( std::abs( node[1] ) < 1e-10 && node[0] + 1e-10 > 0 )
-                {
-                    refinements.Append( i );
-                    break;
-                }
-            }
-        }
-        mesh->GeneralRefinement( refinements );
-    }
-    ofstream file;
-    file.open( "refined.vtk" );
-    mesh->PrintVTK( file );
-    file.close();
+    
 
     // 5. Define a finite element space on the mesh. Here we use vector finite
     //    elements, i.e. dim copies of a scalar finite element space. The vector
@@ -168,13 +132,8 @@ int main( int argc, char* argv[] )
     // 9. Set up the bilinear form a(.,.) on the finite element space
     //    corresponding to the linear elasticity integrator with piece-wise
     //    constants coefficient lambda and mu.
-    Vector Nu( mesh->attributes.Max() );
-    Nu = .0;
-    PWConstCoefficient nu_func( Nu );
-
-    Vector E( mesh->attributes.Max() );
-    E = 210e9;
-    PWConstCoefficient E_func( E );
+    ConstantCoefficient nu_func( .0 );
+    ConstantCoefficient E_func( 210e9 );
 
     IsotropicElasticMaterial iem( E_func, nu_func );
 
