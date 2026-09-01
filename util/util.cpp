@@ -1,38 +1,8 @@
 #include "util.h"
+#include <vector>
 
 namespace util
 {
-Eigen::Vector6d Voigt( const Eigen::Matrix3d& tensor, const bool isStrain )
-{
-    if ( isStrain )
-    {
-        return Eigen::Vector6d{{tensor( Voigt( 0, 0 ), Voigt( 0, 1 ) ), tensor( Voigt( 1, 0 ), Voigt( 1, 1 ) ),
-                                tensor( Voigt( 2, 0 ), Voigt( 2, 1 ) ), 2 * tensor( Voigt( 3, 0 ), Voigt( 3, 1 ) ),
-                                2 * tensor( Voigt( 4, 0 ), Voigt( 4, 1 ) ), 2 * tensor( Voigt( 5, 0 ), Voigt( 5, 1 ) )}};
-    }
-    else
-    {
-        return Eigen::Vector6d{{tensor( Voigt( 0, 0 ), Voigt( 0, 1 ) ), tensor( Voigt( 1, 0 ), Voigt( 1, 1 ) ),
-                                tensor( Voigt( 2, 0 ), Voigt( 2, 1 ) ), tensor( Voigt( 3, 0 ), Voigt( 3, 1 ) ),
-                                tensor( Voigt( 4, 0 ), Voigt( 4, 1 ) ), tensor( Voigt( 5, 0 ), Voigt( 5, 1 ) )}};
-    }
-}
-
-Eigen::Matrix3d InverseVoigt( const Eigen::Vector6d& vector, const bool isStrain )
-{
-    if ( isStrain )
-    {
-        return Eigen::Matrix3d{{vector( 0 ), vector( 3 ) / 2, vector( 5 ) / 2},
-                               {vector( 3 ) / 2, vector( 1 ), vector( 4 ) / 2},
-                               {vector( 6 ) / 2, vector( 4 ) / 2, vector( 2 )}};
-    }
-    else
-    {
-        return Eigen::Matrix3d{{vector( 0 ), vector( 3 ), vector( 5 )},
-                               {vector( 3 ), vector( 1 ), vector( 4 )},
-                               {vector( 5 ), vector( 4 ), vector( 2 )}};
-    }
-}
 
 short Voigt( const short i, const short pos )
 {
@@ -101,5 +71,71 @@ Eigen::Matrix6d TransformationVoigtForm( const Eigen::Matrix3d& t )
             T( 5, 4 ) = t( 0, 1 ) * t( 2, 2 ) + t( 0, 2 ) * t( 2, 1 ),
             T( 5, 5 ) = t( 0, 0 ) * t( 2, 2 ) + t( 0, 2 ) * t( 2, 0 );
     return T;
+}
+
+double ConvergenceRate( const double cur, const double prev, const double prevprev )
+{
+    return ( std::log( cur ) - std::log( prev ) ) / ( std::log( prev ) - std::log( prevprev ) );
+}
+
+// Welzl's algorithm
+double SmallestCircle( const mfem::IntegrationRule& nodes, const int dim )
+{
+    static auto dist = []( const mfem::IntegrationPoint& a, const mfem::IntegrationPoint& b )
+    { return std::sqrt( std::pow( a.x - b.x, 2 ) + std::pow( a.y - b.y, 2 ) + std::pow( a.z - b.z, 2 ) ); };
+    struct Circle
+    {
+        mfem::IntegrationPoint center;
+        double radius;
+        Circle( const mfem::IntegrationPoint& c, const double r ) : center( c ), radius( r )
+        {
+        }
+        Circle( const double cx, const double cy, const double r ) : radius( r )
+        {
+            center.x = cx;
+            center.y = cy;
+            center.z = 0;
+        }
+
+        bool isInside( const mfem::IntegrationPoint& p ) const
+        {
+            return dist( center, p ) <= radius;
+        }
+    };
+
+    if ( dim == 3 )
+        MFEM_ABORT( "smallest bound sphere is not implemented yet." );
+
+    const int size = nodes.GetNPoints();
+    if ( size <= 1 )
+        return 0;
+    if ( size == 2 )
+        return dist( nodes.IntPoint( 0 ), nodes.IntPoint( 1 ) );
+    auto formCircle = []( const mfem::IntegrationPoint& a, const mfem::IntegrationPoint& b, const mfem::IntegrationPoint& c )
+    {
+        Eigen::Matrix3d m;
+        m << 2 * a.x, 2 * a.y, 1, 2 * b.x, 2 * b.y, 1, 2 * c.x, 2 * c.y, 1;
+        Eigen::Vector3d rhs;
+        rhs << a.x * a.x + a.y * a.y, b.x * b.x + b.y * b.y, c.x * c.x + c.y * c.y;
+        Eigen::Vector3d sol = m.fullPivLu().solve( rhs );
+        const double r = std::sqrt( sol( 2 ) + sol( 0 ) * sol( 0 ) + sol( 1 ) * sol( 1 ) );
+        return Circle( sol( 0 ), sol( 1 ), r );
+    };
+    std::vector<int> index;
+    std::function<Circle( const mfem::IntegrationRule&, std::vector<int>&, int )> recursive_helper =
+        [&recursive_helper, &formCircle]( const mfem::IntegrationRule& nodes, std::vector<int>& index, int pos )
+    {
+        if ( nodes.GetNPoints() - pos == 3 )
+            return formCircle( nodes.IntPoint( pos + 0 ), nodes.IntPoint( pos + 1 ), nodes.IntPoint( pos + 2 ) );
+        if ( index.size() == 3 )
+            return formCircle( nodes.IntPoint( index[0] ), nodes.IntPoint( index[1] ), nodes.IntPoint( index[2] ) );
+
+        auto d = recursive_helper( nodes, index, pos + 1 );
+        if ( d.isInside( nodes.IntPoint( pos ) ) )
+            return d;
+        index.push_back( pos );
+        return recursive_helper( nodes, index, pos + 1 );
+    };
+    return recursive_helper( nodes, index, 0 ).radius * 2;
 }
 } // namespace util

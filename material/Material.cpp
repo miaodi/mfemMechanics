@@ -18,9 +18,10 @@ Eigen::Matrix3d ElasticMaterial::getGreenLagrangeStrainTensor() const
     }
 }
 
-Eigen::Vector6d ElasticMaterial::getGreenLagrangeStrainVector() const
+const Eigen::Vector6d& ElasticMaterial::getGreenLagrangeStrainVector() const
 {
-    return util::Voigt( getGreenLagrangeStrainTensor(), true );
+    getGreenLagrangeStrainVector<double>( mStrainVec );
+    return mStrainVec;
 }
 
 Eigen::Matrix3d ElasticMaterial::getPK2StressTensor() const
@@ -28,9 +29,10 @@ Eigen::Matrix3d ElasticMaterial::getPK2StressTensor() const
     return util::InverseVoigt( getPK2StressVector(), false );
 }
 
-Eigen::Vector6d ElasticMaterial::getPK2StressVector() const
+const Eigen::Vector6d& ElasticMaterial::getPK2StressVector() const
 {
-    return util::Voigt( getPK2StressTensor(), false );
+    getPK2StressVector<double>( mStressVec );
+    return mStressVec;
 }
 
 Eigen::Matrix3d ElasticMaterial::getCauchyStressTensor() const
@@ -40,7 +42,7 @@ Eigen::Matrix3d ElasticMaterial::getCauchyStressTensor() const
 
 Eigen::Vector6d ElasticMaterial::getCauchyStressVector() const
 {
-    return util::Voigt( getCauchyStressTensor(), false );
+    return util::Voigt<double, double>( getCauchyStressTensor(), false );
 }
 
 void ElasticMaterial::updateCurModuli()
@@ -112,12 +114,13 @@ void IsotropicElasticMaterial::updateRefModuli()
     mRefModuli( 5, 5 ) = mu;
 }
 
-Eigen::Vector6d IsotropicElasticMaterial::getPK2StressVector() const
+const Eigen::Vector6d& IsotropicElasticMaterial::getPK2StressVector() const
 {
     if ( mIntrinsicStress )
-        return getRefModuli() * getGreenLagrangeStrainVector() + getIntrinsicPK2StressVector();
+        mStressVec = getRefModuli() * getGreenLagrangeStrainVector() + getIntrinsicPK2StressVector();
     else
-        return getRefModuli() * getGreenLagrangeStrainVector();
+        mStressVec = getRefModuli() * getGreenLagrangeStrainVector();
+    return mStressVec;
 }
 
 Eigen::Matrix3d IsotropicElasticThermalMaterial::getGreenLagrangeStrainTensor() const

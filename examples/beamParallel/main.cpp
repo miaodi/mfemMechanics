@@ -69,12 +69,12 @@ int main( int argc, char* argv[] )
     MPI_Comm_rank( MPI_COMM_WORLD, &myid );
 
     // 1. Parse command-line options.
-    const char* mesh_file = "../data/gmshBeam.msh";
+    const char* mesh_file = "../../data/gmshBeam.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
     int ser_ref_levels = -1, par_ref_levels = -1;
-    const char* petscrc_file = "../data/petscSetting";
+    const char* petscrc_file = "../../data/petscSetting";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -190,7 +190,7 @@ int main( int argc, char* argv[] )
     // Set up the Jacobian solver
     PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
 
-    auto newton_solver = new plugin::MultiNewtonAdaptive( fespace->GetComm() );
+    auto newton_solver = new plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch>( fespace->GetComm() );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -221,15 +221,15 @@ int main( int argc, char* argv[] )
     newton_solver->Mult( zero, u );
 
     // 15. Save data in the ParaView format
-    ParaViewDataCollection paraview_dc( "beamParallel", pmesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &u );
-    paraview_dc.Save();
+    // ParaViewDataCollection paraview_dc( "beamParallel", pmesh );
+    // paraview_dc.SetPrefixPath( "ParaView" );
+    // paraview_dc.SetLevelsOfDetail( order );
+    // paraview_dc.SetCycle( 0 );
+    // paraview_dc.SetDataFormat( VTKFormat::BINARY );
+    // paraview_dc.SetHighOrderOutput( true );
+    // paraview_dc.SetTime( 0.0 ); // set the time
+    // paraview_dc.RegisterField( "Displace", &u );
+    // paraview_dc.Save();
     if ( fec )
     {
         delete fespace;

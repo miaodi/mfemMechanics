@@ -224,14 +224,11 @@ int main( int argc, char* argv[] )
     nlf->AddDomainIntegrator( intg );
     nlf->SetEssentialTrueDofs( ess_tdof_list );
     nlf->SetGradientType( Operator::Type::PETSC_MATAIJ );
-    plugin::SetLambdaToIntegrators( nlf, 1 );
     Vector X( fespace->GetTrueVSize() );
     x_gf.ParallelProject( X );
-    PetscParMatrix K( fespace->GetComm(), &nlf->GetGradient( X ), mfem::Operator::PETSC_MATAIJ );
-    ofstream myfile;
     PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
 
-    auto newton_solver = new plugin::MultiNewtonAdaptive( fespace->GetComm() );
+    auto newton_solver = new plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch>( fespace->GetComm() );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
@@ -246,25 +243,34 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxIter( 2 );
     newton_solver->SetDelta( 1 );
     newton_solver->SetMaxStep( 1 );
+    newton_solver->SetPrevLambda( 1. );
 
     Vector zero;
     newton_solver->Mult( zero, X );
+
+    PetscParMatrix K( fespace->GetComm(), &nlf->GetGradient( X ), mfem::Operator::PETSC_MATAIJ );
 
     auto* nlf2 = new ParNonlinearForm( fespace );
     nlf2->AddDomainIntegrator( intg );
     intg->setGeomStiff( true );
     nlf2->SetGradientType( Operator::Type::PETSC_MATAIJ );
-    plugin::SetLambdaToIntegrators( nlf2, 0 );
+
+    auto newton_solver2 = new plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch>( fespace->GetComm() );
+
+    newton_solver2->SetOperator( *nlf2 );
+    newton_solver2->SetPrevLambda( 0. );
+
     PetscParMatrix Kg( fespace->GetComm(), &nlf2->GetGradient( X ), mfem::Operator::PETSC_MATAIJ );
 
     PetscParVector tmp( MPI_COMM_WORLD, fespace->GetTrueVSize() );
     K.EliminateRowsCols( ess_tdof_list, tmp, tmp, 1e20 );
+    ofstream myfile;
     myfile.open( "K.dat" );
     K.PrintMatlab( myfile );
     myfile.close();
     myfile.open( "Kg.dat" );
     Kg.PrintMatlab( myfile );
-    myfile.close(); 
+    myfile.close();
     auto slepc = new SlepcEigenSolver( MPI_COMM_WORLD );
     slepc->SetNumModes( nev );
     slepc->SetWhichEigenpairs( SlepcEigenSolver::LARGEST_MAGNITUDE );

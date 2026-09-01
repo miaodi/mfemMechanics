@@ -11,42 +11,57 @@ set(CMAKE_FIND_DEBUG_MODE 1)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 find_package(MPI REQUIRED)
-FetchContent_Declare(
-    Fastor
-    GIT_REPOSITORY  https://github.com/romeric/Fastor.git
-    GIT_TAG         origin/master
-)
+# FetchContent_Declare(
+#     Fastor
+#     GIT_REPOSITORY  https://github.com/romeric/Fastor.git
+#     GIT_TAG         origin/master
+# )
+
 FetchContent_Declare(
   Eigen
-  GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-  GIT_TAG master
+  URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
 )
+
+FetchContent_Declare(
+  autodiff
+  GIT_REPOSITORY https://github.com/autodiff/autodiff.git
+  GIT_TAG main
+  GIT_SHALLOW TRUE
+  GIT_PROGRESS TRUE
+)
+
 set(BUILD_TESTING OFF)
 set(EIGEN_BUILD_DOC OFF)
 set(EIGEN_BUILD_PKGCONFIG OFF)
+set(EIGEN_BUILD_TESTING OFF)
+set(EIGEN_MPL2_ONLY ON)
+set(AUTODIFF_BUILD_TESTS OFF)
+set(AUTODIFF_BUILD_PYTHON OFF)
+set(AUTODIFF_BUILD_TESTS OFF)
+set(AUTODIFF_BUILD_EXAMPLES OFF)
 
-FetchContent_MakeAvailable(Fastor Eigen)
+FetchContent_MakeAvailable(Eigen autodiff)
 
-
-if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(MFEM_FOLDER "build-debug")
-else()
-    set(MFEM_FOLDER "build-release")
-endif()
-find_package(mfem REQUIRED NAMES MFEM  HINTS ${CMAKE_SOURCE_DIR}/../mfem/${MFEM_FOLDER})
+find_package(MFEM EXACT REQUIRED)
+add_library(taco SHARED IMPORTED) # or STATIC instead of SHARED
+set_target_properties(taco PROPERTIES
+  IMPORTED_LOCATION "${TACO_DIR}/lib/libtaco.so"
+  INTERFACE_INCLUDE_DIRECTORIES "${TACO_DIR}/include"
+)
 
 add_subdirectory(util)
 add_subdirectory(material)
 add_subdirectory(fem)
 
-set (INCLUDE_DIRS ${MFEM_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR})
-set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX)
-
+set (INCLUDE_DIRS ${MFEM_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS} ${CMAKE_SOURCE_DIR} Eigen3::eigen)
+message("MFEM_LIBRARIES: ${MFEM_LIBRARIES}")
+set (LIBS ${MFEM_LIBRARIES} matlib femplugin MPI::MPI_CXX autodiff::autodiff taco)
+# message("taco_lib: ${CMAKE_BINARY_DIR}/lib/libtaco.so")
 add_subdirectory(examples)
 
-add_executable(test test.cpp)
-target_include_directories(test PUBLIC ${INCLUDE_DIRS} ${fastor_SOURCE_DIR})
-target_link_libraries(test PRIVATE ${LIBS})
+# add_executable(hello test.cpp)
+# target_include_directories(hello PUBLIC ${INCLUDE_DIRS} ${fastor_SOURCE_DIR} ${TACO_INCLUDE_DIR})
+# target_link_libraries(hello PRIVATE ${LIBS} ${TACO_LIB})
 
 add_executable(test2 test2.cpp)
 target_include_directories(test2 PUBLIC ${INCLUDE_DIRS})
@@ -77,13 +92,13 @@ target_link_libraries(petchbuckle PRIVATE ${LIBS})
 # target_include_directories(ex16 PUBLIC ${INCLUDE_DIRS})
 # target_link_libraries(ex16 PRIVATE ${LIBS})
 
-# add_executable(ex2 ex2.cpp)
-# target_include_directories(ex2 PUBLIC ${INCLUDE_DIRS})
-# target_link_libraries(ex2 PRIVATE ${LIBS})
+add_executable(ex2 ex2.cpp)
+target_include_directories(ex2 PUBLIC ${INCLUDE_DIRS})
+target_link_libraries(ex2 PRIVATE ${LIBS})
 
-# add_executable(ex2p ex2p.cpp)
-# target_include_directories(ex2p PUBLIC ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${PLUGIN_INCLUDE_DIRS})
-# target_link_libraries(ex2p PRIVATE ${MFEM_LIBRARIES} matlib femplugin)
+add_executable(ex2p ex2p.cpp)
+target_include_directories(ex2p PUBLIC ${INCLUDE_DIRS})
+target_link_libraries(ex2p PRIVATE ${LIBS})
 
 add_executable(beam beam.cpp)
 target_include_directories(beam PUBLIC ${INCLUDE_DIRS})
@@ -96,3 +111,7 @@ target_link_libraries(block PRIVATE ${LIBS})
 add_executable(pblock pblock.cpp)
 target_include_directories(pblock PUBLIC ${INCLUDE_DIRS})
 target_link_libraries(pblock PRIVATE ${LIBS})
+
+
+enable_testing()
+add_subdirectory(tests)

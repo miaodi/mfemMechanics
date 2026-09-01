@@ -230,7 +230,7 @@ int main( int argc, char* argv[] )
     for ( int i = 1; i <= 10; i++ )
     {
         Vector zero;
-        plugin::SetLambdaToIntegrators( nlf, .1 * i );
+        // newton_solver->SetPrevLambda( .1 * i );
         newton_solver->Mult( zero, u );
         paraview_dc.SetTime( i ); // set the time
         paraview_dc.SetCycle( i );

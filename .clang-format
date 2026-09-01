@@ -45,6 +45,6 @@ SpacesInCStyleCastParentheses: false
 SpacesInContainerLiterals: true  
 SpacesInParentheses: true  
 Cpp11BracedListStyle: true  
-Standard: Latest   
+Standard: Cpp11        
 TabWidth: 4  
 UseTab: Never 
