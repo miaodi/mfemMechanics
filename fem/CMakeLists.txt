@@ -1,11 +1,15 @@
-project(plugin)
+add_library(femplugin FEMPlugin.cpp PostProc.cpp Solvers.cpp CZM.cpp AMR.cpp PhaseField.cpp)
+add_library(mfemMechanics::femplugin ALIAS femplugin)
 
-set(pluginSrc FEMPlugin.cpp PostProc.cpp Solvers.cpp CZM.cpp AMR.cpp PhaseField.cpp)
-
-
-set(PLUGIN_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} PARENT_SCOPE)
-
-add_library(femplugin ${pluginSrc})
-
-target_include_directories(femplugin PUBLIC ${EIGEN3_INCLUDE_DIR} ${MFEM_INCLUDE_DIRS} ${MATLIB_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS} ${MPI_INCLUDE_DIRS})
-target_link_libraries(femplugin Eigen3::Eigen ${MFEM_LIBRARIES} matlib util ${MPI_LIB} autodiff::autodiff)
+target_compile_features(femplugin PUBLIC cxx_std_17)
+target_include_directories(femplugin PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(
+    femplugin
+    PUBLIC
+        mfemMechanics::matlib
+        mfemMechanics::util
+        Eigen3::Eigen
+        MPI::MPI_CXX
+        autodiff::autodiff
+        mfem
+)

@@ -1,28 +1,18 @@
-cmake_minimum_required(VERSION 3.5...3.20)
-project(tests)
+include("${PROJECT_SOURCE_DIR}/cmake/GoogleTest.cmake")
+include("${CMAKE_ROOT}/Modules/GoogleTest.cmake")
 
-include(FetchContent)
-
-# Add Google Test
-include(../cmake/GoogleTest.cmake)
-
-add_executable(
+mfem_mechanics_add_executable(
     autodiff_test
     autodiff_test.cpp
+    GTest::gtest_main
+    mfemMechanics::util
 )
-target_include_directories(autodiff_test PUBLIC ${INCLUDE_DIRS})
-target_link_libraries(
-    autodiff_test PUBLIC GTest::gtest_main ${LIBS}
-)
-
-add_executable(
+mfem_mechanics_add_executable(
     eigen_decomp_test
     eigen_decomp_test.cpp
-)
-target_include_directories(eigen_decomp_test PUBLIC ${INCLUDE_DIRS})
-target_link_libraries(
-    eigen_decomp_test PUBLIC GTest::gtest_main ${LIBS}
+    GTest::gtest_main
+    mfemMechanics::util
 )
 
-include(GoogleTest)
 gtest_discover_tests(autodiff_test)
+gtest_discover_tests(eigen_decomp_test)

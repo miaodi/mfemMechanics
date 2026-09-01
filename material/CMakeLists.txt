@@ -1,10 +1,14 @@
-project(material)
+add_library(matlib Material.cpp NeoHookeanMaterial.cpp PhaseFieldMaterial.cpp)
+add_library(mfemMechanics::matlib ALIAS matlib)
 
-set(matSrc Material.cpp NeoHookeanMaterial.cpp PhaseFieldMaterial.cpp)
-
-set(MATLIB_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR} PARENT_SCOPE)
-
-add_library(matlib ${matSrc})
-
-target_include_directories(matlib PUBLIC ${EIGEN3_INCLUDE_DIR} ${MFEM_INCLUDE_DIRS} ${UTIL_INCLUDE_DIRS})
-target_link_libraries(matlib Eigen3::Eigen ${MFEM_LIBRARIES} util  MPI::MPI_CXX autodiff::autodiff)
+target_compile_features(matlib PUBLIC cxx_std_17)
+target_include_directories(matlib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(
+    matlib
+    PUBLIC
+        mfemMechanics::util
+        Eigen3::Eigen
+        MPI::MPI_CXX
+        autodiff::autodiff
+        mfem
+)

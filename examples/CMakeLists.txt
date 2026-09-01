@@ -1,5 +1,3 @@
-project (examples)
-
 add_subdirectory(linearBuckling)
 add_subdirectory(beamParallel)
 add_subdirectory(PhaseField)
@@ -8,4 +6,3 @@ add_subdirectory(postBuckling3D)
 add_subdirectory(heat)
 add_subdirectory(czm)
 add_subdirectory(playMesh)
-add_subdirectory(misc)

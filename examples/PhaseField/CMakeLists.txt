@@ -1,9 +1,21 @@
-project(PhaseField)
-add_executable("${PROJECT_NAME}_shear" shear.cpp)
-target_include_directories("${PROJECT_NAME}_shear" PUBLIC ${INCLUDE_DIRS})
-target_link_libraries("${PROJECT_NAME}_shear" PRIVATE ${LIBS})
+if(TARGET OpenMP::OpenMP_CXX)
+    mfem_mechanics_add_executable(
+        PhaseField_shear
+        shear.cpp
+        mfemMechanics::femplugin
+        OpenMP::OpenMP_CXX
+    )
+else()
+    message(STATUS "Skipping PhaseField_shear: OpenMP CXX support was not found")
+endif()
 
-
-add_executable("p${PROJECT_NAME}_shear" pshear.cpp)
-target_include_directories("p${PROJECT_NAME}_shear" PUBLIC ${INCLUDE_DIRS})
-target_link_libraries("p${PROJECT_NAME}_shear" PRIVATE ${LIBS})
+if(MFEM_USE_MPI)
+    mfem_mechanics_add_executable(
+        pPhaseField_shear
+        pshear.cpp
+        mfemMechanics::femplugin
+        MPI::MPI_CXX
+    )
+else()
+    message(STATUS "Skipping pPhaseField_shear: installed MFEM reports MFEM_USE_MPI=OFF")
+endif()

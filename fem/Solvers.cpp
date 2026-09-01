@@ -4,64 +4,117 @@
 #include "util.h"
 #include <Eigen/Dense>
 #include <deque>
+#include <limits>
 #include <mfem.hpp>
-#include <slepc.h>
 #include <tuple>
 
 namespace plugin
 {
-
-void IterAuxilliary::RegisterToIntegrators( const mfem::Operator* oper ) const
+namespace
 {
-    if ( auto nonlinearform = dynamic_cast<mfem::NonlinearForm*>( const_cast<mfem::Operator*>( oper ) ) )
+template <typename IntegratorWithAux, typename Integrator>
+void RegisterIntegrators( const mfem::Array<Integrator*>& integrators, const IterAuxilliary* iter_aux )
+{
+    for ( int i = 0; i < integrators.Size(); i++ )
     {
-        auto bfnfi = nonlinearform->GetBdrFaceIntegrators();
-        for ( int i = 0; i < bfnfi.Size(); i++ )
+        if ( auto with_aux = dynamic_cast<IntegratorWithAux*>( integrators[i] ) )
         {
-            if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( bfnfi[i] ) )
-            {
-                with_lambda->SetIterAux( this );
-            }
+            with_aux->SetIterAux( iter_aux );
         }
+    }
+}
 
-        auto& dnfi = *nonlinearform->GetDNFI();
-        for ( int i = 0; i < dnfi.Size(); i++ )
-        {
-            if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( dnfi[i] ) )
-            {
-                with_lambda->SetIterAux( this );
-            }
-        }
+// MFEM exposes the BlockNonlinearForm integrator lists only to derived classes.
+class BlockNonlinearFormAccess : public mfem::BlockNonlinearForm
+{
+public:
+    static auto DomainIntegrators()
+    {
+        return &BlockNonlinearFormAccess::dnfi;
+    }
 
-        auto& fnfi = nonlinearform->GetInteriorFaceIntegrators();
-        for ( int i = 0; i < fnfi.Size(); i++ )
+    static auto BoundaryIntegrators()
+    {
+        return &BlockNonlinearFormAccess::bnfi;
+    }
+
+    static auto InteriorFaceIntegrators()
+    {
+        return &BlockNonlinearFormAccess::fnfi;
+    }
+
+    static auto BoundaryFaceIntegrators()
+    {
+        return &BlockNonlinearFormAccess::bfnfi;
+    }
+};
+
+#ifdef MFEM_USE_SUITESPARSE
+class UMFPackSolverAccess : public mfem::UMFPackSolver
+{
+public:
+    static auto NumericFactor()
+    {
+        return &UMFPackSolverAccess::Numeric;
+    }
+
+    static auto UsesLongIndices()
+    {
+        return &UMFPackSolverAccess::use_long_ints;
+    }
+};
+#endif
+
+double JacobianDeterminant( const mfem::Operator& jacobian, const mfem::Solver& solver )
+{
+    if ( const auto dense = dynamic_cast<const mfem::DenseMatrix*>( &jacobian ) )
+    {
+        return dense->Det();
+    }
+
+#ifdef MFEM_USE_SUITESPARSE
+    if ( const auto umfpack = dynamic_cast<const mfem::UMFPackSolver*>( &solver ) )
+    {
+        void* numeric = umfpack->*UMFPackSolverAccess::NumericFactor();
+        if ( numeric )
         {
-            if ( auto with_lambda = dynamic_cast<NonlinearFormIntegratorLambda*>( fnfi[i] ) )
+            double mantissa, exponent;
+            const int status = umfpack->*UMFPackSolverAccess::UsesLongIndices()
+                                   ? umfpack_dl_get_determinant( &mantissa, &exponent, numeric, nullptr )
+                                   : umfpack_di_get_determinant( &mantissa, &exponent, numeric, nullptr );
+            if ( status >= UMFPACK_OK )
             {
-                with_lambda->SetIterAux( this );
+                // The arc-length predictor needs only the determinant sign.
+                return mantissa;
             }
         }
     }
+#endif
 
-    if ( auto nonlinearform = dynamic_cast<mfem::BlockNonlinearForm*>( const_cast<mfem::Operator*>( oper ) ) )
+    return std::numeric_limits<double>::quiet_NaN();
+}
+} // namespace
+
+void IterAuxilliary::RegisterToIntegrators( const mfem::Operator* oper ) const
+{
+    if ( auto nonlinearform = dynamic_cast<const mfem::NonlinearForm*>( oper ) )
     {
-        auto bfnfi = nonlinearform->GetBdrFaceIntegrators();
-        for ( int i = 0; i < bfnfi.Size(); i++ )
-        {
-            if ( auto with_lambda = dynamic_cast<BlockNonlinearFormIntegratorLambda*>( bfnfi[i] ) )
-            {
-                with_lambda->SetIterAux( this );
-            }
-        }
+        RegisterIntegrators<NonlinearFormIntegratorLambda>( *nonlinearform->GetDNFI(), this );
+        RegisterIntegrators<NonlinearFormIntegratorLambda>( *nonlinearform->GetBNFI(), this );
+        RegisterIntegrators<NonlinearFormIntegratorLambda>( nonlinearform->GetInteriorFaceIntegrators(), this );
+        RegisterIntegrators<NonlinearFormIntegratorLambda>( nonlinearform->GetBdrFaceIntegrators(), this );
+    }
 
-        auto& dnfi = *nonlinearform->GetDNFI();
-        for ( int i = 0; i < dnfi.Size(); i++ )
-        {
-            if ( auto with_lambda = dynamic_cast<BlockNonlinearFormIntegratorLambda*>( dnfi[i] ) )
-            {
-                with_lambda->SetIterAux( this );
-            }
-        }
+    if ( auto nonlinearform = dynamic_cast<const mfem::BlockNonlinearForm*>( oper ) )
+    {
+        RegisterIntegrators<BlockNonlinearFormIntegratorLambda>(
+            nonlinearform->*BlockNonlinearFormAccess::DomainIntegrators(), this );
+        RegisterIntegrators<BlockNonlinearFormIntegratorLambda>(
+            nonlinearform->*BlockNonlinearFormAccess::BoundaryIntegrators(), this );
+        RegisterIntegrators<BlockNonlinearFormIntegratorLambda>(
+            nonlinearform->*BlockNonlinearFormAccess::InteriorFaceIntegrators(), this );
+        RegisterIntegrators<BlockNonlinearFormIntegratorLambda>(
+            nonlinearform->*BlockNonlinearFormAccess::BoundaryFaceIntegrators(), this );
     }
 }
 
@@ -578,7 +631,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             else
                 prec->Mult( r, delta_u_bar );
 
-            if ( !updateStep( it, step, prec->Det() ) )
+            if ( !updateStep( it, step, JacobianDeterminant( *grad, *prec ) ) )
             {
                 converged = false;
                 break;
@@ -733,23 +786,18 @@ bool Crisfield::updateStep( const int it, const int step, const double det ) con
                    util::Color::RESET );
     if ( it == 0 )
     {
-        // // predictor Ritto-Corrêa and Dinar Camotim
-        // if ( step == 0 )
-        // {
-        //     delta_lambda = delta_lambda1;
-        // }
-        // else
-        // {
-        //     if ( InnerProduct( delta_u_t, 1, u_direction_pred, lambda_direction_pred ) > 0 )
-        //     {
-        //         delta_lambda = delta_lambda1;
-        //     }
-        //     else
-        //     {
-        //         delta_lambda = delta_lambda2;
-        //     }
-        // }
-        delta_lambda = det > 0. ? delta_lambda1 : delta_lambda2;
+        if ( mfem::IsFinite( det ) )
+        {
+            delta_lambda = det > 0. ? delta_lambda1 : delta_lambda2;
+        }
+        else if ( step == 0 || InnerProduct( delta_u_t, 1, u_direction_pred, lambda_direction_pred ) > 0 )
+        {
+            delta_lambda = delta_lambda1;
+        }
+        else
+        {
+            delta_lambda = delta_lambda2;
+        }
     }
     else
     {

@@ -1,32 +1,30 @@
-project(czm)
-add_executable(${PROJECT_NAME} main.cpp)
-target_include_directories(${PROJECT_NAME} PUBLIC ${INCLUDE_DIRS})
-target_link_libraries(${PROJECT_NAME} PRIVATE ${LIBS})
+if(TARGET OpenMP::OpenMP_CXX)
+    mfem_mechanics_add_executable(
+        czm
+        main.cpp
+        mfemMechanics::femplugin
+        OpenMP::OpenMP_CXX
+    )
+    mfem_mechanics_add_executable(
+        czm2
+        main2.cpp
+        mfemMechanics::femplugin
+        OpenMP::OpenMP_CXX
+    )
+else()
+    message(STATUS "Skipping czm and czm2: OpenMP CXX support was not found")
+endif()
 
-add_executable(${PROJECT_NAME}2 main2.cpp)
-target_include_directories(${PROJECT_NAME}2 PUBLIC ${INCLUDE_DIRS})
-target_link_libraries(${PROJECT_NAME}2 PRIVATE ${LIBS})
-
-add_executable(${PROJECT_NAME}2p main2p.cpp)
-target_include_directories(${PROJECT_NAME}2p PUBLIC ${INCLUDE_DIRS})
-target_link_libraries(${PROJECT_NAME}2p PRIVATE ${LIBS})
-
-#add_executable(${PROJECT_NAME}3D main3D.cpp)
-#target_include_directories(${PROJECT_NAME}3D PUBLIC ${INCLUDE_DIRS})
-#target_link_libraries(${PROJECT_NAME}3D PRIVATE ${LIBS})
-
-#add_executable(bar bar.cpp)
-#target_include_directories(bar PUBLIC ${INCLUDE_DIRS})
-#target_link_libraries(bar PRIVATE ${LIBS})
-#
-#add_executable(bar_3D bar_3D.cpp)
-#target_include_directories(bar_3D PUBLIC ${INCLUDE_DIRS})
-#target_link_libraries(bar_3D PRIVATE ${LIBS})
-#
-#add_executable(test_3D_BUG test_3D_BUG.cpp)
-#target_include_directories(test_3D_BUG PUBLIC ${INCLUDE_DIRS})
-#target_link_libraries(test_3D_BUG PRIVATE ${LIBS})
-
-add_executable(dynamic_czm dynamic_czm.cpp)
-target_include_directories(dynamic_czm PUBLIC ${INCLUDE_DIRS})
-target_link_libraries(dynamic_czm PRIVATE ${LIBS})
+if(MFEM_USE_MPI AND MFEM_USE_PETSC)
+    mfem_mechanics_add_executable(
+        czm2p
+        main2p.cpp
+        mfemMechanics::femplugin
+        MPI::MPI_CXX
+    )
+else()
+    message(STATUS
+        "Skipping czm2p: requires MFEM_USE_MPI=ON and MFEM_USE_PETSC=ON "
+        "(found MPI=${MFEM_USE_MPI}, PETSc=${MFEM_USE_PETSC})"
+    )
+endif()

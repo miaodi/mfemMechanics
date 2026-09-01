@@ -2,6 +2,6 @@
 /debug
 /build-*
 /release
+/CMakeUserPresets.json
 /.vscode
 .DS_Store
-data/petscSetting
