@@ -60,6 +60,11 @@ public:
 
     void RegisterToIntegrators( const mfem::Operator* oper ) const;
 
+    void BeginStep( const mfem::Operator* oper ) const;
+    void CommitStep( const mfem::Operator* oper ) const;
+    void RollbackStep( const mfem::Operator* oper ) const;
+    void RevertStep( const mfem::Operator* oper ) const;
+
 protected:
     mutable int it = 0; // iter # of each step
 
@@ -162,6 +167,7 @@ protected:
     {
         double L{ 0. };
         double lambda{ 0. };
+        double phi{ 0. };
         mfem::Vector u;
     };
 

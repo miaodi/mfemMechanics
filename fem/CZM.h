@@ -4,11 +4,13 @@
 #include <mfem.hpp>
 
 #include "FEMPlugin.h"
+#include <array>
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/dual/eigen.hpp>
 #include <autodiff/forward/real.hpp>
 #include <autodiff/forward/real/eigen.hpp>
 #include <functional>
+#include <string>
 
 namespace plugin
 {
@@ -28,24 +30,77 @@ struct ExponentialCZMConst
     double phi_n{0};
     double phi_t{0};
 };
+
+struct CZMEvaluation
+{
+    Eigen::VectorXd traction;
+    Eigen::MatrixXd tangent;
+};
+
+struct CZMHistoryState
+{
+    double maximum_normal_opening{ 0. };
+    double maximum_tangential_opening{ 0. };
+    double normal_unloading_stiffness{ 0. };
+    double tangential_unloading_stiffness{ 0. };
+    bool has_normal_history{ false };
+    bool has_tangential_history{ false };
+
+    double normal_opening{ 0. };
+    double tangential_opening_1{ 0. };
+    double tangential_opening_2{ 0. };
+};
+
+class CZMHistory
+{
+public:
+    const CZMHistoryState& CommittedState() const
+    {
+        return mCommitted;
+    }
+
+    const CZMHistoryState& TrialState() const
+    {
+        return mTrial;
+    }
+
+    void BeginStep();
+    void CommitStep();
+    void RollbackStep();
+    void RevertStep();
+
+    CZMEvaluation EvaluateTrial( const Eigen::VectorXd& local_separation,
+                                 const CZMEvaluation& envelope,
+                                 const double normal_length,
+                                 const double tangential_length,
+                                 const double normal_damping,
+                                 const double tangential_damping,
+                                 const double delta_lambda );
+
+private:
+    CZMHistoryState mCommitted;
+    CZMHistoryState mTrial;
+    std::array<CZMHistoryState, 20> mCommittedHistory;
+    std::size_t mCommittedHistorySize{ 0 };
+};
+
+CZMEvaluation EvaluateExponentialCZMEnvelope( const ExponentialCZMConst& law, const Eigen::VectorXd& local_separation );
+
+CZMEvaluation EvaluateExponentialCZMEnvelopeAutodiff( const ExponentialCZMConst& law, const Eigen::VectorXd& local_separation );
+
+CZMEvaluation EvaluateIrreversibleExponentialCZM( const ExponentialCZMConst& law,
+                                                  const Eigen::VectorXd& local_separation,
+                                                  CZMHistory& history,
+                                                  const double normal_damping = 0.,
+                                                  const double tangential_damping = 0.,
+                                                  const double delta_lambda = 0. );
+
 class CZMIntegrator : public NonlinearFormIntegratorLambda
 {
-protected:
-    struct PointData
-    {
-        PointData( const double delta_n, const double delta_t1, const double delta_t2 )
-            : delta_n_prev( delta_n ), delta_t1_prev( delta_t1 ), delta_t2_prev( delta_t2 )
-        {
-        }
-        double delta_n_prev{0.};
-        double delta_t1_prev{0.};
-        double delta_t2_prev{0.};
-    };
-
 public:
-    CZMIntegrator( Memorize& memo ) : NonlinearFormIntegratorLambda(), mMemo{memo}
-    {
-    }
+    CZMIntegrator( Memorize& memo );
+    CZMIntegrator( const CZMIntegrator& ) = delete;
+    CZMIntegrator& operator=( const CZMIntegrator& ) = delete;
 
     virtual void AssembleFaceVector( const mfem::FiniteElement& el1,
                                      const mfem::FiniteElement& el2,
@@ -76,15 +131,49 @@ public:
     {
     }
 
-protected:
-    void Update( const int gauss, const double delta_n, const double delta_t1, const double delta_t2 = 0. ) const;
+    void SetDamping( const double normal, const double tangential );
+
+    virtual bool SupportsDamping() const
+    {
+        return true;
+    }
+
+    virtual void BeginStep() override;
+    virtual void CommitStep() override;
+    virtual void RollbackStep() override;
+    virtual void RevertStep() override;
 
 protected:
+    CZMHistory& GetHistory( const int gauss ) const;
+    CZMEvaluation EvaluateLocalLaw( const ExponentialCZMConst& law, const Eigen::VectorXd& local_separation, const int gauss ) const;
+
     Memorize& mMemo;
     mfem::Vector shape1, shape2;
 
     Eigen::MatrixXd mB;
     Eigen::VectorXd u;
+
+    double xi_n{ 0. };
+    double xi_t{ 0. };
+
+private:
+    template <typename Visitor>
+    void VisitHistory( Visitor&& visitor )
+    {
+        mMemo.VisitFacePointData(
+            [this, &visitor]( util::AnyMap& point_data )
+            {
+                auto history = point_data.get_val<CZMHistory>( mStateKey );
+                if ( history )
+                {
+                    visitor( history->get() );
+                }
+            } );
+    }
+
+    std::string mStateKey;
+    int mStepDepth{ 0 };
+    bool mStepRejected{ false };
 };
 
 class LinearCZMIntegrator : public CZMIntegrator
@@ -142,9 +231,6 @@ protected:
     mfem::Coefficient* mDeltaN{nullptr};
     mfem::Coefficient* mDeltaT{nullptr};
     ExponentialCZMConst mCZMLawConst;
-
-    double xi_n{0};
-    double xi_t{0};
 };
 
 class ADCZMIntegrator : public CZMIntegrator
@@ -159,6 +245,8 @@ public:
     virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::MatrixXd& H ) const;
 
 protected:
+    void EvaluatePotential( const Eigen::VectorXd& Delta, const int gauss, Eigen::VectorXd& traction, Eigen::MatrixXd& tangent ) const;
+
     std::function<autodiff::dual2nd( const autodiff::VectorXdual2nd&, const int )> potential;
 };
 
@@ -173,6 +261,10 @@ public:
 
     virtual void EvalCZMLaw( mfem::ElementTransformation& Tr, const mfem::IntegrationPoint& ip ) override;
 
+    virtual void Traction( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::VectorXd& T ) const override;
+
+    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::MatrixXd& H ) const override;
+
 protected:
     mfem::Coefficient* mSigmaMax{nullptr};
     mfem::Coefficient* mTauMax{nullptr};
@@ -180,9 +272,6 @@ protected:
     mfem::Coefficient* mDeltaT{nullptr};
 
     ExponentialCZMConst mCZMLawConst;
-
-    double xi_n{0};
-    double xi_t{0};
 };
 
 // class OrtizIrreversibleADCZMIntegrator : public ADCZMIntegrator
@@ -204,6 +293,18 @@ public:
                                    mfem::Coefficient& tauMax,
                                    mfem::Coefficient& deltaN,
                                    mfem::Coefficient& deltaT );
+
+    // The rotating law uses an eight-component generalized input in 2D. It
+    // intentionally remains reversible until a consistent generalized-history
+    // formulation is available.
+    virtual bool SupportsDamping() const override
+    {
+        return false;
+    }
+
+    virtual void Traction( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::VectorXd& T ) const override;
+
+    virtual void TractionStiffTangent( const Eigen::VectorXd& Delta, const int gauss, const int dim, Eigen::MatrixXd& H ) const override;
 
     virtual void matrixB( const int dof1,
                           const int dof2,

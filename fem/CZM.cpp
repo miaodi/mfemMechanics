@@ -1,9 +1,523 @@
 #include "CZM.h"
 #include "FEMPlugin.h"
 #include "Solvers.h"
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <limits>
 
 namespace plugin
 {
+namespace
+{
+std::string NextCZMStateKey()
+{
+    static std::atomic<unsigned long long> next_id{ 0 };
+    return "CZMHistory:" + std::to_string( next_id.fetch_add( 1, std::memory_order_relaxed ) );
+}
+
+double OpeningTolerance( const double scale, const double characteristic_length )
+{
+    return 64. * std::numeric_limits<double>::epsilon() * std::max( std::abs( scale ), std::abs( characteristic_length ) );
+}
+
+double DampingStiffness( const double damping, const double length, const double delta_lambda )
+{
+    if ( damping <= 0. || !std::isfinite( damping ) || !std::isfinite( length ) || !std::isfinite( delta_lambda ) ||
+         std::abs( length ) <= std::numeric_limits<double>::epsilon() || delta_lambda == 0. )
+    {
+        return 0.;
+    }
+
+    const double lambda_scale = std::max( std::abs( delta_lambda ), std::sqrt( std::numeric_limits<double>::epsilon() ) );
+    const double stiffness = 2. * damping / std::abs( length ) / lambda_scale;
+    return std::isfinite( stiffness ) ? stiffness : 0.;
+}
+
+bool ValidExponentialLaw( const ExponentialCZMConst& law )
+{
+    const double length_tolerance = std::numeric_limits<double>::epsilon();
+    return std::isfinite( law.delta_n ) && std::isfinite( law.delta_t ) && std::isfinite( law.phi_n ) &&
+           std::isfinite( law.phi_t ) && law.delta_n > length_tolerance && law.delta_t > length_tolerance &&
+           law.phi_n >= 0. && law.phi_t >= 0.;
+}
+
+CZMEvaluation ZeroEvaluation( const int dim )
+{
+    CZMEvaluation result;
+    result.traction = Eigen::VectorXd::Zero( dim );
+    result.tangent = Eigen::MatrixXd::Zero( dim, dim );
+    return result;
+}
+
+double NonnegativeStiffness( const double stiffness )
+{
+    return std::isfinite( stiffness ) && stiffness > 0. ? stiffness : 0.;
+}
+
+enum class ComponentBranch
+{
+    ENVELOPE,
+    SECANT,
+    ZERO
+};
+
+struct ComponentDecision
+{
+    ComponentBranch branch;
+    double stiffness;
+};
+
+ComponentDecision SelectComponentBranch( const bool has_history, const double committed_stiffness, const double envelope_stiffness )
+{
+    // Each component uses the lower of its accepted secant and the current
+    // coupled-envelope secant. Ties stay on the accepted secant, so neither a
+    // changing mode mix nor reloading can recover stiffness.
+    const double current_envelope_stiffness = NonnegativeStiffness( envelope_stiffness );
+    if ( current_envelope_stiffness == 0. )
+    {
+        return { ComponentBranch::ZERO, 0. };
+    }
+    if ( !has_history )
+    {
+        return { ComponentBranch::ENVELOPE, current_envelope_stiffness };
+    }
+
+    const double accepted_stiffness = NonnegativeStiffness( committed_stiffness );
+    if ( accepted_stiffness <= current_envelope_stiffness )
+    {
+        return { ComponentBranch::SECANT, accepted_stiffness };
+    }
+    return { ComponentBranch::ENVELOPE, current_envelope_stiffness };
+}
+
+autodiff::dual2nd ExponentialCZMPotential( const ExponentialCZMConst& law, const autodiff::VectorXdual2nd& local_separation )
+{
+    if ( !ValidExponentialLaw( law ) )
+    {
+        return 0.;
+    }
+
+    const int normal = local_separation.size() - 1;
+    autodiff::dual2nd positive_normal_opening = local_separation( normal );
+    if ( positive_normal_opening < 0. )
+    {
+        positive_normal_opening = 0.;
+    }
+
+    autodiff::dual2nd tangential_opening_squared = 0.;
+    for ( int i = 0; i < normal; i++ )
+    {
+        tangential_opening_squared += local_separation( i ) * local_separation( i );
+    }
+
+    const autodiff::dual2nd normalized_normal = positive_normal_opening / law.delta_n;
+    const autodiff::dual2nd mixed_energy =
+        law.phi_n - law.phi_t + law.phi_t * autodiff::detail::exp( -tangential_opening_squared / law.delta_t / law.delta_t );
+    return law.phi_n - autodiff::detail::exp( -normalized_normal ) * ( 1. + normalized_normal ) * mixed_energy;
+}
+} // namespace
+
+void CZMHistory::BeginStep()
+{
+    mTrial = mCommitted;
+}
+
+void CZMHistory::CommitStep()
+{
+    if ( mCommittedHistorySize == mCommittedHistory.size() )
+    {
+        std::move( mCommittedHistory.begin() + 1, mCommittedHistory.end(), mCommittedHistory.begin() );
+        mCommittedHistorySize--;
+    }
+    mCommittedHistory[mCommittedHistorySize++] = mCommitted;
+    mCommitted = mTrial;
+}
+
+void CZMHistory::RollbackStep()
+{
+    mTrial = mCommitted;
+}
+
+void CZMHistory::RevertStep()
+{
+    if ( mCommittedHistorySize == 0 )
+    {
+        mTrial = mCommitted;
+        return;
+    }
+
+    mCommitted = mCommittedHistory[--mCommittedHistorySize];
+    mTrial = mCommitted;
+}
+
+CZMEvaluation CZMHistory::EvaluateTrial( const Eigen::VectorXd& local_separation,
+                                         const CZMEvaluation& envelope,
+                                         const double normal_length,
+                                         const double tangential_length,
+                                         const double normal_damping,
+                                         const double tangential_damping,
+                                         const double delta_lambda )
+{
+    const int dim = local_separation.size();
+    MFEM_VERIFY( dim == 2 || dim == 3, "CZM history supports only two- and three-dimensional separations." );
+    MFEM_VERIFY( envelope.traction.size() == dim, "CZM envelope traction has an inconsistent size." );
+
+    mTrial = mCommitted;
+    const bool has_tangent = envelope.tangent.rows() == dim && envelope.tangent.cols() == dim;
+    if ( !local_separation.allFinite() || !envelope.traction.allFinite() || ( has_tangent && !envelope.tangent.allFinite() ) )
+    {
+        return ZeroEvaluation( dim );
+    }
+
+    const int normal = dim - 1;
+    const double normal_opening = std::max( local_separation( normal ), 0. );
+    const double tangential_opening = local_separation.head( normal ).stableNorm();
+    if ( !std::isfinite( tangential_opening ) )
+    {
+        return ZeroEvaluation( dim );
+    }
+
+    CZMEvaluation result = envelope;
+    mTrial.normal_unloading_stiffness = NonnegativeStiffness( mCommitted.normal_unloading_stiffness );
+    mTrial.tangential_unloading_stiffness = NonnegativeStiffness( mCommitted.tangential_unloading_stiffness );
+
+    const double normal_tolerance = OpeningTolerance( mCommitted.maximum_normal_opening, normal_length );
+    const double tangential_tolerance = OpeningTolerance( mCommitted.maximum_tangential_opening, tangential_length );
+
+    mTrial.normal_opening = normal_opening;
+    mTrial.tangential_opening_1 = local_separation( 0 );
+    mTrial.tangential_opening_2 = dim == 3 ? local_separation( 1 ) : 0.;
+
+    const bool new_normal_maximum = normal_opening > mCommitted.maximum_normal_opening + normal_tolerance;
+    const bool new_tangential_maximum = tangential_opening > mCommitted.maximum_tangential_opening + tangential_tolerance;
+    const bool activate_normal_history = mCommitted.has_normal_history || new_normal_maximum ||
+                                         ( new_tangential_maximum && local_separation( normal ) >= 0. );
+    const bool activate_tangential_history = mCommitted.has_tangential_history || new_tangential_maximum || new_normal_maximum;
+
+    if ( new_normal_maximum )
+    {
+        mTrial.maximum_normal_opening = normal_opening;
+    }
+
+    if ( local_separation( normal ) < 0. )
+    {
+        // Compression is outside the cohesive opening history. Contact, when
+        // needed, is supplied by a separate penalty/contact formulation.
+        result.traction( normal ) = 0.;
+        if ( has_tangent )
+        {
+            result.tangent.row( normal ).setZero();
+        }
+    }
+    else if ( activate_normal_history )
+    {
+        const double envelope_stiffness =
+            normal_opening > normal_tolerance
+                ? envelope.traction( normal ) / normal_opening
+                : ( has_tangent ? envelope.tangent( normal, normal ) : mCommitted.normal_unloading_stiffness );
+        const ComponentDecision decision =
+            SelectComponentBranch( mCommitted.has_normal_history, mCommitted.normal_unloading_stiffness, envelope_stiffness );
+        mTrial.normal_unloading_stiffness = decision.stiffness;
+        mTrial.has_normal_history = true;
+
+        if ( decision.branch == ComponentBranch::SECANT )
+        {
+            result.traction( normal ) = decision.stiffness * local_separation( normal );
+            if ( has_tangent )
+            {
+                result.tangent.row( normal ).setZero();
+                result.tangent( normal, normal ) = decision.stiffness;
+            }
+        }
+        else if ( decision.branch == ComponentBranch::ZERO )
+        {
+            result.traction( normal ) = 0.;
+            if ( has_tangent )
+            {
+                result.tangent.row( normal ).setZero();
+            }
+        }
+    }
+
+    if ( new_tangential_maximum )
+    {
+        mTrial.maximum_tangential_opening = tangential_opening;
+    }
+
+    if ( activate_tangential_history )
+    {
+        double envelope_stiffness = mCommitted.tangential_unloading_stiffness;
+        if ( tangential_opening > tangential_tolerance )
+        {
+            const Eigen::VectorXd tangential_direction = local_separation.head( normal ) / tangential_opening;
+            envelope_stiffness = tangential_direction.dot( envelope.traction.head( normal ) ) / tangential_opening;
+        }
+        else if ( has_tangent )
+        {
+            envelope_stiffness = envelope.tangent( 0, 0 );
+        }
+
+        const ComponentDecision decision = SelectComponentBranch(
+            mCommitted.has_tangential_history, mCommitted.tangential_unloading_stiffness, envelope_stiffness );
+        mTrial.tangential_unloading_stiffness = decision.stiffness;
+        mTrial.has_tangential_history = true;
+
+        if ( decision.branch == ComponentBranch::SECANT )
+        {
+            result.traction.head( normal ) = decision.stiffness * local_separation.head( normal );
+            if ( has_tangent )
+            {
+                result.tangent.topRows( normal ).setZero();
+                result.tangent.topLeftCorner( normal, normal ).diagonal().setConstant( decision.stiffness );
+            }
+        }
+        else if ( decision.branch == ComponentBranch::ZERO )
+        {
+            result.traction.head( normal ).setZero();
+            if ( has_tangent )
+            {
+                result.tangent.topRows( normal ).setZero();
+            }
+        }
+    }
+
+    // Normal and tangential rows select their branches independently. If only
+    // one component is envelope-governed, the exact branch Jacobian is
+    // generally nonsymmetric; mirroring a cross entry would be inconsistent
+    // with the returned traction.
+
+    const double normal_opening_increment = normal_opening - mCommitted.normal_opening;
+    const double normal_damping_stiffness =
+        normal_opening_increment > 0. ? DampingStiffness( normal_damping, normal_length, delta_lambda ) : 0.;
+    const double tangential_damping_stiffness = DampingStiffness( tangential_damping, tangential_length, delta_lambda );
+
+    result.traction( normal ) += normal_damping_stiffness * normal_opening_increment;
+    result.traction( 0 ) += tangential_damping_stiffness * ( local_separation( 0 ) - mCommitted.tangential_opening_1 );
+    if ( dim == 3 )
+    {
+        result.traction( 1 ) += tangential_damping_stiffness * ( local_separation( 1 ) - mCommitted.tangential_opening_2 );
+    }
+
+    if ( has_tangent )
+    {
+        result.tangent( normal, normal ) += normal_damping_stiffness;
+        for ( int i = 0; i < normal; i++ )
+        {
+            result.tangent( i, i ) += tangential_damping_stiffness;
+        }
+    }
+
+    if ( !result.traction.allFinite() || ( has_tangent && !result.tangent.allFinite() ) )
+    {
+        mTrial = mCommitted;
+        return ZeroEvaluation( dim );
+    }
+    return result;
+}
+
+CZMEvaluation EvaluateExponentialCZMEnvelope( const ExponentialCZMConst& law, const Eigen::VectorXd& local_separation )
+{
+    const int dim = local_separation.size();
+    MFEM_VERIFY( dim == 2 || dim == 3, "The exponential CZM law supports only two and three dimensions." );
+
+    CZMEvaluation result = ZeroEvaluation( dim );
+
+    if ( !ValidExponentialLaw( law ) || !local_separation.allFinite() )
+    {
+        return result;
+    }
+
+    const int normal = dim - 1;
+    const double delta_n = law.delta_n;
+    const double delta_t_squared = law.delta_t * law.delta_t;
+    const bool positive_normal_branch = local_separation( normal ) >= 0.;
+    const double normalized_normal = positive_normal_branch ? local_separation( normal ) / delta_n : 0.;
+    const double normalized_tangential_squared = local_separation.head( normal ).squaredNorm() / delta_t_squared;
+    if ( !std::isfinite( normalized_normal ) )
+    {
+        return result;
+    }
+
+    const double exponential_normal = std::exp( -normalized_normal );
+    if ( exponential_normal == 0. )
+    {
+        return result;
+    }
+    const double exponential_tangential =
+        std::isfinite( normalized_tangential_squared ) ? std::exp( -normalized_tangential_squared ) : 0.;
+    const double mixed_energy = law.phi_n - law.phi_t + law.phi_t * exponential_tangential;
+    const double tangential_factor =
+        2. * law.phi_t * exponential_normal * exponential_tangential * ( 1. + normalized_normal ) / delta_t_squared;
+
+    if ( tangential_factor != 0. )
+    {
+        result.traction.head( normal ) = tangential_factor * local_separation.head( normal );
+        result.tangent.topLeftCorner( normal, normal ) =
+            tangential_factor * Eigen::MatrixXd::Identity( normal, normal ) -
+            2. * tangential_factor / delta_t_squared *
+                ( local_separation.head( normal ) * local_separation.head( normal ).transpose() );
+    }
+
+    if ( positive_normal_branch )
+    {
+        result.traction( normal ) = normalized_normal * exponential_normal * mixed_energy / delta_n;
+        result.tangent( normal, normal ) = exponential_normal * ( 1. - normalized_normal ) * mixed_energy / ( delta_n * delta_n );
+
+        for ( int i = 0; i < normal; i++ )
+        {
+            const double coupling = -2. * law.phi_t * normalized_normal * exponential_normal * exponential_tangential *
+                                    local_separation( i ) / ( delta_n * delta_t_squared );
+            result.tangent( i, normal ) = coupling;
+            result.tangent( normal, i ) = coupling;
+        }
+    }
+
+    return result.traction.allFinite() && result.tangent.allFinite() ? result : ZeroEvaluation( dim );
+}
+
+CZMEvaluation EvaluateExponentialCZMEnvelopeAutodiff( const ExponentialCZMConst& law, const Eigen::VectorXd& local_separation )
+{
+    const int dim = local_separation.size();
+    MFEM_VERIFY( dim == 2 || dim == 3, "The exponential CZM law supports only two and three dimensions." );
+
+    CZMEvaluation result = ZeroEvaluation( dim );
+    if ( !ValidExponentialLaw( law ) || !local_separation.allFinite() )
+    {
+        return result;
+    }
+
+    autodiff::VectorXdual2nd separation( local_separation );
+    const auto potential = [&law]( const autodiff::VectorXdual2nd& value )
+    { return ExponentialCZMPotential( law, value ); };
+    autodiff::dual2nd energy;
+    autodiff::VectorXdual gradient;
+    result.tangent = autodiff::hessian( potential, autodiff::wrt( separation ), autodiff::at( separation ), energy, gradient );
+    for ( int i = 0; i < dim; i++ )
+    {
+        result.traction( i ) = autodiff::detail::val( gradient( i ) );
+    }
+    return result.traction.allFinite() && result.tangent.allFinite() ? result : ZeroEvaluation( dim );
+}
+
+CZMEvaluation EvaluateIrreversibleExponentialCZM( const ExponentialCZMConst& law,
+                                                  const Eigen::VectorXd& local_separation,
+                                                  CZMHistory& history,
+                                                  const double normal_damping,
+                                                  const double tangential_damping,
+                                                  const double delta_lambda )
+{
+    const CZMEvaluation envelope = EvaluateExponentialCZMEnvelope( law, local_separation );
+    if ( !ValidExponentialLaw( law ) || !local_separation.allFinite() )
+    {
+        history.RollbackStep();
+        return envelope;
+    }
+    return history.EvaluateTrial( local_separation, envelope, law.delta_n, law.delta_t, normal_damping,
+                                  tangential_damping, delta_lambda );
+}
+
+CZMIntegrator::CZMIntegrator( Memorize& memo )
+    : NonlinearFormIntegratorLambda(), mMemo{ memo }, mStateKey{ NextCZMStateKey() }
+{
+}
+
+void CZMIntegrator::SetDamping( const double normal, const double tangential )
+{
+    MFEM_VERIFY( std::isfinite( normal ) && std::isfinite( tangential ) && normal >= 0. && tangential >= 0.,
+                 "CZM damping coefficients must be finite and nonnegative." );
+    MFEM_VERIFY( SupportsDamping() || ( normal == 0. && tangential == 0. ),
+                 "This CZM integrator does not support damping for its generalized input." );
+    xi_n = normal;
+    xi_t = tangential;
+}
+
+CZMHistory& CZMIntegrator::GetHistory( const int gauss ) const
+{
+    auto& point_data = mMemo.GetFacePointData( gauss );
+    auto history = point_data.get_val<CZMHistory>( mStateKey );
+    if ( !history )
+    {
+        point_data.set_val<CZMHistory>( mStateKey, CZMHistory{} );
+        history = point_data.get_val<CZMHistory>( mStateKey );
+    }
+    MFEM_VERIFY( history.has_value(), "Unable to initialize CZM quadrature-point history." );
+    return history->get();
+}
+
+CZMEvaluation CZMIntegrator::EvaluateLocalLaw( const ExponentialCZMConst& law, const Eigen::VectorXd& local_separation, const int gauss ) const
+{
+    return EvaluateIrreversibleExponentialCZM( law, local_separation, GetHistory( gauss ), xi_n, xi_t, mIterAux->GetDeltaLambda() );
+}
+
+void CZMIntegrator::BeginStep()
+{
+    NonlinearFormIntegratorLambda::BeginStep();
+    if ( mStepDepth > 0 )
+    {
+        mStepDepth++;
+        return;
+    }
+
+    try
+    {
+        VisitHistory( []( CZMHistory& history ) { history.BeginStep(); } );
+        mStepDepth = 1;
+        mStepRejected = false;
+    }
+    catch ( ... )
+    {
+        NonlinearFormIntegratorLambda::RollbackStep();
+        throw;
+    }
+}
+
+void CZMIntegrator::CommitStep()
+{
+    MFEM_VERIFY( mStepDepth > 0, "CZM commit requires a matching BeginStep." );
+    if ( mStepDepth > 1 )
+    {
+        mStepDepth--;
+        NonlinearFormIntegratorLambda::CommitStep();
+        return;
+    }
+
+    if ( mStepRejected )
+    {
+        VisitHistory( []( CZMHistory& history ) { history.RollbackStep(); } );
+    }
+    else
+    {
+        VisitHistory( []( CZMHistory& history ) { history.CommitStep(); } );
+    }
+    mStepDepth = 0;
+    mStepRejected = false;
+    NonlinearFormIntegratorLambda::CommitStep();
+}
+
+void CZMIntegrator::RollbackStep()
+{
+    MFEM_VERIFY( mStepDepth > 0, "CZM rollback requires a matching BeginStep." );
+    mStepRejected = true;
+    if ( mStepDepth > 1 )
+    {
+        mStepDepth--;
+        NonlinearFormIntegratorLambda::RollbackStep();
+        return;
+    }
+
+    VisitHistory( []( CZMHistory& history ) { history.RollbackStep(); } );
+    mStepDepth = 0;
+    mStepRejected = false;
+    NonlinearFormIntegratorLambda::RollbackStep();
+}
+
+void CZMIntegrator::RevertStep()
+{
+    MFEM_VERIFY( mStepDepth == 0, "A committed CZM step cannot be reverted during an active step." );
+    VisitHistory( []( CZMHistory& history ) { history.RevertStep(); } );
+}
+
 void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
                                         const mfem::FiniteElement& el2,
                                         mfem::FaceElementTransformations& Tr,
@@ -129,21 +643,6 @@ void CZMIntegrator::matrixB( const int dof1,
     }
 }
 
-void CZMIntegrator::Update( const int gauss, const double delta_n, const double delta_t1, const double delta_t2 ) const
-{
-    auto& pd = mMemo.GetFacePointData( gauss );
-    // historical strain energy+ for KKT condition
-    if ( !pd.get_val<PointData>( "delta" ).has_value() )
-        pd.set_val<PointData>( "delta", std::move( PointData( delta_n, delta_t1, delta_t2 ) ) );
-    else
-    {
-        auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
-        delta_data.delta_n_prev = delta_n;
-        delta_data.delta_t1_prev = delta_t1;
-        delta_data.delta_t2_prev = delta_t2;
-    }
-}
-
 void LinearCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::VectorXd& T ) const
 {
     if ( dim == 2 )
@@ -232,156 +731,20 @@ void ExponentialCZMIntegrator::EvalCZMLaw( mfem::ElementTransformation& Tr, cons
 
 void ExponentialCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::VectorXd& T ) const
 {
-    double q = mCZMLawConst.phi_t / mCZMLawConst.phi_n;
-    double r = 0.;
     Eigen::MatrixXd DeltaToTN;
     DeltaToTNMat( mMemo.GetFaceJacobian( i ), DeltaToTN );
-    Eigen::VectorXd DeltaRot = DeltaToTN.transpose() * Delta;
-
-    const auto& pd = this->mMemo.GetFacePointData( i );
-
-    if ( mIterAux->IterNumber() == 0 )
-    {
-        Update( i, DeltaRot( 0 ), DeltaRot( 1 ), dim == 3 ? DeltaRot( 2 ) : 0. );
-    }
-    const auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
-    if ( dim == 2 )
-    {
-        T.resize( 2 );
-        // Tt
-        T( 0 ) = 2 * DeltaRot( 0 ) *
-                     exp( -DeltaRot( 1 ) / mCZMLawConst.delta_n -
-                          DeltaRot( 0 ) * DeltaRot( 0 ) / mCZMLawConst.delta_t / mCZMLawConst.delta_t ) *
-                     mCZMLawConst.phi_n * ( q + DeltaRot( 1 ) * ( r - q ) / mCZMLawConst.delta_n / ( r - 1 ) ) /
-                     mCZMLawConst.delta_t / mCZMLawConst.delta_t +
-                 2 * xi_t * ( DeltaRot( 0 ) - delta_data.delta_t1_prev ) / mCZMLawConst.delta_t / mIterAux->GetDeltaLambda();
-        // Tn
-        T( 1 ) = mCZMLawConst.phi_n / mCZMLawConst.delta_n * exp( -DeltaRot( 1 ) / mCZMLawConst.delta_n ) *
-                     ( DeltaRot( 1 ) / mCZMLawConst.delta_n *
-                           exp( -DeltaRot( 0 ) * DeltaRot( 0 ) / mCZMLawConst.delta_t / mCZMLawConst.delta_t ) +
-                       ( 1 - q ) / ( r - 1 ) *
-                           ( 1 - exp( -DeltaRot( 0 ) * DeltaRot( 0 ) / mCZMLawConst.delta_t / mCZMLawConst.delta_t ) ) *
-                           ( r - DeltaRot( 1 ) / mCZMLawConst.delta_n ) ) +
-                 2 * xi_n * ( DeltaRot( 1 ) - delta_data.delta_n_prev ) / mCZMLawConst.delta_n / mIterAux->GetDeltaLambda();
-    }
-    else if ( dim == 3 )
-    {
-        T.resize( 3 );
-        // Tt1
-        T( 0 ) = ( 2 * DeltaRot( 0 ) *
-                   exp( -( DeltaRot( 2 ) / mCZMLawConst.delta_n ) -
-                        ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) *
-                   mCZMLawConst.phi_n * ( q + ( DeltaRot( 2 ) * ( r - q ) ) / ( mCZMLawConst.delta_n * ( r - 1 ) ) ) ) /
-                 pow( mCZMLawConst.delta_t, 2 );
-        // Tt2
-        T( 1 ) = ( 2 * DeltaRot( 1 ) *
-                   exp( -( DeltaRot( 2 ) / mCZMLawConst.delta_n ) -
-                        ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) *
-                   mCZMLawConst.phi_n * ( q + ( DeltaRot( 2 ) * ( r - q ) ) / ( mCZMLawConst.delta_n * ( r - 1 ) ) ) ) /
-                 pow( mCZMLawConst.delta_t, 2 );
-        // Tn
-        T( 2 ) =
-            ( exp( -( DeltaRot( 2 ) / mCZMLawConst.delta_n ) -
-                   ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) *
-              mCZMLawConst.phi_n *
-              ( -( mCZMLawConst.delta_n *
-                   ( -1 + exp( ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) ) *
-                   ( -1 + q ) * r ) +
-                DeltaRot( 2 ) *
-                    ( exp( ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) * ( -1 + q ) -
-                      q + r ) ) ) /
-            ( pow( mCZMLawConst.delta_n, 2 ) * ( -1 + r ) );
-    }
-    T = DeltaToTN * T;
+    const Eigen::VectorXd local_separation = DeltaToTN.transpose() * Delta;
+    const CZMEvaluation evaluation = EvaluateLocalLaw( mCZMLawConst, local_separation, i );
+    T = DeltaToTN * evaluation.traction;
 }
 
 void ExponentialCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::MatrixXd& H ) const
 {
-    double q = mCZMLawConst.phi_t / mCZMLawConst.phi_n;
-    double r = 0.;
     Eigen::MatrixXd DeltaToTN;
     DeltaToTNMat( mMemo.GetFaceJacobian( i ), DeltaToTN );
-    Eigen::VectorXd DeltaRot = DeltaToTN.transpose() * Delta;
-
-    if ( mIterAux->IterNumber() == 0 )
-    {
-        Update( i, DeltaRot( 0 ), DeltaRot( 1 ), dim == 3 ? DeltaRot( 2 ) : 0. );
-    }
-
-    if ( dim == 2 )
-    {
-        H.resize( 2, 2 );
-        // Ttt
-        H( 0, 0 ) = 2 * ( std::pow( mCZMLawConst.delta_t, 2 ) - 2 * std::pow( DeltaRot( 0 ), 2 ) ) *
-                        exp( -DeltaRot( 1 ) / mCZMLawConst.delta_n -
-                             std::pow( DeltaRot( 0 ), 2 ) / std::pow( mCZMLawConst.delta_t, 2 ) ) *
-                        mCZMLawConst.phi_n * ( mCZMLawConst.delta_n * q * ( r - 1 ) + DeltaRot( 1 ) * ( r - q ) ) /
-                        mCZMLawConst.delta_n / std::pow( mCZMLawConst.delta_t, 4 ) / ( r - 1 ) +
-                    2 * xi_t / mCZMLawConst.delta_t / mIterAux->GetDeltaLambda();
-        // Tnn
-        H( 1, 1 ) =
-            exp( -DeltaRot( 1 ) / mCZMLawConst.delta_n - std::pow( DeltaRot( 0 ), 2 ) / std::pow( mCZMLawConst.delta_t, 2 ) ) *
-                mCZMLawConst.phi_n *
-                ( mCZMLawConst.delta_n * ( 2 * r - q - q * r +
-                                           exp( DeltaRot( 0 ) * DeltaRot( 0 ) / mCZMLawConst.delta_t / mCZMLawConst.delta_t ) *
-                                               ( q - 1 ) * ( r + 1 ) ) -
-                  DeltaRot( 1 ) *
-                      ( exp( DeltaRot( 0 ) * DeltaRot( 0 ) / mCZMLawConst.delta_t / mCZMLawConst.delta_t ) * ( q - 1 ) - q + r ) ) /
-                std::pow( mCZMLawConst.delta_n, 3 ) / ( r - 1 ) +
-            2 * xi_n / mCZMLawConst.delta_n / mIterAux->GetDeltaLambda();
-        // Tnt
-        H( 0, 1 ) =
-            2 * DeltaRot( 0 ) *
-            exp( -DeltaRot( 1 ) / mCZMLawConst.delta_n - std::pow( DeltaRot( 0 ), 2 ) / std::pow( mCZMLawConst.delta_t, 2 ) ) *
-            mCZMLawConst.phi_n * ( DeltaRot( 1 ) * ( q - r ) - mCZMLawConst.delta_n * ( q - 1 ) * r ) /
-            std::pow( mCZMLawConst.delta_n * mCZMLawConst.delta_t, 2 ) / ( r - 1 );
-    }
-    else if ( dim == 3 )
-    {
-        H.resize( 3, 3 );
-        // Tt1t1
-        H( 0, 0 ) = ( 2 * ( pow( mCZMLawConst.delta_t, 2 ) - 2 * pow( DeltaRot( 0 ), 2 ) ) *
-                      exp( -( DeltaRot( 2 ) / mCZMLawConst.delta_n ) -
-                           ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) *
-                      mCZMLawConst.phi_n * ( mCZMLawConst.delta_n * q * ( -1 + r ) + DeltaRot( 2 ) * ( -q + r ) ) ) /
-                    ( mCZMLawConst.delta_n * pow( mCZMLawConst.delta_t, 4 ) * ( -1 + r ) );
-        // Tt2t2
-        H( 1, 1 ) = ( 2 * ( pow( mCZMLawConst.delta_t, 2 ) - 2 * pow( DeltaRot( 1 ), 2 ) ) *
-                      exp( -( DeltaRot( 2 ) / mCZMLawConst.delta_n ) -
-                           ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) *
-                      mCZMLawConst.phi_n * ( mCZMLawConst.delta_n * q * ( -1 + r ) + DeltaRot( 2 ) * ( -q + r ) ) ) /
-                    ( mCZMLawConst.delta_n * pow( mCZMLawConst.delta_t, 4 ) * ( -1 + r ) );
-        // Tnn
-        H( 2, 2 ) =
-            ( exp( -( DeltaRot( 2 ) / mCZMLawConst.delta_n ) -
-                   ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) *
-              mCZMLawConst.phi_n *
-              ( -( DeltaRot( 2 ) *
-                   ( exp( ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) * ( -1 + q ) - q + r ) ) +
-                mCZMLawConst.delta_n * ( -q + 2 * r - q * r +
-                                         exp( ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) *
-                                             ( -1 + q ) * ( 1 + r ) ) ) ) /
-            ( pow( mCZMLawConst.delta_n, 3 ) * ( -1 + r ) );
-        // Tt1t2
-        H( 0, 1 ) = ( -4 * DeltaRot( 0 ) * DeltaRot( 1 ) *
-                      exp( -( DeltaRot( 2 ) / mCZMLawConst.delta_n ) -
-                           ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) *
-                      mCZMLawConst.phi_n * ( q + ( DeltaRot( 2 ) * ( -q + r ) ) / ( mCZMLawConst.delta_n * ( -1 + r ) ) ) ) /
-                    pow( mCZMLawConst.delta_t, 4 );
-        // Tt1n
-        H( 0, 2 ) = ( 2 * DeltaRot( 0 ) *
-                      exp( -( DeltaRot( 2 ) / mCZMLawConst.delta_n ) -
-                           ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) *
-                      mCZMLawConst.phi_n * ( DeltaRot( 2 ) * ( q - r ) - mCZMLawConst.delta_n * ( -1 + q ) * r ) ) /
-                    ( pow( mCZMLawConst.delta_n, 2 ) * pow( mCZMLawConst.delta_t, 2 ) * ( -1 + r ) );
-        // Tt2n
-        H( 1, 2 ) = ( 2 * DeltaRot( 1 ) *
-                      exp( -( DeltaRot( 2 ) / mCZMLawConst.delta_n ) -
-                           ( pow( DeltaRot( 0 ), 2 ) + pow( DeltaRot( 1 ), 2 ) ) / pow( mCZMLawConst.delta_t, 2 ) ) *
-                      mCZMLawConst.phi_n * ( DeltaRot( 2 ) * ( q - r ) - mCZMLawConst.delta_n * ( -1 + q ) * r ) ) /
-                    ( pow( mCZMLawConst.delta_n, 2 ) * pow( mCZMLawConst.delta_t, 2 ) * ( -1 + r ) );
-    }
-    H = DeltaToTN * H * DeltaToTN.transpose();
+    const Eigen::VectorXd local_separation = DeltaToTN.transpose() * Delta;
+    const CZMEvaluation evaluation = EvaluateLocalLaw( mCZMLawConst, local_separation, i );
+    H = DeltaToTN * evaluation.tangent * DeltaToTN.transpose();
 }
 
 void ADCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::VectorXd& T ) const
@@ -393,10 +756,21 @@ void ADCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const int i, const
 
 void ADCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::MatrixXd& H ) const
 {
+    Eigen::VectorXd traction;
+    EvaluatePotential( Delta, i, traction, H );
+}
+
+void ADCZMIntegrator::EvaluatePotential( const Eigen::VectorXd& Delta, const int i, Eigen::VectorXd& traction, Eigen::MatrixXd& tangent ) const
+{
     autodiff::VectorXdual2nd delta( Delta );
     autodiff::dual2nd u;
     autodiff::VectorXdual g;
-    H = autodiff::hessian( potential, autodiff::wrt( delta ), autodiff::at( delta, i ), u, g );
+    tangent = autodiff::hessian( potential, autodiff::wrt( delta ), autodiff::at( delta, i ), u, g );
+    traction.resize( g.size() );
+    for ( int j = 0; j < g.size(); j++ )
+    {
+        traction( j ) = autodiff::detail::val( g( j ) );
+    }
 }
 
 void ExponentialADCZMIntegrator::EvalCZMLaw( mfem::ElementTransformation& Tr, const mfem::IntegrationPoint& ip )
@@ -408,73 +782,74 @@ void ExponentialADCZMIntegrator::EvalCZMLaw( mfem::ElementTransformation& Tr, co
     mCZMLawConst.update_phi();
 }
 
+void ExponentialADCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::VectorXd& T ) const
+{
+    Eigen::MatrixXd DeltaToTN;
+    DeltaToTNMat( mMemo.GetFaceJacobian( i ), DeltaToTN );
+    const Eigen::VectorXd local_separation = DeltaToTN.transpose() * Delta;
+    CZMHistory& history = GetHistory( i );
+    if ( !ValidExponentialLaw( mCZMLawConst ) || !local_separation.allFinite() )
+    {
+        history.RollbackStep();
+        T = Eigen::VectorXd::Zero( Delta.size() );
+        return;
+    }
+
+    Eigen::VectorXd envelope_traction;
+    Eigen::MatrixXd envelope_tangent;
+    EvaluatePotential( Delta, i, envelope_traction, envelope_tangent );
+
+    CZMEvaluation local_envelope;
+    local_envelope.traction = DeltaToTN.transpose() * envelope_traction;
+    local_envelope.tangent = DeltaToTN.transpose() * envelope_tangent * DeltaToTN;
+    const CZMEvaluation evaluation = history.EvaluateTrial( local_separation, local_envelope, mCZMLawConst.delta_n,
+                                                            mCZMLawConst.delta_t, xi_n, xi_t, mIterAux->GetDeltaLambda() );
+    T = DeltaToTN * evaluation.traction;
+}
+
+void ExponentialADCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::MatrixXd& H ) const
+{
+    Eigen::MatrixXd DeltaToTN;
+    DeltaToTNMat( mMemo.GetFaceJacobian( i ), DeltaToTN );
+    const Eigen::VectorXd local_separation = DeltaToTN.transpose() * Delta;
+    CZMHistory& history = GetHistory( i );
+    if ( !ValidExponentialLaw( mCZMLawConst ) || !local_separation.allFinite() )
+    {
+        history.RollbackStep();
+        H = Eigen::MatrixXd::Zero( Delta.size(), Delta.size() );
+        return;
+    }
+
+    Eigen::VectorXd envelope_traction;
+    Eigen::MatrixXd envelope_tangent;
+    EvaluatePotential( Delta, i, envelope_traction, envelope_tangent );
+
+    CZMEvaluation local_envelope;
+    local_envelope.traction = DeltaToTN.transpose() * envelope_traction;
+    local_envelope.tangent = DeltaToTN.transpose() * envelope_tangent * DeltaToTN;
+    const CZMEvaluation evaluation = history.EvaluateTrial( local_separation, local_envelope, mCZMLawConst.delta_n,
+                                                            mCZMLawConst.delta_t, xi_n, xi_t, mIterAux->GetDeltaLambda() );
+    H = DeltaToTN * evaluation.tangent * DeltaToTN.transpose();
+}
+
 ExponentialADCZMIntegrator::ExponentialADCZMIntegrator(
     Memorize& memo, mfem::Coefficient& sigmaMax, mfem::Coefficient& tauMax, mfem::Coefficient& deltaN, mfem::Coefficient& deltaT )
-    : ADCZMIntegrator( memo ), mSigmaMax{&sigmaMax}, mTauMax{&tauMax}, mDeltaN{&deltaN}, mDeltaT{&deltaT}
+    : ADCZMIntegrator( memo ), mSigmaMax{ &sigmaMax }, mTauMax{ &tauMax }, mDeltaN{ &deltaN }, mDeltaT{ &deltaT }
 {
     // x: diffX, diffY
-    potential = [this]( const autodiff::VectorXdual2nd& x, const int i ) {
+    potential = [this]( const autodiff::VectorXdual2nd& x, const int i )
+    {
         const auto& Jacobian = this->mMemo.GetFaceJacobian( i );
         const int dim = Jacobian.Height();
-        const auto& pd = this->mMemo.GetFacePointData( i );
-
-        const double q = mCZMLawConst.phi_t / mCZMLawConst.phi_n;
-        const double r = 0.;
         Eigen::MatrixXd DeltaToTN;
         DeltaToTNMat( Jacobian, DeltaToTN );
 
-        if ( dim == 2 )
+        autodiff::VectorXdual2nd local_separation( dim );
+        for ( int j = 0; j < dim; j++ )
         {
-            const autodiff::dual2nd DeltaT = DeltaToTN.col( 0 ).dot( x );
-            const autodiff::dual2nd DeltaN = DeltaToTN.col( 1 ).dot( x );
-
-            if ( mIterAux->IterNumber() == 0 )
-            {
-                Update( i, autodiff::detail::val( DeltaN ), autodiff::detail::val( DeltaT ) );
-            }
-
-            const auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
-
-            autodiff::dual2nd res =
-                mCZMLawConst.phi_n +
-                mCZMLawConst.phi_n * autodiff::detail::exp( -DeltaN / mCZMLawConst.delta_n ) *
-                    ( ( 1. - r + DeltaN / mCZMLawConst.delta_n ) * ( 1. - q ) / ( r - 1. ) -
-                      ( q + ( r - q ) / ( r - 1. ) * DeltaN / mCZMLawConst.delta_n ) *
-                          autodiff::detail::exp( -DeltaT * DeltaT / mCZMLawConst.delta_t / mCZMLawConst.delta_t ) ) +
-                xi_n * ( DeltaN - delta_data.delta_n_prev ) * ( DeltaN - delta_data.delta_n_prev ) /
-                    mCZMLawConst.delta_n / mIterAux->GetDeltaLambda() +
-                xi_t * ( DeltaT - delta_data.delta_t1_prev ) * ( DeltaT - delta_data.delta_t1_prev ) /
-                    mCZMLawConst.delta_t / mIterAux->GetDeltaLambda();
-            return res;
+            local_separation( j ) = DeltaToTN.col( j ).dot( x );
         }
-        else
-        {
-            const autodiff::dual2nd DeltaT1 = DeltaToTN.col( 0 ).dot( x );
-            const autodiff::dual2nd DeltaT2 = DeltaToTN.col( 1 ).dot( x );
-            const autodiff::dual2nd DeltaN = DeltaToTN.col( 2 ).dot( x );
-
-            if ( mIterAux->IterNumber() == 0 )
-            {
-                Update( i, autodiff::detail::val( DeltaN ), autodiff::detail::val( DeltaT1 ), autodiff::detail::val( DeltaT2 ) );
-            }
-
-            const auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
-
-            autodiff::dual2nd res = mCZMLawConst.phi_n +
-                                    mCZMLawConst.phi_n * autodiff::detail::exp( -DeltaN / mCZMLawConst.delta_n ) *
-                                        ( ( autodiff::dual2nd( 1. ) - r + DeltaN / mCZMLawConst.delta_n ) *
-                                              ( autodiff::dual2nd( 1. ) - q ) / ( r - autodiff::dual2nd( 1. ) ) -
-                                          ( q + ( r - q ) / ( r - autodiff::dual2nd( 1. ) ) * DeltaN / mCZMLawConst.delta_n ) *
-                                              autodiff::detail::exp( -( DeltaT1 * DeltaT1 + DeltaT2 * DeltaT2 ) /
-                                                                     mCZMLawConst.delta_t / mCZMLawConst.delta_t ) ) +
-                                    xi_n * ( DeltaN - delta_data.delta_n_prev ) * ( DeltaN - delta_data.delta_n_prev ) /
-                                        mCZMLawConst.delta_n / mIterAux->GetDeltaLambda() +
-                                    xi_t * ( DeltaT1 - delta_data.delta_t1_prev ) * ( DeltaT1 - delta_data.delta_t1_prev ) /
-                                        mCZMLawConst.delta_t / mIterAux->GetDeltaLambda() +
-                                    xi_t * ( DeltaT2 - delta_data.delta_t2_prev ) * ( DeltaT2 - delta_data.delta_t2_prev ) /
-                                        mCZMLawConst.delta_t / mIterAux->GetDeltaLambda();
-            return res;
-        }
+        return ExponentialCZMPotential( mCZMLawConst, local_separation );
     };
 }
 
@@ -483,18 +858,16 @@ ExponentialRotADCZMIntegrator::ExponentialRotADCZMIntegrator(
     : ExponentialADCZMIntegrator( memo, sigmaMax, tauMax, deltaN, deltaT )
 {
     // x: u1x, u1y, u2x, u2y, du1x, du1y, du2x, du2y
-    potential = [this]( const autodiff::VectorXdual2nd& x, const int i ) {
+    potential = [this]( const autodiff::VectorXdual2nd& x, const int i )
+    {
         Eigen::Map<const autodiff::VectorXdual2nd> U1( x.data(), 2 );
         Eigen::Map<const autodiff::VectorXdual2nd> U2( x.data() + 2, 2 );
         Eigen::Map<const autodiff::VectorXdual2nd> dU1( x.data() + 4, 2 );
         Eigen::Map<const autodiff::VectorXdual2nd> dU2( x.data() + 6, 2 );
         const auto& Jacobian = this->mMemo.GetFaceJacobian( i );
-        const auto& pd = this->mMemo.GetFacePointData( i );
 
         autodiff::VectorXdual2nd dA1( 2 );
         dA1 << Jacobian( 0, 0 ), Jacobian( 1, 0 );
-        const double q = mCZMLawConst.phi_t / mCZMLawConst.phi_n;
-        const double r = 0.;
         autodiff::VectorXdual2nd diff = U1 - U2;
         autodiff::VectorXdual2nd directionT = dA1 + dA1 + dU1 + dU2;
         directionT.normalize();
@@ -503,32 +876,24 @@ ExponentialRotADCZMIntegrator::ExponentialRotADCZMIntegrator(
         autodiff::VectorXdual2nd directionN = rot.toRotationMatrix() * directionT;
         const autodiff::dual2nd DeltaT = directionT.dot( diff );
         const autodiff::dual2nd DeltaN = directionN.dot( diff );
-        if ( mIterAux->IterNumber() == 0 )
-        {
-            Update( i, autodiff::detail::val( DeltaN ), autodiff::detail::val( DeltaT ) );
-        }
-        const auto& delta_data = pd.get_val<PointData>( "delta" ).value().get();
-
-        autodiff::dual2nd res =
-            mCZMLawConst.phi_n +
-            mCZMLawConst.phi_n * autodiff::detail::exp( -DeltaN / mCZMLawConst.delta_n ) *
-                ( ( 1. - r + DeltaN / mCZMLawConst.delta_n ) * ( 1. - q ) / ( r - 1. ) -
-                  ( q + ( r - q ) / ( r - 1. ) * DeltaN / mCZMLawConst.delta_n ) *
-                      autodiff::detail::exp( -DeltaT * DeltaT / mCZMLawConst.delta_t / mCZMLawConst.delta_t ) ) +
-            xi_n * ( DeltaN - delta_data.delta_n_prev ) * ( DeltaN - delta_data.delta_n_prev ) / mCZMLawConst.delta_n /
-                mIterAux->GetDeltaLambda() +
-            xi_t * ( DeltaT - delta_data.delta_t1_prev ) * ( DeltaT - delta_data.delta_t1_prev ) /
-                mCZMLawConst.delta_t / mIterAux->GetDeltaLambda();
-        // autodiff::dual2nd res = mCZMLawConst.phi_n +
-        //                         mCZMLawConst.phi_n * autodiff::detail::exp( -DeltaN / mCZMLawConst.delta_n ) *
-        //                             ( ( 1. - r + DeltaN / mCZMLawConst.delta_n ) * ( 1. - q ) / ( r - 1. ) -
-        //                               ( q + ( r - q ) / ( r - 1. ) * DeltaN / mCZMLawConst.delta_n ) *
-        //                                   autodiff::detail::exp( -DeltaT * DeltaT / mCZMLawConst.delta_t / mCZMLawConst.delta_t ) );
+        autodiff::VectorXdual2nd local_separation( 2 );
+        local_separation << DeltaT, DeltaN;
+        autodiff::dual2nd res = ExponentialCZMPotential( mCZMLawConst, local_separation );
 
         if ( DeltaN < 0 )
             res += 1e20 * DeltaN * DeltaN;
         return res;
     };
+}
+
+void ExponentialRotADCZMIntegrator::Traction( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::VectorXd& T ) const
+{
+    ADCZMIntegrator::Traction( Delta, i, dim, T );
+}
+
+void ExponentialRotADCZMIntegrator::TractionStiffTangent( const Eigen::VectorXd& Delta, const int i, const int dim, Eigen::MatrixXd& H ) const
+{
+    ADCZMIntegrator::TractionStiffTangent( Delta, i, dim, H );
 }
 
 void ExponentialRotADCZMIntegrator::matrixB( const int dof1,

@@ -117,8 +117,24 @@ void largeDeformMatrixB( const int dof,
     }
 }
 
-Memorize::Memorize( mfem::Mesh* m ) : mEleStorage( m->GetNE() ), mFaceStorage( m->GetNumFaces() )
+Memorize::Memorize( mfem::Mesh* m )
 {
+    Reset( m );
+}
+
+void Memorize::Reset( mfem::Mesh* m )
+{
+    mEleStorage.clear();
+    mFaceStorage.clear();
+    mElementNo = 0;
+
+    if ( m == nullptr )
+    {
+        return;
+    }
+
+    mEleStorage.resize( m->GetNE() );
+    mFaceStorage.resize( m->GetNumFaces() );
 }
 
 void Memorize::InitializeElement( const mfem::FiniteElement& el, mfem::ElementTransformation& Trans, const mfem::IntegrationRule& ir )

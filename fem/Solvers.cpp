@@ -49,6 +49,166 @@ public:
     }
 };
 
+template <typename IntegratorWithLifecycle, typename Integrator>
+void ApplyIntegratorLifecycle( const mfem::Array<Integrator*>& integrators, void ( IntegratorWithLifecycle::*lifecycle )() )
+{
+    for ( int i = 0; i < integrators.Size(); i++ )
+    {
+        if ( auto with_lifecycle = dynamic_cast<IntegratorWithLifecycle*>( integrators[i] ) )
+        {
+            ( with_lifecycle->*lifecycle )();
+        }
+    }
+}
+
+template <typename IntegratorWithLifecycle, typename Integrator>
+void CollectIntegratorLifecycle( const mfem::Array<Integrator*>& integrators, std::vector<IntegratorWithLifecycle*>& lifecycle_integrators )
+{
+    for ( int i = 0; i < integrators.Size(); i++ )
+    {
+        if ( auto with_lifecycle = dynamic_cast<IntegratorWithLifecycle*>( integrators[i] ) )
+        {
+            lifecycle_integrators.push_back( with_lifecycle );
+        }
+    }
+}
+
+struct IntegratorLifecycle
+{
+    std::vector<NonlinearFormIntegratorLambda*> nonlinear;
+    std::vector<BlockNonlinearFormIntegratorLambda*> block;
+};
+
+IntegratorLifecycle CollectIntegratorLifecycle( const mfem::Operator* oper )
+{
+    IntegratorLifecycle result;
+    if ( auto nonlinearform = dynamic_cast<const mfem::NonlinearForm*>( oper ) )
+    {
+        CollectIntegratorLifecycle( *nonlinearform->GetDNFI(), result.nonlinear );
+        CollectIntegratorLifecycle( *nonlinearform->GetBNFI(), result.nonlinear );
+        CollectIntegratorLifecycle( nonlinearform->GetInteriorFaceIntegrators(), result.nonlinear );
+        CollectIntegratorLifecycle( nonlinearform->GetBdrFaceIntegrators(), result.nonlinear );
+    }
+
+    if ( auto nonlinearform = dynamic_cast<const mfem::BlockNonlinearForm*>( oper ) )
+    {
+        CollectIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::DomainIntegrators(), result.block );
+        CollectIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::BoundaryIntegrators(), result.block );
+        CollectIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::InteriorFaceIntegrators(), result.block );
+        CollectIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::BoundaryFaceIntegrators(), result.block );
+    }
+    return result;
+}
+
+void BeginIntegratorLifecycle( const mfem::Operator* oper )
+{
+    const IntegratorLifecycle integrators = CollectIntegratorLifecycle( oper );
+    std::size_t nonlinear_started = 0;
+    std::size_t block_started = 0;
+    try
+    {
+        for ( auto* integrator : integrators.nonlinear )
+        {
+            integrator->BeginStep();
+            nonlinear_started++;
+        }
+        for ( auto* integrator : integrators.block )
+        {
+            integrator->BeginStep();
+            block_started++;
+        }
+    }
+    catch ( ... )
+    {
+        while ( block_started > 0 )
+        {
+            try
+            {
+                integrators.block[--block_started]->RollbackStep();
+            }
+            catch ( ... )
+            {
+            }
+        }
+        while ( nonlinear_started > 0 )
+        {
+            try
+            {
+                integrators.nonlinear[--nonlinear_started]->RollbackStep();
+            }
+            catch ( ... )
+            {
+            }
+        }
+        throw;
+    }
+}
+
+void ApplyIntegratorLifecycle( const mfem::Operator* oper,
+                               void ( NonlinearFormIntegratorLambda::*nonlinear_lifecycle )(),
+                               void ( BlockNonlinearFormIntegratorLambda::*block_lifecycle )() )
+{
+    if ( auto nonlinearform = dynamic_cast<const mfem::NonlinearForm*>( oper ) )
+    {
+        ApplyIntegratorLifecycle( *nonlinearform->GetDNFI(), nonlinear_lifecycle );
+        ApplyIntegratorLifecycle( *nonlinearform->GetBNFI(), nonlinear_lifecycle );
+        ApplyIntegratorLifecycle( nonlinearform->GetInteriorFaceIntegrators(), nonlinear_lifecycle );
+        ApplyIntegratorLifecycle( nonlinearform->GetBdrFaceIntegrators(), nonlinear_lifecycle );
+    }
+
+    if ( auto nonlinearform = dynamic_cast<const mfem::BlockNonlinearForm*>( oper ) )
+    {
+        ApplyIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::DomainIntegrators(), block_lifecycle );
+        ApplyIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::BoundaryIntegrators(), block_lifecycle );
+        ApplyIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::InteriorFaceIntegrators(), block_lifecycle );
+        ApplyIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::BoundaryFaceIntegrators(), block_lifecycle );
+    }
+}
+
+class IntegratorStep
+{
+public:
+    IntegratorStep( const IterAuxilliary& iter_aux, const mfem::Operator* oper )
+        : mIterAux( iter_aux ), mOperator( oper )
+    {
+        mIterAux.BeginStep( mOperator );
+        mActive = true;
+    }
+
+    ~IntegratorStep()
+    {
+        if ( !mActive )
+        {
+            return;
+        }
+
+        try
+        {
+            mIterAux.RollbackStep( mOperator );
+        }
+        catch ( ... )
+        {
+        }
+    }
+
+    void Commit()
+    {
+        mIterAux.CommitStep( mOperator );
+        mActive = false;
+    }
+
+    void Rollback()
+    {
+        mIterAux.RollbackStep( mOperator );
+        mActive = false;
+    }
+
+private:
+    const IterAuxilliary& mIterAux;
+    const mfem::Operator* mOperator;
+    bool mActive{ false };
+};
+
 #ifdef MFEM_USE_SUITESPARSE
 class UMFPackSolverAccess : public mfem::UMFPackSolver
 {
@@ -116,6 +276,27 @@ void IterAuxilliary::RegisterToIntegrators( const mfem::Operator* oper ) const
         RegisterIntegrators<BlockNonlinearFormIntegratorLambda>(
             nonlinearform->*BlockNonlinearFormAccess::BoundaryFaceIntegrators(), this );
     }
+}
+
+void IterAuxilliary::BeginStep( const mfem::Operator* oper ) const
+{
+    RegisterToIntegrators( oper );
+    BeginIntegratorLifecycle( oper );
+}
+
+void IterAuxilliary::CommitStep( const mfem::Operator* oper ) const
+{
+    ApplyIntegratorLifecycle( oper, &NonlinearFormIntegratorLambda::CommitStep, &BlockNonlinearFormIntegratorLambda::CommitStep );
+}
+
+void IterAuxilliary::RollbackStep( const mfem::Operator* oper ) const
+{
+    ApplyIntegratorLifecycle( oper, &NonlinearFormIntegratorLambda::RollbackStep, &BlockNonlinearFormIntegratorLambda::RollbackStep );
+}
+
+void IterAuxilliary::RevertStep( const mfem::Operator* oper ) const
+{
+    ApplyIntegratorLifecycle( oper, &NonlinearFormIntegratorLambda::RevertStep, &BlockNonlinearFormIntegratorLambda::RevertStep );
 }
 
 void NewtonLineSearch::SetOperator( const mfem::Operator& op )
@@ -208,6 +389,8 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     using namespace mfem;
     MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
     MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
+
+    IntegratorStep integrator_step( *this, oper );
 
     double norm0, norm, norm_goal;
     const bool have_b = ( b.Size() == Height() );
@@ -307,6 +490,15 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     {
         mfem::out << "Newton: No convergence!\n";
     }
+
+    if ( converged )
+    {
+        integrator_step.Commit();
+    }
+    else
+    {
+        integrator_step.Rollback();
+    }
 }
 
 void NewtonForPhaseField::SetOperator( const mfem::Operator& op )
@@ -326,6 +518,8 @@ void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     using namespace mfem;
     MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
     MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
+
+    IntegratorStep integrator_step( *this, oper );
 
     double norm0_u, norm_u, norm_goal_u;
     double norm0_p{ 0 }, norm_p{ 0 }, norm_goal_p{ 100 };
@@ -379,7 +573,7 @@ void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
         if ( it >= max_iter )
         {
-            converged = true;
+            converged = false;
             break;
         }
         prec->SetOperator( static_cast<mfem::BlockOperator&>( blockOper->GetGradient( x ) ).GetBlock( 0, 0 ) );
@@ -414,6 +608,15 @@ void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     if ( !converged && MyRank() == 0 )
     {
         mfem::out << "Newton: No convergence!\n";
+    }
+
+    if ( converged )
+    {
+        integrator_step.Commit();
+    }
+    else
+    {
+        integrator_step.Rollback();
     }
 }
 
@@ -473,9 +676,12 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     mfem::Vector* u;
     u = &x;
 
+    lambda = 0.;
+    solution_buffer.clear();
     solution_buffer.unshift();
     solution_buffer[0].L = L;
     solution_buffer[0].lambda = lambda;
+    solution_buffer[0].phi = phi;
     solution_buffer[0].u = *u;
     converged = false;
 
@@ -487,7 +693,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     int step = 0;
     double norm{ 0 }, norm_goal{ 0 }, normPrev{ 0 }, normPrevPrev{ 0 };
     const bool have_b = ( b.Size() == Height() );
-    lambda = 0.;
 
     int count = 1;
 
@@ -542,10 +747,13 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
 
             util::mfemOut( "solution_buffer.size(): ", solution_buffer.size(), "\n" );
+            solution_buffer.shift();
             *u = solution_buffer[0].u;
             lambda = solution_buffer[0].lambda;
             L = solution_buffer[0].L / goldenRatio;
-            solution_buffer.shift();
+            phi = solution_buffer[0].phi;
+            RevertStep( oper );
+            step--;
         }
 
         if ( step )
@@ -558,6 +766,8 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         delta_lambda = 0.;
         Delta_lambda = 0.;
         it = 0;
+
+        IntegratorStep integrator_step( *this, oper );
 
         // mfem::out << std::setprecision( 16 ) << "time: " << lambda << std::endl;
         for ( ; true; it++ )
@@ -680,6 +890,8 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             final_iter = it;
             final_norm = norm;
 
+            integrator_step.Commit();
+
             if ( adaptive_l )
                 phi = std::abs( Norm( Delta_u ) / Delta_lambda );
 
@@ -690,9 +902,14 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             solution_buffer.unshift();
             solution_buffer[0].L = L;
             solution_buffer[0].lambda = lambda;
+            solution_buffer[0].phi = phi;
             solution_buffer[0].u = *u;
 
             count++;
+        }
+        else
+        {
+            integrator_step.Rollback();
         }
         util::mfemOut( util::ProgressBar( lambda, converged ), '\n' );
     }
@@ -858,6 +1075,7 @@ template <typename Newton>
 void MultiNewtonAdaptive<Newton>::SetOperator( const mfem::Operator& op )
 {
     Newton::SetOperator( op );
+    oper = &op;
     cur.SetSize( Newton::width );
 }
 
@@ -895,11 +1113,14 @@ void MultiNewtonAdaptive<Newton>::Mult( const mfem::Vector& b, mfem::Vector& x )
         util::mfemOut( "L: ", Newton::Delta_lambda, "\n", util::Color::RESET );
         Newton::Delta_lambda = std::min( Newton::Delta_lambda, 1. - Newton::lambda );
 
+        IntegratorStep integrator_step( *this, oper );
         Newton::Mult( b, *u );
         if ( Newton::GetConverged() )
         {
             Newton::lambda += Newton::Delta_lambda;
             cur = *u;
+
+            integrator_step.Commit();
 
             if ( Newton::data_collect_func )
             {
@@ -910,6 +1131,7 @@ void MultiNewtonAdaptive<Newton>::Mult( const mfem::Vector& b, mfem::Vector& x )
         else
         {
             *u = cur;
+            integrator_step.Rollback();
         }
         util::mfemOut( util::ProgressBar( Newton::lambda, Newton::GetConverged() ), '\n' );
     }

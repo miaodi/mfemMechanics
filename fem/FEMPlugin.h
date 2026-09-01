@@ -3,6 +3,8 @@
 #include "Material.h"
 #include "util.h"
 #include <Eigen/Dense>
+#include <array>
+#include <functional>
 #include <memory>
 #include <mfem.hpp>
 #include <vector>
@@ -60,10 +62,23 @@ public:
 
     const mfem::DenseMatrix& GetFaceJacobian( const int gauss ) const;
 
-    void Reset( mfem::Mesh* m )
+    void Reset( mfem::Mesh* m );
+
+    template <typename Visitor>
+    void VisitFacePointData( Visitor&& visitor )
     {
-        mEleStorage = std::vector<std::unique_ptr<std::vector<GaussPointStorage>>>( m->GetNE() );
-        mFaceStorage = std::vector<std::unique_ptr<std::vector<CZMGaussPointStorage>>>( m->GetNumFaces() );
+        for ( auto& face : mFaceStorage )
+        {
+            if ( !face )
+            {
+                continue;
+            }
+
+            for ( auto& point : *face )
+            {
+                visitor( point.PointData );
+            }
+        }
     }
 
     const CZMGaussPointStorage& GetFacePointStorage( const int gauss ) const
@@ -136,8 +151,40 @@ public:
         mIterAux = ptr;
     }
 
+    virtual void BeginStep()
+    {
+        MFEM_VERIFY( mIterAuxStackSize < mIterAuxStack.size(), "Integrator nesting exceeds the supported depth." );
+        mIterAuxStack[mIterAuxStackSize++] = mIterAux;
+    }
+
+    virtual void CommitStep()
+    {
+        RestoreIterAux();
+    }
+
+    virtual void RollbackStep()
+    {
+        RestoreIterAux();
+    }
+
+    virtual void RevertStep()
+    {
+    }
+
 protected:
+    void RestoreIterAux()
+    {
+        MFEM_VERIFY( mIterAuxStackSize > 0, "Integrator step completion requires a matching BeginStep." );
+        mIterAuxStackSize--;
+        if ( mIterAuxStackSize > 0 )
+        {
+            mIterAux = mIterAuxStack[mIterAuxStackSize - 1];
+        }
+    }
+
     IterAuxilliary const* mIterAux{ nullptr };
+    std::array<IterAuxilliary const*, 32> mIterAuxStack{};
+    std::size_t mIterAuxStackSize{ 0 };
 };
 
 class NonlinearElasticityIntegrator : public NonlinearFormIntegratorLambda
@@ -410,8 +457,40 @@ public:
         mIterAux = ptr;
     }
 
+    virtual void BeginStep()
+    {
+        MFEM_VERIFY( mIterAuxStackSize < mIterAuxStack.size(), "Integrator nesting exceeds the supported depth." );
+        mIterAuxStack[mIterAuxStackSize++] = mIterAux;
+    }
+
+    virtual void CommitStep()
+    {
+        RestoreIterAux();
+    }
+
+    virtual void RollbackStep()
+    {
+        RestoreIterAux();
+    }
+
+    virtual void RevertStep()
+    {
+    }
+
 protected:
+    void RestoreIterAux()
+    {
+        MFEM_VERIFY( mIterAuxStackSize > 0, "Integrator step completion requires a matching BeginStep." );
+        mIterAuxStackSize--;
+        if ( mIterAuxStackSize > 0 )
+        {
+            mIterAux = mIterAuxStack[mIterAuxStackSize - 1];
+        }
+    }
+
     IterAuxilliary const* mIterAux{ nullptr };
+    std::array<IterAuxilliary const*, 32> mIterAuxStack{};
+    std::size_t mIterAuxStackSize{ 0 };
 };
 
 class TempDependentNonlinearElasticityIntegrator : public BlockNonlinearFormIntegratorLambda, public NonlinearElasticityIntegrator

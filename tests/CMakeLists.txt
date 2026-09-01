@@ -13,6 +13,13 @@ mfem_mechanics_add_executable(
     GTest::gtest_main
     mfemMechanics::util
 )
+mfem_mechanics_add_executable(
+    czm_history_test
+    czm_history_test.cpp
+    GTest::gtest_main
+    mfemMechanics::femplugin
+)
 
 gtest_discover_tests(autodiff_test)
 gtest_discover_tests(eigen_decomp_test)
+gtest_discover_tests(czm_history_test)
