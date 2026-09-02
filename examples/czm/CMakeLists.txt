@@ -1,4 +1,4 @@
-if(TARGET OpenMP::OpenMP_CXX)
+if(TARGET OpenMP::OpenMP_CXX AND MFEM_USE_SUITESPARSE)
     mfem_mechanics_add_executable(
         czm
         main.cpp
@@ -12,7 +12,10 @@ if(TARGET OpenMP::OpenMP_CXX)
         OpenMP::OpenMP_CXX
     )
 else()
-    message(STATUS "Skipping czm and czm2: OpenMP CXX support was not found")
+    message(STATUS
+        "Skipping czm and czm2: requires OpenMP CXX and MFEM_USE_SUITESPARSE=ON "
+        "(found OpenMP=${OpenMP_CXX_FOUND}, SuiteSparse=${MFEM_USE_SUITESPARSE})"
+    )
 endif()
 
 if(MFEM_USE_MPI AND MFEM_USE_PETSC)

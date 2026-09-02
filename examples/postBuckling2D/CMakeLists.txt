@@ -1,1 +1,5 @@
-mfem_mechanics_add_executable(postBuckling2D main.cpp mfemMechanics::femplugin)
+if(MFEM_USE_SUITESPARSE)
+    mfem_mechanics_add_executable(postBuckling2D main.cpp mfemMechanics::femplugin)
+else()
+    message(STATUS "Skipping postBuckling2D: installed MFEM reports MFEM_USE_SUITESPARSE=OFF")
+endif()

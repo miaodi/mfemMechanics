@@ -269,7 +269,6 @@ int main( int argc, char* argv[] )
         mumps->SetMatrixSymType( MUMPSSolver::MatType::UNSYMMETRIC );
         // mumps->SetReorderingStrategy( MUMPSSolver::ReorderingStrategy::PARMETIS );
         mumps->SetPrintLevel( -1 );
-        mumps->SetDetComp( false );
         lin_solver = mumps;
     }
     // {

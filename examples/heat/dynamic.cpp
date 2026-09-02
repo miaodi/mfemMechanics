@@ -61,7 +61,7 @@ protected:
 
     SparseMatrix Mmat, Kmat;
     SparseMatrix* T; // T = M + dt K
-    double current_dt;
+    mfem::real_t current_dt;
 
     CGSolver M_solver; // Krylov solver for inverting the mass matrix M
     DSmoother M_prec;  // Preconditioner for the mass matrix M
@@ -74,15 +74,15 @@ protected:
 public:
     ConductionOperator( FiniteElementSpace& f );
 
-    virtual void Mult( const Vector& u, Vector& du_dt ) const;
+    void Mult( const Vector& u, Vector& du_dt ) const override;
     /** Solve the Backward-Euler equation: k = f(u + dt*k, t), for the unknown k.
         This is the only requirement for high-order SDIRK implicit integration.*/
-    virtual void ImplicitSolve( const double dt, const Vector& u, Vector& k );
+    void ImplicitSolve( mfem::real_t dt, const Vector& u, Vector& k ) override;
 
     virtual ~ConductionOperator();
 };
 
-double InitialTemperature( const Vector& x );
+mfem::real_t InitialTemperature( const Vector& x );
 
 int main( int argc, char* argv[] )
 {
@@ -90,8 +90,8 @@ int main( int argc, char* argv[] )
     const char* mesh_file = "../../data/thermal.msh";
     int ref_levels = 0;
     int order = 1;
-    double t_final = 0.5;
-    double dt = 1.0e-2;
+    mfem::real_t t_final = 0.5;
+    mfem::real_t dt = 1.0e-2;
     bool paraview = true;
     int vis_steps = 5;
 
@@ -180,7 +180,7 @@ int main( int argc, char* argv[] )
     // 8. Perform time-integration (looping over the time iterations, ti, with a
     //    time-step dt).
     ode_solver->Init( oper );
-    double t = 0.0;
+    mfem::real_t t = 0.0;
 
     bool last_step = false;
     for ( int ti = 1; !last_step; ti++ )
@@ -224,7 +224,7 @@ int main( int argc, char* argv[] )
 }
 
 ConductionOperator::ConductionOperator( FiniteElementSpace& f )
-    : TimeDependentOperator( f.GetTrueVSize(), 0.0 ), fespace( f ), M( NULL ), K( NULL ), T( NULL ), current_dt( 0.0 ), z( height )
+    : TimeDependentOperator( f.GetTrueVSize() ), fespace( f ), M( NULL ), K( NULL ), T( NULL ), current_dt( 0.0 ), z( height )
 {
     Array<int> ess_bdr( fespace.GetMesh()->bdr_attributes.Max() );
     ess_bdr = 0;
@@ -233,7 +233,7 @@ ConductionOperator::ConductionOperator( FiniteElementSpace& f )
     Array<int> ess_tdof_list;
     fespace.GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
 
-    const double rel_tol = 1e-8;
+    const mfem::real_t rel_tol = 1e-8;
 
     M = new BilinearForm( &fespace );
     IntegrationRules irs( 0, Quadrature1D::GaussLobatto );
@@ -342,7 +342,7 @@ void ConductionOperator::Mult( const Vector& u, Vector& du_dt ) const
     M_solver.Mult( z, du_dt );
 }
 
-void ConductionOperator::ImplicitSolve( const double dt, const Vector& u, Vector& du_dt )
+void ConductionOperator::ImplicitSolve( const mfem::real_t dt, const Vector& u, Vector& du_dt )
 {
     // Solve the equation:
     //    du_dt = M^{-1}*[-K(u + dt*du_dt)]
@@ -368,7 +368,7 @@ ConductionOperator::~ConductionOperator()
     delete b;
 }
 
-double InitialTemperature( const Vector& x )
+mfem::real_t InitialTemperature( const Vector& x )
 {
     return 0.;
 }
