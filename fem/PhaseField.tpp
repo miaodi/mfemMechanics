@@ -74,13 +74,6 @@ void PhaseFieldIntegrator<PointStorage>::RollbackStep()
 }
 
 template <typename PointStorage>
-void PhaseFieldIntegrator<PointStorage>::RevertStep()
-{
-    MFEM_VERIFY( mStepDepth == 0, "A committed phase-field step cannot be reverted during an active step." );
-    VisitHistory( []( PhaseFieldHistory& history ) { history.RevertStep(); } );
-}
-
-template <typename PointStorage>
 void PhaseFieldIntegrator<PointStorage>::AssembleElementVector( const mfem::Array<const mfem::FiniteElement*>& el,
                                                                 mfem::ElementTransformation& transformation,
                                                                 const mfem::Array<const mfem::Vector*>& elementState,

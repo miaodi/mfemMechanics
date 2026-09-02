@@ -90,9 +90,8 @@ The nonlinear-solver lifecycle has the following contract:
 | Operation | State action |
 | --- | --- |
 | `BeginStep` | Initialize trial state from committed state. |
-| `CommitStep` | Save the prior committed state and accept trial state. |
+| `CommitStep` | Accept trial state as the new committed state. |
 | `RollbackStep` | Discard trial state and restore committed state. |
-| `RevertStep` | Restore the previous accepted state when the solver returns to an older solution. |
 
 Nested solver calls commit or roll back point state only when the outermost step
 finishes. A nested rollback poisons its outer transaction; the outer driver must
@@ -100,10 +99,9 @@ also roll back and must not advance the accepted solution. Phase-field history u
 $H_{\mathrm{trial}}=\max(H_{\mathrm{committed}},\psi^+_{\mathrm{current}})$;
 it does not accumulate maxima over Newton iterates that may later be rejected.
 
-`SolutionHistoryCapacity` counts the current solution and its retained
-predecessors. `MaterialStateHistoryCapacity` is one smaller because each point
-stores its current committed state separately. The solution and point state can
-therefore be reverted through the same number of accepted steps.
+The solver may retry a rejected increment with a smaller step size, but it does
+not return to an older accepted solution. Integration-point histories therefore
+retain only committed and trial state, not a sequence of accepted states.
 
 ## Invalidation and limitations
 
@@ -124,5 +122,5 @@ MFEM and Eigen containers and do not provide a device assembly path.
 
 `tests/czm_history_test.cpp` checks empty-state size, element and face state
 reuse, reset behavior, material-state composition, typed cohesive history,
-deterministic repeated phase-field assembly, nested lifecycle behavior,
-rollback, and accepted-step history wraparound.
+deterministic repeated phase-field assembly, nested lifecycle behavior, and
+failed-step rollback.

@@ -1,8 +1,8 @@
 #pragma once
-#include "Material.h"
 #include "mfem.hpp"
 #include <CircularBuffer.hpp>
 #include <Eigen/Dense>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -63,7 +63,6 @@ public:
     void BeginStep( const mfem::Operator* oper ) const;
     void CommitStep( const mfem::Operator* oper ) const;
     void RollbackStep( const mfem::Operator* oper ) const;
-    void RevertStep( const mfem::Operator* oper ) const;
 
 protected:
     mutable int it = 0; // iter # of each step
@@ -157,6 +156,8 @@ public:
 class ALMBase : public mfem::IterativeSolver, public NonlinearStepContext
 {
 protected:
+    static constexpr std::size_t PredictorHistoryCapacity = 2;
+
     mfem::real_t InnerProduct( const mfem::Vector& a, const mfem::real_t la, const mfem::Vector& b, const mfem::real_t lb ) const;
 
     void ResizeVectors( const int size ) const;
@@ -167,7 +168,6 @@ protected:
     {
         mfem::real_t L{ 0. };
         mfem::real_t lambda{ 0. };
-        mfem::real_t phi{ 0. };
         mfem::Vector u;
     };
 
@@ -268,8 +268,8 @@ protected:
     bool adaptive_l{ false };
     mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{ nullptr };
 
-    // L, lambda, u
-    mutable CircularBuffer<Stat, SolutionHistoryCapacity> solution_buffer;
+    // The current and preceding accepted states define the predictor direction.
+    mutable CircularBuffer<Stat, PredictorHistoryCapacity> solution_buffer;
 };
 
 class Crisfield : public ALMBase

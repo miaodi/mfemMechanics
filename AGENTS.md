@@ -234,7 +234,7 @@ source failure. There is no repository lint, install, or benchmark target.
   quadrature-point trial and committed state. Do not hide history in one shared
   `ElasticMaterial` instance. Store typed point state through
   `IntegrationPointStorage` (or a deliberate replacement), and specify
-  initialization, update, commit, rollback, revert, AMR transfer, and restart
+  initialization, update, commit, rollback, AMR transfer, and restart
   behavior. A typed material-state bundle supports one owner of each material
   type. Use separate storage objects when independent instances of the same
   stateful model are required.
@@ -249,7 +249,7 @@ source failure. There is no repository lint, install, or benchmark target.
   face assembly. Trial updates must be deterministic functions of committed
   state and the current trial fields, so residual/Jacobian call order does not
   change the result. Integrate stateful components with the
-  `BeginStep`/`CommitStep`/`RollbackStep`/`RevertStep` lifecycle in
+  `BeginStep`/`CommitStep`/`RollbackStep` lifecycle in
   `StepAwareNonlinearFormIntegrator` or its block counterpart, including nested
   solves and rejected increments. `CZMHistory` and its tests are the example.
 - A rejected increment must restore the last accepted unknowns, load factor,

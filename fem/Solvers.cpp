@@ -295,11 +295,6 @@ void NonlinearStepContext::RollbackStep( const mfem::Operator* oper ) const
                               &BlockStepAwareNonlinearFormIntegrator::RollbackStep );
 }
 
-void NonlinearStepContext::RevertStep( const mfem::Operator* oper ) const
-{
-    ApplyIntegratorLifecycle( oper, &StepAwareNonlinearFormIntegrator::RevertStep, &BlockStepAwareNonlinearFormIntegrator::RevertStep );
-}
-
 void NewtonLineSearch::SetOperator( const mfem::Operator& op )
 {
     mfem::NewtonSolver::SetOperator( op );
@@ -682,7 +677,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     solution_buffer.unshift();
     solution_buffer[0].L = L;
     solution_buffer[0].lambda = lambda;
-    solution_buffer[0].phi = phi;
     solution_buffer[0].u = *u;
     converged = false;
 
@@ -691,7 +685,7 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     // {
     //     petscPrec = dynamic_cast<mfem::PetscSolver*>( prec );
     // }
-    int step = 0;
+    step = 0;
     mfem::real_t norm{ 0 }, norm_goal{ 0 }, normPrev{ 0 }, normPrevPrev{ 0 };
     const bool have_b = ( b.Size() == Height() );
 
@@ -704,6 +698,21 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     InitializeVariables( x );
     u_direction_pred = 0.;
     lambda_direction_pred = 0.;
+    struct IncrementCleanup
+    {
+        mfem::Vector& deltaU;
+        mfem::Vector& accumulatedDeltaU;
+        mfem::real_t& deltaLambda;
+        mfem::real_t& accumulatedDeltaLambda;
+
+        ~IncrementCleanup()
+        {
+            deltaU = 0.;
+            accumulatedDeltaU = 0.;
+            deltaLambda = 0.;
+            accumulatedDeltaLambda = 0.;
+        }
+    } incrementCleanup{ delta_u, Delta_u, delta_lambda, Delta_lambda };
 
     ProcessNewState( x );
     // q.Print();
@@ -740,21 +749,10 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         if ( L < min_delta )
         {
             util::mfemOut( util::Color::YELLOW,
-                           "Required step size is smaller than the minimal bound, restart with previous solution.\n",
+                           "Required step size is smaller than the minimum; retaining the latest accepted solution.\n",
                            util::Color::RESET );
-            if ( solution_buffer.size() <= 1 )
-            {
-                MFEM_ABORT( "Solution buffer is empty, end the simulation." );
-            }
-
-            util::mfemOut( "solution_buffer.size(): ", solution_buffer.size(), "\n" );
-            solution_buffer.shift();
-            *u = solution_buffer[0].u;
-            lambda = solution_buffer[0].lambda;
-            L = solution_buffer[0].L / goldenRatio;
-            phi = solution_buffer[0].phi;
-            RevertStep( oper );
-            step--;
+            converged = false;
+            break;
         }
 
         if ( step )
@@ -818,9 +816,18 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             }
 
             // compute q
+            const mfem::real_t acceptedLambda = lambda;
             lambda += 1.;
-            oper->Mult( u_cur, q );
-            lambda -= 1.;
+            try
+            {
+                oper->Mult( u_cur, q );
+            }
+            catch ( ... )
+            {
+                lambda = acceptedLambda;
+                throw;
+            }
+            lambda = acceptedLambda;
 
             q -= r;
             q.Neg();
@@ -896,6 +903,11 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             if ( adaptive_l )
                 phi = std::abs( Norm( Delta_u ) / Delta_lambda );
 
+            delta_u = 0.;
+            Delta_u = 0.;
+            delta_lambda = 0.;
+            Delta_lambda = 0.;
+
             if ( data_collect_func )
             {
                 ( data_collect_func )( step, count, count );
@@ -903,7 +915,6 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             solution_buffer.unshift();
             solution_buffer[0].L = L;
             solution_buffer[0].lambda = lambda;
-            solution_buffer[0].phi = phi;
             solution_buffer[0].u = *u;
 
             count++;
@@ -911,6 +922,10 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         else
         {
             integrator_step.Rollback();
+            delta_u = 0.;
+            Delta_u = 0.;
+            delta_lambda = 0.;
+            Delta_lambda = 0.;
         }
         util::mfemOut( util::ProgressBar( lambda, converged ), '\n' );
     }

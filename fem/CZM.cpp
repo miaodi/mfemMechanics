@@ -117,28 +117,11 @@ void CZMHistory::BeginStep()
 
 void CZMHistory::CommitStep()
 {
-    mCommittedHistory[mNextCommittedHistory] = mCommitted;
-    mNextCommittedHistory = ( mNextCommittedHistory + 1 ) % mCommittedHistory.size();
-    mCommittedHistorySize = std::min( mCommittedHistorySize + 1, mCommittedHistory.size() );
     mCommitted = mTrial;
 }
 
 void CZMHistory::RollbackStep()
 {
-    mTrial = mCommitted;
-}
-
-void CZMHistory::RevertStep()
-{
-    if ( mCommittedHistorySize == 0 )
-    {
-        mTrial = mCommitted;
-        return;
-    }
-
-    mNextCommittedHistory = ( mNextCommittedHistory + mCommittedHistory.size() - 1 ) % mCommittedHistory.size();
-    mCommitted = mCommittedHistory[mNextCommittedHistory];
-    mCommittedHistorySize--;
     mTrial = mCommitted;
 }
 
@@ -504,12 +487,6 @@ void CZMIntegrator::RollbackStep()
     mStepDepth = 0;
     mStepRejected = false;
     StepAwareNonlinearFormIntegrator::RollbackStep();
-}
-
-void CZMIntegrator::RevertStep()
-{
-    MFEM_VERIFY( mStepDepth == 0, "A committed CZM step cannot be reverted during an active step." );
-    VisitHistory( []( CZMHistory& history ) { history.RevertStep(); } );
 }
 
 void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,

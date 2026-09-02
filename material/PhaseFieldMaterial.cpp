@@ -124,27 +124,10 @@ void plugin::PhaseFieldHistory::BeginStep()
 
 void plugin::PhaseFieldHistory::CommitStep()
 {
-    mCommittedHistory[mNextCommittedHistory] = mCommitted;
-    mNextCommittedHistory = ( mNextCommittedHistory + 1 ) % mCommittedHistory.size();
-    mCommittedHistorySize = std::min( mCommittedHistorySize + 1, mCommittedHistory.size() );
     mCommitted = mTrial;
 }
 
 void plugin::PhaseFieldHistory::RollbackStep()
 {
-    mTrial = mCommitted;
-}
-
-void plugin::PhaseFieldHistory::RevertStep()
-{
-    if ( mCommittedHistorySize == 0 )
-    {
-        mTrial = mCommitted;
-        return;
-    }
-
-    mNextCommittedHistory = ( mNextCommittedHistory + mCommittedHistory.size() - 1 ) % mCommittedHistory.size();
-    mCommitted = mCommittedHistory[mNextCommittedHistory];
-    mCommittedHistorySize--;
     mTrial = mCommitted;
 }

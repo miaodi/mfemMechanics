@@ -4,7 +4,6 @@
 #include <mfem.hpp>
 
 #include "FEMPlugin.h"
-#include <array>
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/dual/eigen.hpp>
 #include <autodiff/forward/real.hpp>
@@ -64,7 +63,6 @@ public:
     void BeginStep();
     void CommitStep();
     void RollbackStep();
-    void RevertStep();
 
     CZMEvaluation EvaluateTrial( const Eigen::VectorXr& local_separation,
                                  const CZMEvaluation& envelope,
@@ -77,9 +75,6 @@ public:
 private:
     CZMHistoryState mCommitted;
     CZMHistoryState mTrial;
-    std::array<CZMHistoryState, MaterialStateHistoryCapacity> mCommittedHistory;
-    std::size_t mCommittedHistorySize{ 0 };
-    std::size_t mNextCommittedHistory{ 0 };
 };
 
 using CZMHistoryPointStorage = IntegrationPointStorage<NoIntegrationPointState, CZMHistory>;
@@ -144,7 +139,6 @@ public:
     virtual void BeginStep() override;
     virtual void CommitStep() override;
     virtual void RollbackStep() override;
-    virtual void RevertStep() override;
 
 protected:
     CZMHistory& GetHistory( const int gauss ) const;

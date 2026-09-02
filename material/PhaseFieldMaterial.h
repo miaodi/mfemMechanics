@@ -2,7 +2,6 @@
 
 #include "Material.h"
 #include <Eigen/Dense>
-#include <array>
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/dual/eigen.hpp>
 #include <autodiff/forward/real.hpp>
@@ -91,7 +90,6 @@ public:
     void BeginStep();
     void CommitStep();
     void RollbackStep();
-    void RevertStep();
 
     mfem::real_t CommittedValue() const noexcept
     {
@@ -106,9 +104,6 @@ public:
 private:
     mfem::real_t mCommitted{ 0. };
     mfem::real_t mTrial{ 0. };
-    std::array<mfem::real_t, MaterialStateHistoryCapacity> mCommittedHistory{};
-    std::size_t mCommittedHistorySize{ 0 };
-    std::size_t mNextCommittedHistory{ 0 };
 };
 
 template <>

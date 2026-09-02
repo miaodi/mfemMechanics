@@ -7,6 +7,7 @@
 #include <functional>
 #include <gtest/gtest.h>
 #include <limits>
+#include <stdexcept>
 #include <type_traits>
 
 struct TestPlasticityMaterial
@@ -66,6 +67,128 @@ public:
     }
 };
 
+class ConstantResidualOperator : public mfem::Operator
+{
+public:
+    ConstantResidualOperator() : mfem::Operator( 1 ), mGradient( 1 )
+    {
+        mGradient = 1.;
+    }
+
+    void Mult( const mfem::Vector&, mfem::Vector& residual ) const override
+    {
+        residual.SetSize( 1 );
+        residual = 1.;
+    }
+
+    mfem::Operator& GetGradient( const mfem::Vector& ) const override
+    {
+        return mGradient;
+    }
+
+private:
+    mutable mfem::DenseMatrix mGradient;
+};
+
+class ThrowingResidualOperator : public mfem::Operator
+{
+public:
+    explicit ThrowingResidualOperator( const int throwOnEvaluation )
+        : mfem::Operator( 1 ), mThrowOnEvaluation{ throwOnEvaluation }, mGradient( 1 )
+    {
+        mGradient = 1.;
+    }
+
+    void Mult( const mfem::Vector&, mfem::Vector& residual ) const override
+    {
+        if ( evaluations++ == mThrowOnEvaluation )
+        {
+            throw std::runtime_error( "trial residual failed" );
+        }
+        residual.SetSize( 1 );
+        residual = 1.;
+    }
+
+    mfem::Operator& GetGradient( const mfem::Vector& ) const override
+    {
+        return mGradient;
+    }
+
+private:
+    int mThrowOnEvaluation;
+    mutable int evaluations{ 0 };
+    mutable mfem::DenseMatrix mGradient;
+};
+
+class IdentitySolver : public mfem::Solver
+{
+public:
+    IdentitySolver() : mfem::Solver( 1 )
+    {
+    }
+
+    void SetOperator( const mfem::Operator& op ) override
+    {
+        MFEM_VERIFY( op.Height() == 1 && op.Width() == 1, "IdentitySolver expects a scalar operator." );
+    }
+
+    void Mult( const mfem::Vector& rhs, mfem::Vector& solution ) const override
+    {
+        solution = rhs;
+    }
+};
+
+class RejectingALMSolver : public plugin::ALMBase
+{
+public:
+    bool updateStep( const int, const int, const mfem::real_t ) const override
+    {
+        attempts++;
+        delta_lambda = .25;
+        Delta_lambda = .25;
+        return false;
+    }
+
+    int Attempts() const noexcept
+    {
+        return attempts;
+    }
+
+private:
+    mutable int attempts{ 0 };
+};
+
+class AcceptingALMSolver : public plugin::ALMBase
+{
+public:
+    bool updateStep( const int, const int, const mfem::real_t ) const override
+    {
+        delta_u = 0.;
+        delta_lambda = 1.;
+        return true;
+    }
+};
+
+class AcceptThenRejectALMSolver : public plugin::ALMBase
+{
+public:
+    bool updateStep( const int iteration, const int acceptedSteps, const mfem::real_t ) const override
+    {
+        if ( acceptedSteps == 0 )
+        {
+            delta_u = iteration == 0 ? 1. : 0.;
+            delta_lambda = iteration == 0 ? .5 : 0.;
+            return true;
+        }
+
+        delta_u = 2.;
+        Delta_u = 2.;
+        delta_lambda = .25;
+        Delta_lambda = .25;
+        return false;
+    }
+};
+
 Eigen::MatrixXr FiniteDifferenceTangent( const std::function<Eigen::VectorXr( const Eigen::VectorXr& )>& traction,
                                          const Eigen::VectorXr& separation )
 {
@@ -108,6 +231,113 @@ void ExpectStatesEqual( const plugin::CZMHistoryState& actual, const plugin::CZM
 
 static_assert( !std::is_copy_constructible_v<plugin::ExponentialCZMIntegrator> );
 } // namespace
+
+TEST( ALMBase, MinimumCutbackRetainsLatestAcceptedSolution )
+{
+    ConstantResidualOperator nonlinearOperator;
+    IdentitySolver linearSolver;
+    RejectingALMSolver solver;
+    solver.SetOperator( nonlinearOperator );
+    solver.SetSolver( linearSolver );
+    solver.SetDelta( 1. );
+    solver.SetMinDelta( .5 );
+
+    mfem::Vector solution( 1 );
+    solution = 3.5;
+    const mfem::Vector acceptedSolution( solution );
+    mfem::Vector zeroRightHandSide;
+
+    solver.Mult( zeroRightHandSide, solution );
+
+    EXPECT_FALSE( solver.GetConverged() );
+    EXPECT_EQ( solver.Attempts(), 1 );
+    ASSERT_EQ( solution.Size(), acceptedSolution.Size() );
+    EXPECT_EQ( solution( 0 ), acceptedSolution( 0 ) );
+    EXPECT_EQ( solver.GetCurLambda(), 0. );
+    EXPECT_EQ( solver.GetDeltaLambda(), 0. );
+    EXPECT_EQ( solver.StepNumber(), 0 );
+}
+
+TEST( ALMBase, AcceptedStepPublishesCommittedLoadFactor )
+{
+    ConstantResidualOperator nonlinearOperator;
+    IdentitySolver linearSolver;
+    AcceptingALMSolver solver;
+    solver.SetOperator( nonlinearOperator );
+    solver.SetSolver( linearSolver );
+    solver.SetDelta( 1. );
+
+    mfem::Vector solution( 1 );
+    solution = 0.;
+    mfem::Vector zeroRightHandSide;
+
+    solver.Mult( zeroRightHandSide, solution );
+
+    EXPECT_TRUE( solver.GetConverged() );
+    EXPECT_EQ( solver.GetCurLambda(), 1. );
+    EXPECT_EQ( solver.GetDeltaLambda(), 0. );
+    EXPECT_EQ( solver.StepNumber(), 1 );
+}
+
+TEST( ALMBase, UnitLoadProbeExceptionRestoresAcceptedLoadFactor )
+{
+    ThrowingResidualOperator nonlinearOperator( 1 );
+    IdentitySolver linearSolver;
+    RejectingALMSolver solver;
+    solver.SetOperator( nonlinearOperator );
+    solver.SetSolver( linearSolver );
+    solver.SetDelta( 1. );
+
+    mfem::Vector solution( 1 );
+    solution = 2.;
+    mfem::Vector zeroRightHandSide;
+
+    EXPECT_THROW( solver.Mult( zeroRightHandSide, solution ), std::runtime_error );
+    EXPECT_EQ( solver.GetCurLambda(), 0. );
+    EXPECT_EQ( solution( 0 ), 2. );
+}
+
+TEST( ALMBase, TrialExceptionDiscardsAccumulatedLoadIncrement )
+{
+    ThrowingResidualOperator nonlinearOperator( 2 );
+    IdentitySolver linearSolver;
+    AcceptingALMSolver solver;
+    solver.SetOperator( nonlinearOperator );
+    solver.SetSolver( linearSolver );
+    solver.SetDelta( 1. );
+
+    mfem::Vector solution( 1 );
+    solution = 2.;
+    mfem::Vector zeroRightHandSide;
+
+    EXPECT_THROW( solver.Mult( zeroRightHandSide, solution ), std::runtime_error );
+    EXPECT_EQ( solver.GetCurLambda(), 0. );
+    EXPECT_EQ( solver.GetDeltaLambda(), 0. );
+    EXPECT_EQ( solution( 0 ), 2. );
+}
+
+TEST( ALMBase, ExhaustedCutbackKeepsMostRecentAcceptedStep )
+{
+    ConstantResidualOperator nonlinearOperator;
+    IdentitySolver linearSolver;
+    AcceptThenRejectALMSolver solver;
+    solver.SetOperator( nonlinearOperator );
+    solver.SetSolver( linearSolver );
+    solver.SetDelta( 1. );
+    solver.SetMinDelta( .5 );
+
+    mfem::Vector solution( 1 );
+    solution = 0.;
+    mfem::Vector zeroRightHandSide;
+
+    solver.Mult( zeroRightHandSide, solution );
+
+    EXPECT_FALSE( solver.GetConverged() );
+    EXPECT_EQ( solution( 0 ), 1. );
+    EXPECT_EQ( solver.GetCurLambda(), .5 );
+    EXPECT_EQ( solver.GetDeltaLambda(), 0. );
+    EXPECT_EQ( solver.StepNumber(), 1 );
+}
 
 TEST( IntegrationPointStorage, EmptyAndResetFaceStorageCanBeVisited )
 {
@@ -341,28 +571,6 @@ TEST( PhaseFieldHistory, TrialEvaluationIsDeterministicFromCommittedState )
     EXPECT_EQ( history.TrialValue(), 1. );
 }
 
-TEST( PhaseFieldHistory, RevertRestoresCommittedStatesAfterCircularHistoryWraps )
-{
-    plugin::PhaseFieldHistory history;
-    constexpr int totalSteps = static_cast<int>( plugin::SolutionHistoryCapacity ) + 5;
-    constexpr int oldestRetainedState = totalSteps - static_cast<int>( plugin::MaterialStateHistoryCapacity );
-    for ( int step = 1; step <= totalSteps; step++ )
-    {
-        history.BeginStep();
-        history.EvaluateTrial( static_cast<mfem::real_t>( step ) );
-        history.CommitStep();
-    }
-
-    for ( int expected = totalSteps - 1; expected >= oldestRetainedState; expected-- )
-    {
-        history.RevertStep();
-        EXPECT_EQ( history.CommittedValue(), expected );
-    }
-
-    history.RevertStep();
-    EXPECT_EQ( history.CommittedValue(), oldestRetainedState );
-}
-
 TEST( PhaseFieldIntegrator, NestedLifecycleCommitsAndRollsBackTypedPointHistory )
 {
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL );
@@ -394,16 +602,13 @@ TEST( PhaseFieldIntegrator, NestedLifecycleCommitsAndRollsBackTypedPointHistory 
     EXPECT_EQ( history.CommittedValue(), 2. );
     EXPECT_EQ( history.TrialValue(), 2. );
 
-    integrator.RevertStep();
-    EXPECT_EQ( history.CommittedValue(), 0. );
-
     integrator.BeginStep();
     integrator.BeginStep();
     history.EvaluateTrial( 4. );
     integrator.RollbackStep();
     integrator.CommitStep();
-    EXPECT_EQ( history.CommittedValue(), 0. );
-    EXPECT_EQ( history.TrialValue(), 0. );
+    EXPECT_EQ( history.CommittedValue(), 2. );
+    EXPECT_EQ( history.TrialValue(), 2. );
 }
 
 TEST( PhaseFieldIntegrator, RepeatedAssemblyDoesNotAccumulateRejectedNewtonHistory )
@@ -568,47 +773,6 @@ TEST( CZMHistory, RollbackRestoresCommittedHistory )
     ExpectRealEq( history.TrialState().tangential_opening_1, committed.tangential_opening_1 );
     ExpectRealEq( history.CommittedState().maximum_normal_opening, committed.maximum_normal_opening );
     ExpectRealEq( history.CommittedState().maximum_tangential_opening, committed.maximum_tangential_opening );
-}
-
-TEST( CZMHistory, RevertRestoresPreviousCommittedStep )
-{
-    const auto law = MakeLaw();
-    plugin::CZMHistory history;
-    plugin::EvaluateIrreversibleExponentialCZM( law, Eigen::Vector2r( .12, .18 ), history );
-    history.CommitStep();
-    const auto first_commit = history.CommittedState();
-
-    plugin::EvaluateIrreversibleExponentialCZM( law, Eigen::Vector2r( .28, .34 ), history );
-    history.CommitStep();
-    EXPECT_GT( history.CommittedState().maximum_normal_opening, first_commit.maximum_normal_opening );
-
-    history.RevertStep();
-    ExpectStatesEqual( history.CommittedState(), first_commit );
-    ExpectStatesEqual( history.TrialState(), first_commit );
-}
-
-TEST( CZMHistory, RevertRestoresCommittedStatesAfterCircularHistoryWraps )
-{
-    const auto law = MakeLaw();
-    plugin::CZMHistory history;
-    constexpr int totalSteps = static_cast<int>( plugin::SolutionHistoryCapacity ) + 5;
-    constexpr int oldestRetainedState = totalSteps - static_cast<int>( plugin::MaterialStateHistoryCapacity );
-    for ( int step = 1; step <= totalSteps; step++ )
-    {
-        const mfem::real_t opening = .01 * step;
-        history.BeginStep();
-        plugin::EvaluateIrreversibleExponentialCZM( law, Eigen::Vector2r( 0., opening ), history );
-        history.CommitStep();
-    }
-
-    for ( int expected = totalSteps - 1; expected >= oldestRetainedState; expected-- )
-    {
-        history.RevertStep();
-        EXPECT_NEAR( history.CommittedState().maximum_normal_opening, .01 * expected, kTightTolerance );
-    }
-
-    history.RevertStep();
-    EXPECT_NEAR( history.CommittedState().maximum_normal_opening, .01 * oldestRetainedState, kTightTolerance );
 }
 
 TEST( CZMHistory, PureModeLoadingDoesNotHealCoupledStiffness )

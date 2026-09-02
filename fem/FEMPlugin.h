@@ -71,10 +71,6 @@ public:
         RestoreStepContext();
     }
 
-    virtual void RevertStep()
-    {
-    }
-
 protected:
     void RestoreStepContext()
     {
@@ -409,10 +405,6 @@ public:
     virtual void RollbackStep()
     {
         RestoreStepContext();
-    }
-
-    virtual void RevertStep()
-    {
     }
 
 protected:

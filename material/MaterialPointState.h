@@ -1,15 +1,9 @@
 #pragma once
 
-#include <cstddef>
 #include <tuple>
 
 namespace plugin
 {
-// The solution buffer includes the current state; point histories store it separately.
-inline constexpr std::size_t SolutionHistoryCapacity = 20;
-inline constexpr std::size_t MaterialStateHistoryCapacity = SolutionHistoryCapacity - 1;
-static_assert( MaterialStateHistoryCapacity > 0 );
-
 /// Marker used when an integration-point domain has no persistent state.
 struct NoIntegrationPointState
 {

@@ -13,7 +13,7 @@ thermal, buckling, and large-deformation experiments.
 - Analytic and automatic-differentiation exponential cohesive-zone laws in 2D
   and 3D.
 - Irreversible cohesive history with accepted-step commit, failed-step rollback,
-  nested-solver handling, and arc-length state rewind.
+  step-size cutback, and nested-solver handling.
 - Serial and MPI examples with optional OpenMP, MUMPS, PETSc, and SLEPc targets.
 
 ## Requirements

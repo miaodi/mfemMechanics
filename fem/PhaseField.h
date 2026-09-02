@@ -39,7 +39,6 @@ public:
     void BeginStep() override;
     void CommitStep() override;
     void RollbackStep() override;
-    void RevertStep() override;
 
 protected:
     template <typename Visitor>
