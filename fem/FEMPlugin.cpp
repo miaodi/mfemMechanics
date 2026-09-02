@@ -481,12 +481,12 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
                                                          const mfem::Vector& elfun,
                                                          mfem::DenseMatrix& elmat )
 {
-    if ( mIterAux == nullptr )
+    if ( mStepContext == nullptr )
     {
-        mfem::mfem_error( "IterAux is not provided yet.\n" );
+        mfem::mfem_error( "Nonlinear step context is not provided yet.\n" );
     }
 
-    const mfem::real_t ct = mIterAux->GetCurLambda();
+    const mfem::real_t ct = mStepContext->GetCurLambda();
     mMaterialModel->setLoadFactor( ct );
     mfem::real_t w;
     int dof = el.GetDof(), dim = el.GetDim();
@@ -551,11 +551,11 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
                                                            const mfem::Vector& elfun,
                                                            mfem::Vector& elvect )
 {
-    if ( mIterAux == nullptr )
+    if ( mStepContext == nullptr )
     {
-        mfem::mfem_error( "IterAux is not provided yet.\n" );
+        mfem::mfem_error( "Nonlinear step context is not provided yet.\n" );
     }
-    const mfem::real_t ct = mIterAux->GetCurLambda();
+    const mfem::real_t ct = mStepContext->GetCurLambda();
     mMaterialModel->setLoadFactor( ct );
 
     mfem::real_t w;
@@ -676,12 +676,12 @@ void NonlinearVectorBoundaryLFIntegrator::AssembleFaceVector( const mfem::Finite
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
 
-    if ( mIterAux == nullptr )
+    if ( mStepContext == nullptr )
     {
-        mfem::mfem_error( "IterAux is not provided yet.\n" );
+        mfem::mfem_error( "Nonlinear step context is not provided yet.\n" );
     }
 
-    const mfem::real_t ct = mIterAux->GetCurLambda();
+    const mfem::real_t ct = mStepContext->GetCurLambda();
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
@@ -723,9 +723,9 @@ void NonlinearVectorBoundaryLFIntegrator::AssembleFaceGrad( const mfem::FiniteEl
     shape.SetSize( dof );
     vec.SetSize( vdim );
 
-    if ( mIterAux == nullptr )
+    if ( mStepContext == nullptr )
     {
-        mfem::mfem_error( "IterAux is not provided yet.\n" );
+        mfem::mfem_error( "Nonlinear step context is not provided yet.\n" );
     }
 
     elmat.SetSize( dof * vdim );
@@ -742,9 +742,9 @@ void NonlinearPressureIntegrator::AssembleFaceVector( const mfem::FiniteElement&
     int dof = el1.GetDof();
     MFEM_ASSERT( vdim == 2, "NonlinearPressureIntegrator only support 2D elements" );
 
-    if ( mIterAux == nullptr )
+    if ( mStepContext == nullptr )
     {
-        mfem::mfem_error( "IterAux is not provided yet.\n" );
+        mfem::mfem_error( "Nonlinear step context is not provided yet.\n" );
     }
 
     shape.SetSize( dof );
@@ -766,7 +766,7 @@ void NonlinearPressureIntegrator::AssembleFaceVector( const mfem::FiniteElement&
 
     Eigen::Rotation2D<mfem::real_t> r( EIGEN_PI / 2 );
 
-    const mfem::real_t ct = mIterAux->GetCurLambda();
+    const mfem::real_t ct = mStepContext->GetCurLambda();
 
     const Eigen::MatrixXr identity = Eigen::MatrixXr::Identity( vdim, vdim );
 
@@ -807,9 +807,9 @@ void NonlinearPressureIntegrator::AssembleFaceGrad( const mfem::FiniteElement& e
                                                     const mfem::Vector& elfun,
                                                     mfem::DenseMatrix& elmat )
 {
-    if ( mIterAux == nullptr )
+    if ( mStepContext == nullptr )
     {
-        mfem::mfem_error( "IterAux is not provided yet.\n" );
+        mfem::mfem_error( "Nonlinear step context is not provided yet.\n" );
     }
     int vdim = Tr.GetSpaceDim();
     int dof = el1.GetDof();
@@ -841,7 +841,7 @@ void NonlinearPressureIntegrator::AssembleFaceGrad( const mfem::FiniteElement& e
 
     const Eigen::MatrixXr identity = Eigen::MatrixXr::Identity( vdim, vdim );
 
-    const mfem::real_t ct = mIterAux->GetCurLambda();
+    const mfem::real_t ct = mStepContext->GetCurLambda();
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
@@ -880,12 +880,12 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
                                                                   const mfem::Vector& elfun,
                                                                   mfem::DenseMatrix& elmat )
 {
-    if ( mIterAux == nullptr )
+    if ( mStepContext == nullptr )
     {
-        mfem::mfem_error( "IterAux is not provided yet.\n" );
+        mfem::mfem_error( "Nonlinear step context is not provided yet.\n" );
     }
 
-    mMaterialModel->setLoadFactor( mIterAux->GetCurLambda() );
+    mMaterialModel->setLoadFactor( mStepContext->GetCurLambda() );
 
     mfem::real_t w = 0;
     int dof = el.GetDof(), dim = el.GetDim();
@@ -1094,9 +1094,9 @@ void NonlinearDirichletPenaltyIntegrator::AssembleFaceVector( const mfem::Finite
                                                               const mfem::Vector& elfun,
                                                               mfem::Vector& elvect )
 {
-    if ( mIterAux == nullptr )
+    if ( mStepContext == nullptr )
     {
-        mfem::mfem_error( "IterAux is not provided yet.\n" );
+        mfem::mfem_error( "Nonlinear step context is not provided yet.\n" );
     }
     int vdim = Tr.GetSpaceDim();
     int dof = el1.GetDof();
@@ -1120,7 +1120,7 @@ void NonlinearDirichletPenaltyIntegrator::AssembleFaceVector( const mfem::Finite
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
 
-    const mfem::real_t ct = mIterAux->GetCurLambda();
+    const mfem::real_t ct = mStepContext->GetCurLambda();
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
@@ -1152,9 +1152,9 @@ void NonlinearDirichletPenaltyIntegrator::AssembleFaceGrad( const mfem::FiniteEl
                                                             const mfem::Vector& elfun,
                                                             mfem::DenseMatrix& elmat )
 {
-    if ( mIterAux == nullptr )
+    if ( mStepContext == nullptr )
     {
-        mfem::mfem_error( "IterAux is not provided yet.\n" );
+        mfem::mfem_error( "Nonlinear step context is not provided yet.\n" );
     }
     int vdim = Tr.GetSpaceDim();
     int dof = el1.GetDof();

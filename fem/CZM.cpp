@@ -418,7 +418,7 @@ CZMEvaluation EvaluateIrreversibleExponentialCZM( const ExponentialCZMConst& law
 }
 
 CZMIntegrator::CZMIntegrator( IntegrationPointStorage& pointStorage )
-    : NonlinearFormIntegratorLambda(), mPointStorage{ pointStorage }, mStateKey{ NextCZMStateKey() }
+    : StepAwareNonlinearFormIntegrator(), mPointStorage{ pointStorage }, mStateKey{ NextCZMStateKey() }
 {
 }
 
@@ -447,12 +447,13 @@ CZMHistory& CZMIntegrator::GetHistory( const int gauss ) const
 
 CZMEvaluation CZMIntegrator::EvaluateLocalLaw( const ExponentialCZMConst& law, const Eigen::VectorXr& local_separation, const int gauss ) const
 {
-    return EvaluateIrreversibleExponentialCZM( law, local_separation, GetHistory( gauss ), xi_n, xi_t, mIterAux->GetDeltaLambda() );
+    return EvaluateIrreversibleExponentialCZM( law, local_separation, GetHistory( gauss ), xi_n, xi_t,
+                                               mStepContext->GetDeltaLambda() );
 }
 
 void CZMIntegrator::BeginStep()
 {
-    NonlinearFormIntegratorLambda::BeginStep();
+    StepAwareNonlinearFormIntegrator::BeginStep();
     if ( mStepDepth > 0 )
     {
         mStepDepth++;
@@ -467,7 +468,7 @@ void CZMIntegrator::BeginStep()
     }
     catch ( ... )
     {
-        NonlinearFormIntegratorLambda::RollbackStep();
+        StepAwareNonlinearFormIntegrator::RollbackStep();
         throw;
     }
 }
@@ -478,7 +479,7 @@ void CZMIntegrator::CommitStep()
     if ( mStepDepth > 1 )
     {
         mStepDepth--;
-        NonlinearFormIntegratorLambda::CommitStep();
+        StepAwareNonlinearFormIntegrator::CommitStep();
         return;
     }
 
@@ -492,7 +493,7 @@ void CZMIntegrator::CommitStep()
     }
     mStepDepth = 0;
     mStepRejected = false;
-    NonlinearFormIntegratorLambda::CommitStep();
+    StepAwareNonlinearFormIntegrator::CommitStep();
 }
 
 void CZMIntegrator::RollbackStep()
@@ -502,14 +503,14 @@ void CZMIntegrator::RollbackStep()
     if ( mStepDepth > 1 )
     {
         mStepDepth--;
-        NonlinearFormIntegratorLambda::RollbackStep();
+        StepAwareNonlinearFormIntegrator::RollbackStep();
         return;
     }
 
     VisitHistory( []( CZMHistory& history ) { history.RollbackStep(); } );
     mStepDepth = 0;
     mStepRejected = false;
-    NonlinearFormIntegratorLambda::RollbackStep();
+    StepAwareNonlinearFormIntegrator::RollbackStep();
 }
 
 void CZMIntegrator::RevertStep()
@@ -524,9 +525,9 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
                                         const mfem::Vector& elfun,
                                         mfem::Vector& elvect )
 {
-    if ( mIterAux == nullptr )
+    if ( mStepContext == nullptr )
     {
-        mfem::mfem_error( "IterAux is not provided yet.\n" );
+        mfem::mfem_error( "Nonlinear step context is not provided yet.\n" );
     }
     int vdim = Tr.GetSpaceDim();
     int dof1 = el1.GetDof();
@@ -573,9 +574,9 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
                                       const mfem::Vector& elfun,
                                       mfem::DenseMatrix& elmat )
 {
-    if ( mIterAux == nullptr )
+    if ( mStepContext == nullptr )
     {
-        mfem::mfem_error( "IterAux is not provided yet.\n" );
+        mfem::mfem_error( "Nonlinear step context is not provided yet.\n" );
     }
     int vdim = Tr.GetSpaceDim();
     int dof1 = el1.GetDof();
@@ -803,7 +804,7 @@ void ExponentialADCZMIntegrator::Traction( const Eigen::VectorXr& Delta, const i
     local_envelope.traction = DeltaToTN.transpose() * envelope_traction;
     local_envelope.tangent = DeltaToTN.transpose() * envelope_tangent * DeltaToTN;
     const CZMEvaluation evaluation = history.EvaluateTrial( local_separation, local_envelope, mCZMLawConst.delta_n,
-                                                            mCZMLawConst.delta_t, xi_n, xi_t, mIterAux->GetDeltaLambda() );
+                                                            mCZMLawConst.delta_t, xi_n, xi_t, mStepContext->GetDeltaLambda() );
     T = DeltaToTN * evaluation.traction;
 }
 
@@ -828,7 +829,7 @@ void ExponentialADCZMIntegrator::TractionStiffTangent( const Eigen::VectorXr& De
     local_envelope.traction = DeltaToTN.transpose() * envelope_traction;
     local_envelope.tangent = DeltaToTN.transpose() * envelope_tangent * DeltaToTN;
     const CZMEvaluation evaluation = history.EvaluateTrial( local_separation, local_envelope, mCZMLawConst.delta_n,
-                                                            mCZMLawConst.delta_t, xi_n, xi_t, mIterAux->GetDeltaLambda() );
+                                                            mCZMLawConst.delta_t, xi_n, xi_t, mStepContext->GetDeltaLambda() );
     H = DeltaToTN * evaluation.tangent * DeltaToTN.transpose();
 }
 

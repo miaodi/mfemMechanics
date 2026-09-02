@@ -95,7 +95,7 @@ CZMEvaluation EvaluateIrreversibleExponentialCZM( const ExponentialCZMConst& law
                                                   const mfem::real_t tangential_damping = 0.,
                                                   const mfem::real_t delta_lambda = 0. );
 
-class CZMIntegrator : public NonlinearFormIntegratorLambda
+class CZMIntegrator : public StepAwareNonlinearFormIntegrator
 {
 public:
     CZMIntegrator( IntegrationPointStorage& pointStorage );
@@ -236,10 +236,10 @@ public:
     virtual void TractionStiffTangent( const Eigen::VectorXr& Delta, const int gauss, const int dim, Eigen::MatrixXr& H ) const;
 
 protected:
-    mfem::Coefficient* mSigmaMax{nullptr};
-    mfem::Coefficient* mTauMax{nullptr};
-    mfem::Coefficient* mDeltaN{nullptr};
-    mfem::Coefficient* mDeltaT{nullptr};
+    mfem::Coefficient* mSigmaMax{ nullptr };
+    mfem::Coefficient* mTauMax{ nullptr };
+    mfem::Coefficient* mDeltaN{ nullptr };
+    mfem::Coefficient* mDeltaT{ nullptr };
     ExponentialCZMConst mCZMLawConst;
 };
 
@@ -276,10 +276,10 @@ public:
     virtual void TractionStiffTangent( const Eigen::VectorXr& Delta, const int gauss, const int dim, Eigen::MatrixXr& H ) const override;
 
 protected:
-    mfem::Coefficient* mSigmaMax{nullptr};
-    mfem::Coefficient* mTauMax{nullptr};
-    mfem::Coefficient* mDeltaN{nullptr};
-    mfem::Coefficient* mDeltaT{nullptr};
+    mfem::Coefficient* mSigmaMax{ nullptr };
+    mfem::Coefficient* mTauMax{ nullptr };
+    mfem::Coefficient* mDeltaN{ nullptr };
+    mfem::Coefficient* mDeltaT{ nullptr };
 
     ExponentialCZMConst mCZMLawConst;
 };

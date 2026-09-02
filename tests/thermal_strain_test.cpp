@@ -15,10 +15,10 @@ constexpr mfem::real_t kResidualTolerance = kSinglePrecision ? 1e-3f : 1e-10;
 constexpr mfem::real_t kMatrixTolerance = kSinglePrecision ? 1e-5f : 1e-12;
 constexpr mfem::real_t kTangentTolerance = kSinglePrecision ? 5e-2f : 5e-5;
 
-class FixedLoadState final : public plugin::IterAuxilliary
+class FixedLoadContext final : public plugin::NonlinearStepContext
 {
 public:
-    explicit FixedLoadState( const mfem::real_t loadFactor )
+    explicit FixedLoadContext( const mfem::real_t loadFactor )
     {
         SetDelta( loadFactor );
     }
@@ -92,8 +92,8 @@ TEST( ThermalStrain, IsComposedOutsideMaterialAndScalesWithLoadFactor )
     integrator.setNonlinear( false );
     integrator.AddStressFreeDeformation( thermalExpansionModel );
 
-    FixedLoadState unitLoad( 1. );
-    integrator.SetIterAux( &unitLoad );
+    FixedLoadContext unitLoad( 1. );
+    integrator.SetStepContext( &unitLoad );
 
     mfem::Vector constrainedDisplacement( element->GetDof() * element->GetDim() );
     constrainedDisplacement = 0.;
@@ -106,14 +106,14 @@ TEST( ThermalStrain, IsComposedOutsideMaterialAndScalesWithLoadFactor )
     integrator.AssembleElementVector( *element, *transformation, freeExpansion, freeResidual );
     EXPECT_LE( freeResidual.Norml2(), kResidualTolerance * ( 1. + constrainedResidual.Norml2() ) );
 
-    FixedLoadState zeroLoad( 0. );
-    integrator.SetIterAux( &zeroLoad );
+    FixedLoadContext zeroLoad( 0. );
+    integrator.SetStepContext( &zeroLoad );
     mfem::Vector zeroLoadResidual;
     integrator.AssembleElementVector( *element, *transformation, constrainedDisplacement, zeroLoadResidual );
     EXPECT_LE( zeroLoadResidual.Norml2(), kResidualTolerance );
 
-    FixedLoadState halfLoad( .5 );
-    integrator.SetIterAux( &halfLoad );
+    FixedLoadContext halfLoad( .5 );
+    integrator.SetStepContext( &halfLoad );
     const mfem::Vector halfExpansion = UniformExpansion( *element, *transformation, targetStrain * .5 );
     mfem::Vector halfLoadResidual;
     integrator.AssembleElementVector( *element, *transformation, halfExpansion, halfLoadResidual );
@@ -126,7 +126,7 @@ TEST( ThermalStrain, IsComposedOutsideMaterialAndScalesWithLoadFactor )
     plugin::IntegrationPointStorage referencePointStorage( &mesh );
     plugin::NonlinearElasticityIntegrator referenceIntegrator( referenceMaterial, referencePointStorage );
     referenceIntegrator.setNonlinear( false );
-    referenceIntegrator.SetIterAux( &halfLoad );
+    referenceIntegrator.SetStepContext( &halfLoad );
     mfem::DenseMatrix referenceTangent;
     referenceIntegrator.AssembleElementGrad( *element, *transformation, constrainedDisplacement, referenceTangent );
 
@@ -162,8 +162,8 @@ TEST( ThermalStrain, UsesMultiplicativeSplitAtLargeDeformation )
     plugin::NonlinearElasticityIntegrator integrator( material, pointStorage );
     integrator.AddStressFreeDeformation( thermalExpansionModel );
 
-    FixedLoadState unitLoad( 1. );
-    integrator.SetIterAux( &unitLoad );
+    FixedLoadContext unitLoad( 1. );
+    integrator.SetStepContext( &unitLoad );
 
     mfem::Vector constrainedDisplacement( element->GetDof() * element->GetDim() );
     constrainedDisplacement = 0.;

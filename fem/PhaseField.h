@@ -10,7 +10,7 @@
 
 namespace plugin
 {
-class PhaseFieldIntegrator : public BlockNonlinearFormIntegratorLambda
+class PhaseFieldIntegrator : public BlockStepAwareNonlinearFormIntegrator
 {
     struct PointData
     {
@@ -23,7 +23,7 @@ class PhaseFieldIntegrator : public BlockNonlinearFormIntegratorLambda
 
 public:
     PhaseFieldIntegrator( PhaseFieldElasticMaterial& m, IntegrationPointStorage& pointStorage )
-        : BlockNonlinearFormIntegratorLambda(), mMaterialModel( &m ), mPointStorage{ pointStorage }
+        : BlockStepAwareNonlinearFormIntegrator(), mMaterialModel( &m ), mPointStorage{ pointStorage }
     {
     }
 
@@ -63,11 +63,11 @@ protected:
     mfem::DenseMatrix mDShape, mGShape;
 };
 
-class BlockNonlinearDirichletPenaltyIntegrator : public BlockNonlinearFormIntegratorLambda
+class BlockNonlinearDirichletPenaltyIntegrator : public BlockStepAwareNonlinearFormIntegrator
 {
 public:
     BlockNonlinearDirichletPenaltyIntegrator( mfem::VectorCoefficient& QG, mfem::VectorCoefficient& HG )
-        : BlockNonlinearFormIntegratorLambda(), mIntegrator( QG, HG )
+        : BlockStepAwareNonlinearFormIntegrator(), mIntegrator( QG, HG )
     {
     }
 
@@ -85,10 +85,10 @@ public:
                                    const mfem::Array<const mfem::Vector*>& elfun,
                                    const mfem::Array2D<mfem::DenseMatrix*>& elmats );
 
-    virtual void SetIterAux( IterAuxilliary const* ptr )
+    virtual void SetStepContext( NonlinearStepContext const* ptr )
     {
-        mIterAux = ptr;
-        mIntegrator.SetIterAux( ptr );
+        mStepContext = ptr;
+        mIntegrator.SetStepContext( ptr );
     }
 
 protected:

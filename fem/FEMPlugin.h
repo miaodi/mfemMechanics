@@ -12,7 +12,7 @@
 
 namespace plugin
 {
-class IterAuxilliary;
+class NonlinearStepContext;
 
 Eigen::MatrixXr mapper( const int dim, const int dof );
 
@@ -170,36 +170,37 @@ protected:
     ElasticMaterial* mMaterialModel{ nullptr };
 };
 
-class NonlinearFormIntegratorLambda : public mfem::NonlinearFormIntegrator
+class StepAwareNonlinearFormIntegrator : public mfem::NonlinearFormIntegrator
 {
 public:
-    NonlinearFormIntegratorLambda() : mfem::NonlinearFormIntegrator()
+    StepAwareNonlinearFormIntegrator() : mfem::NonlinearFormIntegrator()
     {
     }
 
-    virtual ~NonlinearFormIntegratorLambda()
+    virtual ~StepAwareNonlinearFormIntegrator()
     {
     }
 
-    void SetIterAux( IterAuxilliary const* ptr )
+    void SetStepContext( NonlinearStepContext const* ptr )
     {
-        mIterAux = ptr;
+        mStepContext = ptr;
     }
 
     virtual void BeginStep()
     {
-        MFEM_VERIFY( mIterAuxStackSize < mIterAuxStack.size(), "Integrator nesting exceeds the supported depth." );
-        mIterAuxStack[mIterAuxStackSize++] = mIterAux;
+        MFEM_VERIFY( mStepContextStackSize < mStepContextStack.size(),
+                     "Integrator nesting exceeds the supported depth." );
+        mStepContextStack[mStepContextStackSize++] = mStepContext;
     }
 
     virtual void CommitStep()
     {
-        RestoreIterAux();
+        RestoreStepContext();
     }
 
     virtual void RollbackStep()
     {
-        RestoreIterAux();
+        RestoreStepContext();
     }
 
     virtual void RevertStep()
@@ -207,22 +208,22 @@ public:
     }
 
 protected:
-    void RestoreIterAux()
+    void RestoreStepContext()
     {
-        MFEM_VERIFY( mIterAuxStackSize > 0, "Integrator step completion requires a matching BeginStep." );
-        mIterAuxStackSize--;
-        if ( mIterAuxStackSize > 0 )
+        MFEM_VERIFY( mStepContextStackSize > 0, "Integrator step completion requires a matching BeginStep." );
+        mStepContextStackSize--;
+        if ( mStepContextStackSize > 0 )
         {
-            mIterAux = mIterAuxStack[mIterAuxStackSize - 1];
+            mStepContext = mStepContextStack[mStepContextStackSize - 1];
         }
     }
 
-    IterAuxilliary const* mIterAux{ nullptr };
-    std::array<IterAuxilliary const*, 32> mIterAuxStack{};
-    std::size_t mIterAuxStackSize{ 0 };
+    NonlinearStepContext const* mStepContext{ nullptr };
+    std::array<NonlinearStepContext const*, 32> mStepContextStack{};
+    std::size_t mStepContextStackSize{ 0 };
 };
 
-class NonlinearElasticityIntegrator : public NonlinearFormIntegratorLambda
+class NonlinearElasticityIntegrator : public StepAwareNonlinearFormIntegrator
 {
 public:
     NonlinearElasticityIntegrator( ElasticMaterial& m, IntegrationPointStorage& pointStorage )
@@ -311,10 +312,10 @@ protected:
     bool mNonlinear{ true };
 };
 
-class NonlinearVectorBoundaryLFIntegrator : public NonlinearFormIntegratorLambda
+class NonlinearVectorBoundaryLFIntegrator : public StepAwareNonlinearFormIntegrator
 {
 public:
-    NonlinearVectorBoundaryLFIntegrator( mfem::VectorCoefficient& QG ) : NonlinearFormIntegratorLambda(), Q( QG )
+    NonlinearVectorBoundaryLFIntegrator( mfem::VectorCoefficient& QG ) : StepAwareNonlinearFormIntegrator(), Q( QG )
     {
     }
 
@@ -335,10 +336,10 @@ protected:
     mfem::VectorCoefficient& Q;
 };
 
-class NonlinearPressureIntegrator : public NonlinearFormIntegratorLambda
+class NonlinearPressureIntegrator : public StepAwareNonlinearFormIntegrator
 {
 public:
-    NonlinearPressureIntegrator( mfem::Coefficient& QG ) : NonlinearFormIntegratorLambda(), Q( QG )
+    NonlinearPressureIntegrator( mfem::Coefficient& QG ) : StepAwareNonlinearFormIntegrator(), Q( QG )
     {
     }
 
@@ -362,10 +363,11 @@ protected:
     mfem::Coefficient& Q;
 };
 
-class NonlinearCompositeSolidShellIntegrator : public NonlinearFormIntegratorLambda
+class NonlinearCompositeSolidShellIntegrator : public StepAwareNonlinearFormIntegrator
 {
 public:
-    NonlinearCompositeSolidShellIntegrator( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{ &m }
+    NonlinearCompositeSolidShellIntegrator( ElasticMaterial& m )
+        : StepAwareNonlinearFormIntegrator(), mMaterialModel{ &m }
     {
         mL.resize( 5, 24 );
         mH.resize( 5, 5 );
@@ -417,11 +419,11 @@ protected:
     bool mNonlinear{ true };
 };
 
-class NonlinearDirichletPenaltyIntegrator : public NonlinearFormIntegratorLambda
+class NonlinearDirichletPenaltyIntegrator : public StepAwareNonlinearFormIntegrator
 {
 public:
     NonlinearDirichletPenaltyIntegrator( mfem::VectorCoefficient& QG, mfem::VectorCoefficient& HG )
-        : NonlinearFormIntegratorLambda(), Q( QG ), H( HG )
+        : StepAwareNonlinearFormIntegrator(), Q( QG ), H( HG )
     {
     }
 
@@ -508,36 +510,37 @@ protected:
     mfem::real_t p;
 };
 
-class BlockNonlinearFormIntegratorLambda : public mfem::BlockNonlinearFormIntegrator
+class BlockStepAwareNonlinearFormIntegrator : public mfem::BlockNonlinearFormIntegrator
 {
 public:
-    BlockNonlinearFormIntegratorLambda() : mfem::BlockNonlinearFormIntegrator()
+    BlockStepAwareNonlinearFormIntegrator() : mfem::BlockNonlinearFormIntegrator()
     {
     }
 
-    virtual ~BlockNonlinearFormIntegratorLambda()
+    virtual ~BlockStepAwareNonlinearFormIntegrator()
     {
     }
 
-    virtual void SetIterAux( IterAuxilliary const* ptr )
+    virtual void SetStepContext( NonlinearStepContext const* ptr )
     {
-        mIterAux = ptr;
+        mStepContext = ptr;
     }
 
     virtual void BeginStep()
     {
-        MFEM_VERIFY( mIterAuxStackSize < mIterAuxStack.size(), "Integrator nesting exceeds the supported depth." );
-        mIterAuxStack[mIterAuxStackSize++] = mIterAux;
+        MFEM_VERIFY( mStepContextStackSize < mStepContextStack.size(),
+                     "Integrator nesting exceeds the supported depth." );
+        mStepContextStack[mStepContextStackSize++] = mStepContext;
     }
 
     virtual void CommitStep()
     {
-        RestoreIterAux();
+        RestoreStepContext();
     }
 
     virtual void RollbackStep()
     {
-        RestoreIterAux();
+        RestoreStepContext();
     }
 
     virtual void RevertStep()
@@ -545,29 +548,29 @@ public:
     }
 
 protected:
-    void RestoreIterAux()
+    void RestoreStepContext()
     {
-        MFEM_VERIFY( mIterAuxStackSize > 0, "Integrator step completion requires a matching BeginStep." );
-        mIterAuxStackSize--;
-        if ( mIterAuxStackSize > 0 )
+        MFEM_VERIFY( mStepContextStackSize > 0, "Integrator step completion requires a matching BeginStep." );
+        mStepContextStackSize--;
+        if ( mStepContextStackSize > 0 )
         {
-            mIterAux = mIterAuxStack[mIterAuxStackSize - 1];
+            mStepContext = mStepContextStack[mStepContextStackSize - 1];
         }
     }
 
-    IterAuxilliary const* mIterAux{ nullptr };
-    std::array<IterAuxilliary const*, 32> mIterAuxStack{};
-    std::size_t mIterAuxStackSize{ 0 };
+    NonlinearStepContext const* mStepContext{ nullptr };
+    std::array<NonlinearStepContext const*, 32> mStepContextStack{};
+    std::size_t mStepContextStackSize{ 0 };
 };
 
-class TempDependentNonlinearElasticityIntegrator : public BlockNonlinearFormIntegratorLambda, public NonlinearElasticityIntegrator
+class TempDependentNonlinearElasticityIntegrator : public BlockStepAwareNonlinearFormIntegrator, public NonlinearElasticityIntegrator
 {
 private:
     const mfem::Array2D<mfem::DenseMatrix*>* mElmats;
 
 public:
     TempDependentNonlinearElasticityIntegrator( ElasticMaterial& m, IntegrationPointStorage& pointStorage )
-        : BlockNonlinearFormIntegratorLambda(), NonlinearElasticityIntegrator( m, pointStorage )
+        : BlockStepAwareNonlinearFormIntegrator(), NonlinearElasticityIntegrator( m, pointStorage )
     {
     }
 
@@ -585,10 +588,10 @@ public:
                                       const mfem::Array<const mfem::Vector*>& elfun,
                                       const mfem::Array2D<mfem::DenseMatrix*>& elmats );
 
-    virtual void SetIterAux( IterAuxilliary const* ptr )
+    virtual void SetStepContext( NonlinearStepContext const* ptr )
     {
-        BlockNonlinearFormIntegratorLambda::SetIterAux( ptr );
-        NonlinearElasticityIntegrator::SetIterAux( ptr );
+        BlockStepAwareNonlinearFormIntegrator::SetStepContext( ptr );
+        NonlinearElasticityIntegrator::SetStepContext( ptr );
     }
 };
 } // namespace plugin

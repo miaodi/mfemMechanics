@@ -163,7 +163,7 @@ int main( int argc, char* argv[] )
     omp_set_num_threads( 10 );
     auto j_gmres = new UMFPackSolver();
     auto newton_solver = new plugin::MultiNewtonAdaptive<plugin::NewtonForPhaseField>();
-    intg->SetIterAux( newton_solver );
+    intg->SetStepContext( newton_solver );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;

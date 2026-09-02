@@ -9,10 +9,10 @@
 
 namespace plugin
 {
-class IterAuxilliary
+class NonlinearStepContext
 {
 public:
-    IterAuxilliary()
+    NonlinearStepContext()
     {
     }
     int IterNumber() const
@@ -78,7 +78,7 @@ protected:
     mutable std::function<void( bool, int, mfem::real_t, mfem::real_t& )> L_update_func{ nullptr };
 };
 
-class NewtonLineSearch : public mfem::NewtonSolver, public IterAuxilliary
+class NewtonLineSearch : public mfem::NewtonSolver, public NonlinearStepContext
 {
 protected:
     mfem::real_t max_eta{ 10. };
@@ -90,7 +90,7 @@ protected:
     mutable mfem::Vector aux_line_search;
 
 public:
-    NewtonLineSearch() : IterAuxilliary()
+    NewtonLineSearch() : NonlinearStepContext()
     {
     }
 
@@ -154,7 +154,7 @@ public:
     virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;
 };
 
-class ALMBase : public mfem::IterativeSolver, public IterAuxilliary
+class ALMBase : public mfem::IterativeSolver, public NonlinearStepContext
 {
 protected:
     mfem::real_t InnerProduct( const mfem::Vector& a, const mfem::real_t la, const mfem::Vector& b, const mfem::real_t lb ) const;
@@ -172,7 +172,7 @@ protected:
     };
 
 public:
-    ALMBase() : IterAuxilliary()
+    ALMBase() : NonlinearStepContext()
     {
         converged = true;
     }

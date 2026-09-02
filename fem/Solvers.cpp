@@ -12,14 +12,14 @@ namespace plugin
 {
 namespace
 {
-template <typename IntegratorWithAux, typename Integrator>
-void RegisterIntegrators( const mfem::Array<Integrator*>& integrators, const IterAuxilliary* iter_aux )
+template <typename StepAwareIntegrator, typename Integrator>
+void RegisterIntegrators( const mfem::Array<Integrator*>& integrators, const NonlinearStepContext* step_context )
 {
     for ( int i = 0; i < integrators.Size(); i++ )
     {
-        if ( auto with_aux = dynamic_cast<IntegratorWithAux*>( integrators[i] ) )
+        if ( auto step_aware = dynamic_cast<StepAwareIntegrator*>( integrators[i] ) )
         {
-            with_aux->SetIterAux( iter_aux );
+            step_aware->SetStepContext( step_context );
         }
     }
 }
@@ -75,8 +75,8 @@ void CollectIntegratorLifecycle( const mfem::Array<Integrator*>& integrators, st
 
 struct IntegratorLifecycle
 {
-    std::vector<NonlinearFormIntegratorLambda*> nonlinear;
-    std::vector<BlockNonlinearFormIntegratorLambda*> block;
+    std::vector<StepAwareNonlinearFormIntegrator*> nonlinear;
+    std::vector<BlockStepAwareNonlinearFormIntegrator*> block;
 };
 
 IntegratorLifecycle CollectIntegratorLifecycle( const mfem::Operator* oper )
@@ -145,8 +145,8 @@ void BeginIntegratorLifecycle( const mfem::Operator* oper )
 }
 
 void ApplyIntegratorLifecycle( const mfem::Operator* oper,
-                               void ( NonlinearFormIntegratorLambda::*nonlinear_lifecycle )(),
-                               void ( BlockNonlinearFormIntegratorLambda::*block_lifecycle )() )
+                               void ( StepAwareNonlinearFormIntegrator::*nonlinear_lifecycle )(),
+                               void ( BlockStepAwareNonlinearFormIntegrator::*block_lifecycle )() )
 {
     if ( auto nonlinearform = dynamic_cast<const mfem::NonlinearForm*>( oper ) )
     {
@@ -168,10 +168,10 @@ void ApplyIntegratorLifecycle( const mfem::Operator* oper,
 class IntegratorStep
 {
 public:
-    IntegratorStep( const IterAuxilliary& iter_aux, const mfem::Operator* oper )
-        : mIterAux( iter_aux ), mOperator( oper )
+    IntegratorStep( const NonlinearStepContext& step_context, const mfem::Operator* oper )
+        : mStepContext( step_context ), mOperator( oper )
     {
-        mIterAux.BeginStep( mOperator );
+        mStepContext.BeginStep( mOperator );
         mActive = true;
     }
 
@@ -184,7 +184,7 @@ public:
 
         try
         {
-            mIterAux.RollbackStep( mOperator );
+            mStepContext.RollbackStep( mOperator );
         }
         catch ( ... )
         {
@@ -193,18 +193,18 @@ public:
 
     void Commit()
     {
-        mIterAux.CommitStep( mOperator );
+        mStepContext.CommitStep( mOperator );
         mActive = false;
     }
 
     void Rollback()
     {
-        mIterAux.RollbackStep( mOperator );
+        mStepContext.RollbackStep( mOperator );
         mActive = false;
     }
 
 private:
-    const IterAuxilliary& mIterAux;
+    const NonlinearStepContext& mStepContext;
     const mfem::Operator* mOperator;
     bool mActive{ false };
 };
@@ -255,48 +255,49 @@ mfem::real_t JacobianDeterminant( const mfem::Operator& jacobian, const mfem::So
 }
 } // namespace
 
-void IterAuxilliary::RegisterToIntegrators( const mfem::Operator* oper ) const
+void NonlinearStepContext::RegisterToIntegrators( const mfem::Operator* oper ) const
 {
     if ( auto nonlinearform = dynamic_cast<const mfem::NonlinearForm*>( oper ) )
     {
-        RegisterIntegrators<NonlinearFormIntegratorLambda>( *nonlinearform->GetDNFI(), this );
-        RegisterIntegrators<NonlinearFormIntegratorLambda>( *nonlinearform->GetBNFI(), this );
-        RegisterIntegrators<NonlinearFormIntegratorLambda>( nonlinearform->GetInteriorFaceIntegrators(), this );
-        RegisterIntegrators<NonlinearFormIntegratorLambda>( nonlinearform->GetBdrFaceIntegrators(), this );
+        RegisterIntegrators<StepAwareNonlinearFormIntegrator>( *nonlinearform->GetDNFI(), this );
+        RegisterIntegrators<StepAwareNonlinearFormIntegrator>( *nonlinearform->GetBNFI(), this );
+        RegisterIntegrators<StepAwareNonlinearFormIntegrator>( nonlinearform->GetInteriorFaceIntegrators(), this );
+        RegisterIntegrators<StepAwareNonlinearFormIntegrator>( nonlinearform->GetBdrFaceIntegrators(), this );
     }
 
     if ( auto nonlinearform = dynamic_cast<const mfem::BlockNonlinearForm*>( oper ) )
     {
-        RegisterIntegrators<BlockNonlinearFormIntegratorLambda>(
+        RegisterIntegrators<BlockStepAwareNonlinearFormIntegrator>(
             nonlinearform->*BlockNonlinearFormAccess::DomainIntegrators(), this );
-        RegisterIntegrators<BlockNonlinearFormIntegratorLambda>(
+        RegisterIntegrators<BlockStepAwareNonlinearFormIntegrator>(
             nonlinearform->*BlockNonlinearFormAccess::BoundaryIntegrators(), this );
-        RegisterIntegrators<BlockNonlinearFormIntegratorLambda>(
+        RegisterIntegrators<BlockStepAwareNonlinearFormIntegrator>(
             nonlinearform->*BlockNonlinearFormAccess::InteriorFaceIntegrators(), this );
-        RegisterIntegrators<BlockNonlinearFormIntegratorLambda>(
+        RegisterIntegrators<BlockStepAwareNonlinearFormIntegrator>(
             nonlinearform->*BlockNonlinearFormAccess::BoundaryFaceIntegrators(), this );
     }
 }
 
-void IterAuxilliary::BeginStep( const mfem::Operator* oper ) const
+void NonlinearStepContext::BeginStep( const mfem::Operator* oper ) const
 {
     RegisterToIntegrators( oper );
     BeginIntegratorLifecycle( oper );
 }
 
-void IterAuxilliary::CommitStep( const mfem::Operator* oper ) const
+void NonlinearStepContext::CommitStep( const mfem::Operator* oper ) const
 {
-    ApplyIntegratorLifecycle( oper, &NonlinearFormIntegratorLambda::CommitStep, &BlockNonlinearFormIntegratorLambda::CommitStep );
+    ApplyIntegratorLifecycle( oper, &StepAwareNonlinearFormIntegrator::CommitStep, &BlockStepAwareNonlinearFormIntegrator::CommitStep );
 }
 
-void IterAuxilliary::RollbackStep( const mfem::Operator* oper ) const
+void NonlinearStepContext::RollbackStep( const mfem::Operator* oper ) const
 {
-    ApplyIntegratorLifecycle( oper, &NonlinearFormIntegratorLambda::RollbackStep, &BlockNonlinearFormIntegratorLambda::RollbackStep );
+    ApplyIntegratorLifecycle( oper, &StepAwareNonlinearFormIntegrator::RollbackStep,
+                              &BlockStepAwareNonlinearFormIntegrator::RollbackStep );
 }
 
-void IterAuxilliary::RevertStep( const mfem::Operator* oper ) const
+void NonlinearStepContext::RevertStep( const mfem::Operator* oper ) const
 {
-    ApplyIntegratorLifecycle( oper, &NonlinearFormIntegratorLambda::RevertStep, &BlockNonlinearFormIntegratorLambda::RevertStep );
+    ApplyIntegratorLifecycle( oper, &StepAwareNonlinearFormIntegrator::RevertStep, &BlockStepAwareNonlinearFormIntegrator::RevertStep );
 }
 
 void NewtonLineSearch::SetOperator( const mfem::Operator& op )

@@ -8,9 +8,9 @@ void PhaseFieldIntegrator::UpdateH( const int gauss, double& H )
 {
     auto& pd = mPointStorage.GetBodyPointData( gauss );
     // historical strain energy+ for KKT condition
-    if ( mIterAux->IterNumber() == 0 )
+    if ( mStepContext->IterNumber() == 0 )
     {
-        if ( mIterAux->StepNumber() == 0 )
+        if ( mStepContext->StepNumber() == 0 )
         {
             if ( !pd.get_val<PointData>( "H" ).has_value() )
                 pd.set_val<PointData>( "H", std::move( PointData() ) );
@@ -18,12 +18,12 @@ void PhaseFieldIntegrator::UpdateH( const int gauss, double& H )
         else
         {
             auto& H_data = pd.get_val<PointData>( "H" ).value().get();
-            if ( mIterAux->Convergence() )
+            if ( mStepContext->Convergence() )
             {
-                if ( mIterAux->StepNumber() > H_data.success_step )
+                if ( mStepContext->StepNumber() > H_data.success_step )
                 {
                     H_data.H_bac = H_data.H;
-                    H_data.success_step = mIterAux->StepNumber();
+                    H_data.success_step = mStepContext->StepNumber();
                 }
             }
             else
