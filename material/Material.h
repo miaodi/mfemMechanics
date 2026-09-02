@@ -19,7 +19,7 @@ public:
 
     virtual const Eigen::Vector6r& getGreenLagrangeStrainVector() const;
 
-    bool isSamllDeformation() const
+    bool isSmallDeformation() const
     {
         return mSmallDeformation;
     }
@@ -61,6 +61,15 @@ public:
     void setDeformationGradient( const Eigen::Matrix<mfem::real_t, 3, 3>& F )
     {
         mdxdX = &F;
+        mHasMechanicalStrain = false;
+    }
+
+    void setMechanicalStrain( const Eigen::Matrix3r& strain )
+    {
+        MFEM_VERIFY( SupportsMechanicalStrainInput(),
+                     "This material does not support an additive mechanical-strain input." );
+        mMechanicalStrain = strain;
+        mHasMechanicalStrain = true;
     }
 
     void setLargeDeformation( const bool flg )
@@ -68,9 +77,14 @@ public:
         mSmallDeformation = !flg;
     }
 
-    void setLambda( const double l )
+    void setLoadFactor( const mfem::real_t loadFactor )
     {
-        mLambda = l;
+        mLoadFactor = loadFactor;
+    }
+
+    virtual bool SupportsMechanicalStrainInput() const noexcept
+    {
+        return false;
     }
 
     Eigen::Vector6r getIntrinsicPK2StressVector() const;
@@ -87,11 +101,13 @@ protected:
     // moduli in current configuration
     Eigen::Matrix6r mCurModuli;
     const Eigen::Matrix3r* mdxdX{ nullptr };
+    Eigen::Matrix3r mMechanicalStrain;
+    bool mHasMechanicalStrain{ false };
     bool mSmallDeformation{ true };
 
     mfem::ElementTransformation* mEleTrans{ nullptr };
     const mfem::IntegrationPoint* mIntgP{ nullptr };
-    double mLambda{ 0 };
+    mfem::real_t mLoadFactor{ 0 };
     // intrinsic stress
     mfem::VectorCoefficient* mIntrinsicStress{ nullptr };
 
@@ -107,13 +123,13 @@ public:
     {
     }
 
-    double E() const
+    mfem::real_t E() const
     {
         MFEM_ASSERT( mEleTrans && mIntgP, "ElementTransformation or IntegrationPoint is not set" );
         return mE->Eval( *mEleTrans, *mIntgP );
     }
 
-    double Nu() const
+    mfem::real_t Nu() const
     {
         MFEM_ASSERT( mEleTrans && mIntgP, "ElementTransformation or IntegrationPoint is not set" );
         return mNu->Eval( *mEleTrans, *mIntgP );
@@ -123,50 +139,12 @@ public:
 
     virtual const Eigen::Vector6r& getPK2StressVector() const;
 
+    bool SupportsMechanicalStrainInput() const noexcept override
+    {
+        return true;
+    }
+
 protected:
     mfem::Coefficient* mE{ nullptr };
     mfem::Coefficient* mNu{ nullptr };
-};
-
-class IsotropicElasticThermalMaterial : public IsotropicElasticMaterial
-{
-public:
-    IsotropicElasticThermalMaterial( mfem::Coefficient& E, mfem::Coefficient& nu, mfem::Coefficient& cte )
-        : IsotropicElasticMaterial( E, nu ), mCTE( &cte )
-    {
-    }
-
-    double E() const
-    {
-        MFEM_ASSERT( mEleTrans && mIntgP, "ElementTransformation or IntegrationPoint is not set" );
-        return mE->Eval( *mEleTrans, *mIntgP );
-    }
-
-    double Nu() const
-    {
-        MFEM_ASSERT( mEleTrans && mIntgP, "ElementTransformation or IntegrationPoint is not set" );
-        return mNu->Eval( *mEleTrans, *mIntgP );
-    }
-
-    void setInitialTemp( const double t0 )
-    {
-        mT0 = t0;
-    }
-    void setFinalTemp( const double tf )
-    {
-        mTF = tf;
-    }
-
-    double CTE() const
-    {
-        MFEM_ASSERT( mEleTrans && mIntgP, "ElementTransformation or IntegrationPoint is not set" );
-        return mCTE->Eval( *mEleTrans, *mIntgP );
-    }
-
-    virtual Eigen::Matrix3r getGreenLagrangeStrainTensor() const;
-
-protected:
-    mfem::Coefficient* mCTE{ nullptr };
-    double mT0{ 0 };
-    double mTF{ 0 };
 };

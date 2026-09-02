@@ -19,7 +19,14 @@ mfem_mechanics_add_executable(
     GTest::gtest_main
     mfemMechanics::femplugin
 )
+mfem_mechanics_add_executable(
+    thermal_strain_test
+    thermal_strain_test.cpp
+    GTest::gtest_main
+    mfemMechanics::femplugin
+)
 
 gtest_discover_tests(autodiff_test)
 gtest_discover_tests(eigen_decomp_test)
 gtest_discover_tests(czm_history_test)
+gtest_discover_tests(thermal_strain_test)

@@ -1,6 +1,7 @@
 
 #pragma once
 #include "Material.h"
+#include "StressFreeDeformation.h"
 #include "util.h"
 #include <Eigen/Dense>
 #include <array>
@@ -227,6 +228,7 @@ public:
     NonlinearElasticityIntegrator( ElasticMaterial& m, IntegrationPointStorage& pointStorage )
         : mMaterialModel( &m ), mPointStorage{ pointStorage }
     {
+        mMaterialModel->setLargeDeformation( mNonlinear );
     }
 
     /** @brief Computes the integral of W(Jacobian(Trt)) over a target zone
@@ -269,12 +271,42 @@ public:
         return mNonlinear;
     }
 
+    void AddStressFreeDeformation( StressFreeDeformation& deformation )
+    {
+        mStressFreeDeformations.Add( deformation );
+    }
+
+    void ClearStressFreeDeformations()
+    {
+        mStressFreeDeformations.Clear();
+    }
+
 protected:
+    struct AssemblyKinematics
+    {
+        std::reference_wrapper<const Eigen::MatrixXr> ShapeGradient;
+        std::reference_wrapper<const Eigen::Matrix3r> DeformationGradient;
+        mfem::real_t VolumeScale;
+    };
+
+    AssemblyKinematics PrepareMaterialPoint( const Eigen::Matrix3r& deformationGradient,
+                                             const Eigen::MatrixXr& shapeGradient,
+                                             int dimension,
+                                             mfem::ElementTransformation& transformation,
+                                             const mfem::IntegrationPoint& integrationPoint,
+                                             mfem::real_t loadFactor );
+
     Eigen::Matrix<mfem::real_t, 3, 3> mdxdX;
     Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic> mB;
     Eigen::MatrixXr mGeomStiff;
+    Eigen::MatrixXr mElasticShapeGradient;
+    Eigen::Matrix3r mElasticDeformationGradient;
+    Eigen::Matrix3r mInverseStressFreeDeformationGradient;
+    Eigen::Matrix3r mMechanicalStrain;
+    Eigen::Matrix3r mStressFreeDeformationGradient;
     ElasticMaterial* mMaterialModel{ nullptr };
     IntegrationPointStorage& mPointStorage;
+    StressFreeDeformationModel mStressFreeDeformations;
     bool mOnlyGeomStiff{ false };
     bool mNonlinear{ true };
 };

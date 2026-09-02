@@ -2,6 +2,7 @@
 #include "Solvers.h"
 #include "util.h"
 #include <Eigen/Dense>
+#include <cmath>
 #include <iostream>
 #include <unsupported/Eigen/KroneckerProduct>
 
@@ -486,7 +487,7 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
     }
 
     const mfem::real_t ct = mIterAux->GetCurLambda();
-    mMaterialModel->setLambda( ct );
+    mMaterialModel->setLoadFactor( ct );
     mfem::real_t w;
     int dof = el.GetDof(), dim = el.GetDim();
 
@@ -515,26 +516,28 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
         mdxdX.block( 0, 0, dim, dim ) = u.transpose() * gShape;
         mdxdX += identity;
 
+        const AssemblyKinematics kinematics = PrepareMaterialPoint( mdxdX, gShape, dim, Ttr, ip, ct );
+        const auto& assemblyGradient = kinematics.ShapeGradient.get();
+        const auto& constitutiveDeformationGradient = kinematics.DeformationGradient.get();
         if ( isNonlinear() )
         {
-            largeDeformMatrixB( dof, dim, gShape, mdxdX, mB );
+            largeDeformMatrixB( dof, dim, assemblyGradient, constitutiveDeformationGradient, mB );
         }
         else
         {
-            smallDeformMatrixB( dof, dim, gShape, mB );
+            smallDeformMatrixB( dof, dim, assemblyGradient, mB );
         }
 
-        mMaterialModel->at( Ttr, ip );
-        mMaterialModel->setDeformationGradient( mdxdX );
         mMaterialModel->updateRefModuli();
 
-        w = ip.weight * mPointStorage.GetDetdXdXi( i );
+        w = ip.weight * mPointStorage.GetDetdXdXi( i ) * kinematics.VolumeScale;
         if ( !onlyGeomStiff() )
             eigenMat += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
         if ( isNonlinear() || onlyGeomStiff() )
         {
-            mGeomStiff =
-                ( w * gShape * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) * gShape.transpose() ).eval();
+            mGeomStiff = ( w * assemblyGradient * mMaterialModel->getPK2StressTensor().block( 0, 0, dim, dim ) *
+                           assemblyGradient.transpose() )
+                             .eval();
             for ( int j = 0; j < dim; j++ )
             {
                 eigenMat.block( j * dof, j * dof, dof, dof ) += mGeomStiff;
@@ -553,7 +556,7 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
         mfem::mfem_error( "IterAux is not provided yet.\n" );
     }
     const mfem::real_t ct = mIterAux->GetCurLambda();
-    mMaterialModel->setLambda( ct );
+    mMaterialModel->setLoadFactor( ct );
 
     mfem::real_t w;
     int dof = el.GetDof(), dim = el.GetDim();
@@ -581,23 +584,70 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
         mdxdX.setZero();
         mdxdX.block( 0, 0, dim, dim ) = u.transpose() * gShape;
         mdxdX += identity;
+        const AssemblyKinematics kinematics = PrepareMaterialPoint( mdxdX, gShape, dim, Ttr, ip, ct );
+        const auto& assemblyGradient = kinematics.ShapeGradient.get();
+        const auto& constitutiveDeformationGradient = kinematics.DeformationGradient.get();
         if ( isNonlinear() )
         {
-            largeDeformMatrixB( dof, dim, gShape, mdxdX, mB );
+            largeDeformMatrixB( dof, dim, assemblyGradient, constitutiveDeformationGradient, mB );
         }
         else
         {
-            smallDeformMatrixB( dof, dim, gShape, mB );
+            smallDeformMatrixB( dof, dim, assemblyGradient, mB );
         }
-        mMaterialModel->at( Ttr, ip );
-        mMaterialModel->setDeformationGradient( mdxdX );
         mMaterialModel->updateRefModuli();
 
-        w = ip.weight * mPointStorage.GetDetdXdXi( i );
+        w = ip.weight * mPointStorage.GetDetdXdXi( i ) * kinematics.VolumeScale;
         eigenVec += w * ( mB.transpose() * mMaterialModel->getPK2StressVector() );
     }
     // std::cout<<"Rhs:\n";
     // std::cout<<eigenVec<<std::endl;
+}
+
+NonlinearElasticityIntegrator::AssemblyKinematics NonlinearElasticityIntegrator::PrepareMaterialPoint(
+    const Eigen::Matrix3r& deformationGradient,
+    const Eigen::MatrixXr& shapeGradient,
+    const int dimension,
+    mfem::ElementTransformation& transformation,
+    const mfem::IntegrationPoint& integrationPoint,
+    const mfem::real_t loadFactor )
+{
+    mMaterialModel->at( transformation, integrationPoint );
+    mMaterialModel->setDeformationGradient( deformationGradient );
+
+    if ( mStressFreeDeformations.Empty() )
+    {
+        return { std::cref( shapeGradient ), std::cref( deformationGradient ), 1. };
+    }
+
+    if ( !isNonlinear() )
+    {
+        MFEM_VERIFY( mMaterialModel->SupportsMechanicalStrainInput(),
+                     "Small-strain stress-free deformations require a strain-based material response." );
+        mMechanicalStrain = mMaterialModel->getGreenLagrangeStrainTensor();
+        mMechanicalStrain -= mStressFreeDeformations.EvalSmallStrain( transformation, integrationPoint, loadFactor );
+        mMaterialModel->setMechanicalStrain( mMechanicalStrain );
+        return { std::cref( shapeGradient ), std::cref( deformationGradient ), 1. };
+    }
+
+    mStressFreeDeformationGradient = mStressFreeDeformations.EvalDeformationGradient( transformation, integrationPoint, loadFactor );
+    if ( dimension < 3 )
+    {
+        MFEM_VERIFY(
+            mStressFreeDeformationGradient.topRightCorner( dimension, 3 - dimension ).isZero() &&
+                mStressFreeDeformationGradient.bottomLeftCorner( 3 - dimension, dimension ).isZero(),
+            "A reduced-dimensional stress-free deformation cannot couple active and out-of-plane directions." );
+    }
+    const mfem::real_t activeDeterminant = mStressFreeDeformationGradient.topLeftCorner( dimension, dimension ).determinant();
+    const mfem::real_t volumeScale = mStressFreeDeformationGradient.determinant();
+    MFEM_VERIFY( std::isfinite( activeDeterminant ) && activeDeterminant > 0. && std::isfinite( volumeScale ) && volumeScale > 0.,
+                 "The stress-free deformation must preserve orientation." );
+
+    mInverseStressFreeDeformationGradient = mStressFreeDeformationGradient.inverse();
+    mElasticDeformationGradient.noalias() = deformationGradient * mInverseStressFreeDeformationGradient;
+    mElasticShapeGradient.noalias() = shapeGradient * mInverseStressFreeDeformationGradient.topLeftCorner( dimension, dimension );
+    mMaterialModel->setDeformationGradient( mElasticDeformationGradient );
+    return { std::cref( mElasticShapeGradient ), std::cref( mElasticDeformationGradient ), volumeScale };
 }
 
 void NonlinearVectorBoundaryLFIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
@@ -831,7 +881,7 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
         mfem::mfem_error( "IterAux is not provided yet.\n" );
     }
 
-    mMaterialModel->setLambda( mIterAux->GetCurLambda() );
+    mMaterialModel->setLoadFactor( mIterAux->GetCurLambda() );
 
     mfem::real_t w = 0;
     int dof = el.GetDof(), dim = el.GetDim();

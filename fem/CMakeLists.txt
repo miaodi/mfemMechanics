@@ -1,4 +1,4 @@
-add_library(femplugin FEMPlugin.cpp PostProc.cpp Solvers.cpp CZM.cpp AMR.cpp PhaseField.cpp)
+add_library(femplugin FEMPlugin.cpp PostProc.cpp StressFreeDeformation.cpp Solvers.cpp CZM.cpp AMR.cpp PhaseField.cpp)
 add_library(mfemMechanics::femplugin ALIAS femplugin)
 
 target_compile_features(femplugin PUBLIC cxx_std_17)

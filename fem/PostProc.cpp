@@ -19,7 +19,31 @@ void StressCoefficient::Eval( mfem::Vector& V, mfem::ElementTransformation& T, c
     F += Eigen::Matrix3r::Identity();
 
     materialModel->at( T, ip );
+    materialModel->setLoadFactor( loadFactor );
     materialModel->setDeformationGradient( F );
+    if ( !stressFreeDeformations.Empty() )
+    {
+        if ( materialModel->isSmallDeformation() )
+        {
+            MFEM_VERIFY( materialModel->SupportsMechanicalStrainInput(),
+                         "Small-strain stress-free deformations require a strain-based material response." );
+            mechanicalStrain = materialModel->getGreenLagrangeStrainTensor();
+            mechanicalStrain -= stressFreeDeformations.EvalSmallStrain( T, ip, loadFactor );
+            materialModel->setMechanicalStrain( mechanicalStrain );
+        }
+        else
+        {
+            stressFreeF = stressFreeDeformations.EvalDeformationGradient( T, ip, loadFactor );
+            if ( dim < 3 )
+            {
+                MFEM_VERIFY(
+                    stressFreeF.topRightCorner( dim, 3 - dim ).isZero() && stressFreeF.bottomLeftCorner( 3 - dim, dim ).isZero(),
+                    "A reduced-dimensional stress-free deformation cannot couple active and out-of-plane directions." );
+            }
+            elasticF.noalias() = F * stressFreeF.inverse();
+            materialModel->setDeformationGradient( elasticF );
+        }
+    }
     materialModel->updateRefModuli();
     auto vector = materialModel->getCauchyStressVector();
 

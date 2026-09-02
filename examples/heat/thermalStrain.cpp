@@ -206,13 +206,15 @@ int main( int argc, char* argv[] )
     CTE = 1000000;
     PWConstCoefficient CTE_func( CTE );
 
-    IsotropicElasticThermalMaterial ietm( E_func, nu_func, CTE_func );
-    ietm.setInitialTemp( 0 );
-    ietm.setFinalTemp( f_temp );
+    ConstantCoefficient reference_temperature( 0. );
+    ConstantCoefficient target_temperature( f_temp );
+    plugin::IsotropicThermalExpansion thermal_expansion( CTE_func, target_temperature, reference_temperature );
+    IsotropicElasticMaterial material( E_func, nu_func );
 
     plugin::IntegrationPointStorage pointStorage( pmesh );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( ietm, pointStorage );
+    auto intg = new plugin::NonlinearElasticityIntegrator( material, pointStorage );
+    intg->AddStressFreeDeformation( thermal_expansion );
     // intg->setNonlinear( true );
     auto* nlf = new ParNonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );
@@ -240,7 +242,7 @@ int main( int argc, char* argv[] )
     // Set up the Jacobian solver
     PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
 
-    auto newton_solver = new plugin::MultiNewtonAdaptive( fespace->GetComm() );
+    auto newton_solver = new plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch>( fespace->GetComm() );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;

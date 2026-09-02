@@ -20,13 +20,13 @@ public:
 
     virtual Eigen::Matrix3r getPK2StressTensor() const;
 
-    double Mu() const
+    mfem::real_t Mu() const
     {
         MFEM_ASSERT( mEleTrans && mIntgP, "ElementTransformation or IntegrationPoint is not set" );
         return mMu->Eval( *mEleTrans, *mIntgP );
     }
 
-    double Lambda() const
+    mfem::real_t Lambda() const
     {
         MFEM_ASSERT( mEleTrans && mIntgP, "ElementTransformation or IntegrationPoint is not set" );
         return mLambda->Eval( *mEleTrans, *mIntgP );

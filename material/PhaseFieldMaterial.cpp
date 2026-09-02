@@ -33,7 +33,7 @@ std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::V
             const double lambda = ( Nu * E ) / ( ( 1 + Nu ) * ( 1. - 2. * Nu ) );
 
             auto [strainPos, strainNeg] = util::StrainSplit( strainTensor );
-            const T psiPos = mLambda / 2 * autodiff::detail::pow( curlyBracPos( strainTensor.trace() ), 2 ) +
+            const T psiPos = lambda / 2 * autodiff::detail::pow( curlyBracPos( strainTensor.trace() ), 2 ) +
                              mu * strainPos.squaredNorm();
             if ( params[0] == 0 )
                 return psiPos;

@@ -1,5 +1,6 @@
 #pragma once
 #include "Material.h"
+#include "StressFreeDeformation.h"
 #include "mfem.hpp"
 #include <Eigen/Dense>
 
@@ -14,6 +15,11 @@ protected:
     ElasticMaterial* materialModel{ nullptr };
     int dim;
     Eigen::Matrix3r F;
+    Eigen::Matrix3r elasticF;
+    Eigen::Matrix3r mechanicalStrain;
+    Eigen::Matrix3r stressFreeF;
+    StressFreeDeformationModel stressFreeDeformations;
+    mfem::real_t loadFactor{ 1. };
 
 public:
     StressCoefficient( int dim, ElasticMaterial& mat );
@@ -22,7 +28,22 @@ public:
     {
         u = &u_;
     }
-    
+
+    void AddStressFreeDeformation( StressFreeDeformation& deformation )
+    {
+        stressFreeDeformations.Add( deformation );
+    }
+
+    void ClearStressFreeDeformations()
+    {
+        stressFreeDeformations.Clear();
+    }
+
+    void SetLoadFactor( const mfem::real_t value )
+    {
+        loadFactor = value;
+    }
+
     mfem::GridFunction* GetDisplacement()
     {
         return u;
