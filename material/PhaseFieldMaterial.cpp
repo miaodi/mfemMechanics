@@ -1,6 +1,8 @@
 #include "PhaseFieldMaterial.h"
 #include "util.h"
 #include <SymmetricEigensolver3x3.hpp>
+#include <algorithm>
+#include <cmath>
 
 PhaseFieldElasticMaterial::PhaseFieldElasticMaterial( mfem::Coefficient& E, mfem::Coefficient& nu, StrainEnergyType set )
     : ElasticMaterial(), mE( &E ), mNu( &nu ), mSET( set )
@@ -18,7 +20,8 @@ std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::V
     case PhaseFieldElasticMaterial::StrainEnergyType::Amor:
     {
         // zhou2018phase
-        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXr& params ) {
+        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXr& params )
+        {
             using T = typename std::decay_t<decltype( strainVec( 0 ) )>;
 
             auto curlyBracPos = []( const T& val ) { return val > 0 ? val : static_cast<T>( 0 ); };
@@ -49,7 +52,8 @@ std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::V
     }
     case StrainEnergyType::IsotropicLinearElastic:
     {
-        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXr& params ) {
+        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXr& params )
+        {
             const auto strainTensor = util::InverseVoigt( strainVec, true );
             const double Nu = this->Nu();
             const double E = this->E();
@@ -61,9 +65,8 @@ std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::V
         };
     }
     default:
-        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXr& params ) {
-            return autodiff::dual2nd( 0 );
-        };
+        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXr& params )
+        { return autodiff::dual2nd( 0 ); };
     }
 }
 
@@ -103,4 +106,45 @@ double PhaseFieldElasticMaterial::getPsiPos() const
     mParams[1] = mPhi;
 
     return autodiff::detail::val( mStrainEnergyFunc( mStrainVecDual, mParams ) );
+}
+
+mfem::real_t plugin::PhaseFieldHistory::EvaluateTrial( const mfem::real_t positiveEnergy )
+{
+    MFEM_VERIFY( std::isfinite( positiveEnergy ), "Phase-field history requires a finite positive-strain energy." );
+    // H_trial = max(H_committed, psi_plus(current trial)). Do not accumulate
+    // maxima over Newton iterates that may later be rejected.
+    mTrial = std::max( mCommitted, positiveEnergy );
+    return mTrial;
+}
+
+void plugin::PhaseFieldHistory::BeginStep()
+{
+    mTrial = mCommitted;
+}
+
+void plugin::PhaseFieldHistory::CommitStep()
+{
+    mCommittedHistory[mNextCommittedHistory] = mCommitted;
+    mNextCommittedHistory = ( mNextCommittedHistory + 1 ) % mCommittedHistory.size();
+    mCommittedHistorySize = std::min( mCommittedHistorySize + 1, mCommittedHistory.size() );
+    mCommitted = mTrial;
+}
+
+void plugin::PhaseFieldHistory::RollbackStep()
+{
+    mTrial = mCommitted;
+}
+
+void plugin::PhaseFieldHistory::RevertStep()
+{
+    if ( mCommittedHistorySize == 0 )
+    {
+        mTrial = mCommitted;
+        return;
+    }
+
+    mNextCommittedHistory = ( mNextCommittedHistory + mCommittedHistory.size() - 1 ) % mCommittedHistory.size();
+    mCommitted = mCommittedHistory[mNextCommittedHistory];
+    mCommittedHistorySize--;
+    mTrial = mCommitted;
 }

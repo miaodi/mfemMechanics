@@ -82,6 +82,9 @@ accepted separation increment. `ExponentialRotADCZMIntegrator` remains
 reversible and accepts only zero damping until generalized rotating history is
 defined.
 
+See [Integration-point state](docs/integration-point-state.md) for typed state
+composition, lifecycle rules, and migration from the previous `AnyMap` API.
+
 ## Repository Layout
 
 - `material/`: constitutive material models.

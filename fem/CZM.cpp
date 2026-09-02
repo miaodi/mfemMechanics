@@ -2,7 +2,6 @@
 #include "FEMPlugin.h"
 #include "Solvers.h"
 #include <algorithm>
-#include <atomic>
 #include <cmath>
 #include <limits>
 
@@ -10,12 +9,6 @@ namespace plugin
 {
 namespace
 {
-std::string NextCZMStateKey()
-{
-    static std::atomic<unsigned long long> next_id{ 0 };
-    return "CZMHistory:" + std::to_string( next_id.fetch_add( 1, std::memory_order_relaxed ) );
-}
-
 mfem::real_t OpeningTolerance( const mfem::real_t scale, const mfem::real_t characteristic_length )
 {
     return 64. * std::numeric_limits<mfem::real_t>::epsilon() * std::max( std::abs( scale ), std::abs( characteristic_length ) );
@@ -124,12 +117,9 @@ void CZMHistory::BeginStep()
 
 void CZMHistory::CommitStep()
 {
-    if ( mCommittedHistorySize == mCommittedHistory.size() )
-    {
-        std::move( mCommittedHistory.begin() + 1, mCommittedHistory.end(), mCommittedHistory.begin() );
-        mCommittedHistorySize--;
-    }
-    mCommittedHistory[mCommittedHistorySize++] = mCommitted;
+    mCommittedHistory[mNextCommittedHistory] = mCommitted;
+    mNextCommittedHistory = ( mNextCommittedHistory + 1 ) % mCommittedHistory.size();
+    mCommittedHistorySize = std::min( mCommittedHistorySize + 1, mCommittedHistory.size() );
     mCommitted = mTrial;
 }
 
@@ -146,7 +136,9 @@ void CZMHistory::RevertStep()
         return;
     }
 
-    mCommitted = mCommittedHistory[--mCommittedHistorySize];
+    mNextCommittedHistory = ( mNextCommittedHistory + mCommittedHistory.size() - 1 ) % mCommittedHistory.size();
+    mCommitted = mCommittedHistory[mNextCommittedHistory];
+    mCommittedHistorySize--;
     mTrial = mCommitted;
 }
 
@@ -417,8 +409,13 @@ CZMEvaluation EvaluateIrreversibleExponentialCZM( const ExponentialCZMConst& law
                                   tangential_damping, delta_lambda );
 }
 
-CZMIntegrator::CZMIntegrator( IntegrationPointStorage& pointStorage )
-    : StepAwareNonlinearFormIntegrator(), mPointStorage{ pointStorage }, mStateKey{ NextCZMStateKey() }
+CZMIntegrator::CZMIntegrator( IntegrationPointStorageBase& pointStorage )
+    : StepAwareNonlinearFormIntegrator(), mPointStorage{ pointStorage }
+{
+}
+
+CZMIntegrator::CZMIntegrator( CZMHistoryPointStorage& pointStorage )
+    : StepAwareNonlinearFormIntegrator(), mPointStorage{ pointStorage }, mHistoryPointStorage{ &pointStorage }
 {
 }
 
@@ -434,18 +431,14 @@ void CZMIntegrator::SetDamping( const mfem::real_t normal, const mfem::real_t ta
 
 CZMHistory& CZMIntegrator::GetHistory( const int gauss ) const
 {
-    auto& point_data = mPointStorage.GetFacePointData( gauss );
-    auto history = point_data.get_val<CZMHistory>( mStateKey );
-    if ( !history )
-    {
-        point_data.set_val<CZMHistory>( mStateKey, CZMHistory{} );
-        history = point_data.get_val<CZMHistory>( mStateKey );
-    }
-    MFEM_VERIFY( history.has_value(), "Unable to initialize CZM quadrature-point history." );
-    return history->get();
+    MFEM_VERIFY( mHistoryPointStorage != nullptr,
+                 "This cohesive integrator requires CZMHistory in its face integration-point storage." );
+    return mHistoryPointStorage->GetFacePoint( gauss ).State;
 }
 
-CZMEvaluation CZMIntegrator::EvaluateLocalLaw( const ExponentialCZMConst& law, const Eigen::VectorXr& local_separation, const int gauss ) const
+CZMEvaluation CZMIntegrator::EvaluateIrreversibleLocalLaw( const ExponentialCZMConst& law,
+                                                           const Eigen::VectorXr& local_separation,
+                                                           const int gauss ) const
 {
     return EvaluateIrreversibleExponentialCZM( law, local_separation, GetHistory( gauss ), xi_n, xi_t,
                                                mStepContext->GetDeltaLambda() );
@@ -555,16 +548,12 @@ void CZMIntegrator::AssembleFaceVector( const mfem::FiniteElement& el1,
         Tr.SetAllIntPoints( &ip );
         EvalCZMLaw( Tr, ip );
 
-        const mfem::Vector& shape1 = mPointStorage.GetFace1Shape( i );
-        const mfem::Vector& shape2 = mPointStorage.GetFace2Shape( i );
-
-        const mfem::DenseMatrix& gshape1 = mPointStorage.GetFace1GShape( i );
-        const mfem::DenseMatrix& gshape2 = mPointStorage.GetFace2GShape( i );
-        matrixB( dof1, dof2, shape1, shape2, gshape1, gshape2, vdim );
+        const auto& point = mPointStorage.GetFacePoint( i );
+        matrixB( dof1, dof2, point.Shape1, point.Shape2, point.GShapeFace1, point.GShapeFace2, vdim );
         Eigen::VectorXr Delta = mB * u;
         Eigen::VectorXr T;
         Traction( Delta, i, vdim, T );
-        eigenVec += mB.transpose() * T * mPointStorage.GetFaceWeight( i );
+        eigenVec += mB.transpose() * T * point.Weight;
     }
 }
 
@@ -603,17 +592,13 @@ void CZMIntegrator::AssembleFaceGrad( const mfem::FiniteElement& el1,
         Tr.SetAllIntPoints( &ip );
         EvalCZMLaw( Tr, ip );
 
-        const mfem::Vector& shape1 = mPointStorage.GetFace1Shape( i );
-        const mfem::Vector& shape2 = mPointStorage.GetFace2Shape( i );
-
-        const mfem::DenseMatrix& gshape1 = mPointStorage.GetFace1GShape( i );
-        const mfem::DenseMatrix& gshape2 = mPointStorage.GetFace2GShape( i );
-        matrixB( dof1, dof2, shape1, shape2, gshape1, gshape2, vdim );
+        const auto& point = mPointStorage.GetFacePoint( i );
+        matrixB( dof1, dof2, point.Shape1, point.Shape2, point.GShapeFace1, point.GShapeFace2, vdim );
         Eigen::VectorXr Delta = mB * u;
 
         Eigen::MatrixXr H;
         TractionStiffTangent( Delta, i, vdim, H );
-        eigenMat += mB.transpose() * H * mB * mPointStorage.GetFaceWeight( i );
+        eigenMat += mB.transpose() * H * mB * point.Weight;
     }
 }
 
@@ -735,7 +720,7 @@ void ExponentialCZMIntegrator::Traction( const Eigen::VectorXr& Delta, const int
     Eigen::MatrixXr DeltaToTN;
     DeltaToTNMat( mPointStorage.GetFaceJacobian( i ), DeltaToTN );
     const Eigen::VectorXr local_separation = DeltaToTN.transpose() * Delta;
-    const CZMEvaluation evaluation = EvaluateLocalLaw( mCZMLawConst, local_separation, i );
+    const CZMEvaluation evaluation = EvaluateIrreversibleLocalLaw( mCZMLawConst, local_separation, i );
     T = DeltaToTN * evaluation.traction;
 }
 
@@ -744,7 +729,7 @@ void ExponentialCZMIntegrator::TractionStiffTangent( const Eigen::VectorXr& Delt
     Eigen::MatrixXr DeltaToTN;
     DeltaToTNMat( mPointStorage.GetFaceJacobian( i ), DeltaToTN );
     const Eigen::VectorXr local_separation = DeltaToTN.transpose() * Delta;
-    const CZMEvaluation evaluation = EvaluateLocalLaw( mCZMLawConst, local_separation, i );
+    const CZMEvaluation evaluation = EvaluateIrreversibleLocalLaw( mCZMLawConst, local_separation, i );
     H = DeltaToTN * evaluation.tangent * DeltaToTN.transpose();
 }
 
@@ -833,12 +818,27 @@ void ExponentialADCZMIntegrator::TractionStiffTangent( const Eigen::VectorXr& De
     H = DeltaToTN * evaluation.tangent * DeltaToTN.transpose();
 }
 
-ExponentialADCZMIntegrator::ExponentialADCZMIntegrator( IntegrationPointStorage& pointStorage,
+ExponentialADCZMIntegrator::ExponentialADCZMIntegrator( CZMHistoryPointStorage& pointStorage,
                                                         mfem::Coefficient& sigmaMax,
                                                         mfem::Coefficient& tauMax,
                                                         mfem::Coefficient& deltaN,
                                                         mfem::Coefficient& deltaT )
     : ADCZMIntegrator( pointStorage ), mSigmaMax{ &sigmaMax }, mTauMax{ &tauMax }, mDeltaN{ &deltaN }, mDeltaT{ &deltaT }
+{
+    InitializePotential();
+}
+
+ExponentialADCZMIntegrator::ExponentialADCZMIntegrator( IntegrationPointStorageBase& pointStorage,
+                                                        mfem::Coefficient& sigmaMax,
+                                                        mfem::Coefficient& tauMax,
+                                                        mfem::Coefficient& deltaN,
+                                                        mfem::Coefficient& deltaT )
+    : ADCZMIntegrator( pointStorage ), mSigmaMax{ &sigmaMax }, mTauMax{ &tauMax }, mDeltaN{ &deltaN }, mDeltaT{ &deltaT }
+{
+    InitializePotential();
+}
+
+void ExponentialADCZMIntegrator::InitializePotential()
 {
     // x: diffX, diffY
     potential = [this]( const autodiff::VectorXdual2nd& x, const int i )
@@ -857,7 +857,7 @@ ExponentialADCZMIntegrator::ExponentialADCZMIntegrator( IntegrationPointStorage&
     };
 }
 
-ExponentialRotADCZMIntegrator::ExponentialRotADCZMIntegrator( IntegrationPointStorage& pointStorage,
+ExponentialRotADCZMIntegrator::ExponentialRotADCZMIntegrator( IntegrationPointStorageBase& pointStorage,
                                                               mfem::Coefficient& sigmaMax,
                                                               mfem::Coefficient& tauMax,
                                                               mfem::Coefficient& deltaN,

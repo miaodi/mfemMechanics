@@ -87,7 +87,7 @@ TEST( ThermalStrain, IsComposedOutsideMaterialAndScalesWithLoadFactor )
     IsotropicElasticMaterial material( elasticModulus, poissonRatio );
     plugin::IsotropicThermalExpansion thermalExpansionModel( expansionCoefficient, targetTemperatureCoefficient,
                                                              referenceTemperatureCoefficient );
-    plugin::IntegrationPointStorage pointStorage( &mesh );
+    plugin::IntegrationPointStorage<> pointStorage( &mesh );
     plugin::NonlinearElasticityIntegrator integrator( material, pointStorage );
     integrator.setNonlinear( false );
     integrator.AddStressFreeDeformation( thermalExpansionModel );
@@ -123,7 +123,7 @@ TEST( ThermalStrain, IsComposedOutsideMaterialAndScalesWithLoadFactor )
     integrator.AssembleElementGrad( *element, *transformation, constrainedDisplacement, thermalTangent );
 
     IsotropicElasticMaterial referenceMaterial( elasticModulus, poissonRatio );
-    plugin::IntegrationPointStorage referencePointStorage( &mesh );
+    plugin::IntegrationPointStorage<> referencePointStorage( &mesh );
     plugin::NonlinearElasticityIntegrator referenceIntegrator( referenceMaterial, referencePointStorage );
     referenceIntegrator.setNonlinear( false );
     referenceIntegrator.SetStepContext( &halfLoad );
@@ -158,7 +158,7 @@ TEST( ThermalStrain, UsesMultiplicativeSplitAtLargeDeformation )
     NeoHookeanMaterial material( shearModulus, lameLambda, NeoHookeanType::Ln );
     plugin::IsotropicThermalExpansion thermalExpansionModel( expansionCoefficient, targetTemperatureCoefficient,
                                                              referenceTemperatureCoefficient );
-    plugin::IntegrationPointStorage pointStorage( &mesh );
+    plugin::IntegrationPointStorage<> pointStorage( &mesh );
     plugin::NonlinearElasticityIntegrator integrator( material, pointStorage );
     integrator.AddStressFreeDeformation( thermalExpansionModel );
 

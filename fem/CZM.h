@@ -10,12 +10,9 @@
 #include <autodiff/forward/real.hpp>
 #include <autodiff/forward/real/eigen.hpp>
 #include <functional>
-#include <string>
 
 namespace plugin
 {
-class IntegrationPointStorage;
-
 struct ExponentialCZMConst
 {
     void update_phi()
@@ -80,9 +77,12 @@ public:
 private:
     CZMHistoryState mCommitted;
     CZMHistoryState mTrial;
-    std::array<CZMHistoryState, 20> mCommittedHistory;
+    std::array<CZMHistoryState, MaterialStateHistoryCapacity> mCommittedHistory;
     std::size_t mCommittedHistorySize{ 0 };
+    std::size_t mNextCommittedHistory{ 0 };
 };
+
+using CZMHistoryPointStorage = IntegrationPointStorage<NoIntegrationPointState, CZMHistory>;
 
 CZMEvaluation EvaluateExponentialCZMEnvelope( const ExponentialCZMConst& law, const Eigen::VectorXr& local_separation );
 
@@ -98,7 +98,10 @@ CZMEvaluation EvaluateIrreversibleExponentialCZM( const ExponentialCZMConst& law
 class CZMIntegrator : public StepAwareNonlinearFormIntegrator
 {
 public:
-    CZMIntegrator( IntegrationPointStorage& pointStorage );
+    /// Geometry-only construction for cohesive laws with no irreversible state.
+    explicit CZMIntegrator( IntegrationPointStorageBase& pointStorage );
+    /// Stateful construction; use separate storage for each irreversible cohesive integrator.
+    explicit CZMIntegrator( CZMHistoryPointStorage& pointStorage );
     CZMIntegrator( const CZMIntegrator& ) = delete;
     CZMIntegrator& operator=( const CZMIntegrator& ) = delete;
 
@@ -145,9 +148,11 @@ public:
 
 protected:
     CZMHistory& GetHistory( const int gauss ) const;
-    CZMEvaluation EvaluateLocalLaw( const ExponentialCZMConst& law, const Eigen::VectorXr& local_separation, const int gauss ) const;
+    CZMEvaluation EvaluateIrreversibleLocalLaw( const ExponentialCZMConst& law,
+                                                const Eigen::VectorXr& local_separation,
+                                                const int gauss ) const;
 
-    IntegrationPointStorage& mPointStorage;
+    IntegrationPointStorageBase& mPointStorage;
     mfem::Vector shape1, shape2;
 
     Eigen::MatrixXr mB;
@@ -160,18 +165,15 @@ private:
     template <typename Visitor>
     void VisitHistory( Visitor&& visitor )
     {
-        mPointStorage.VisitFacePointData(
-            [this, &visitor]( util::AnyMap& point_data )
-            {
-                auto history = point_data.get_val<CZMHistory>( mStateKey );
-                if ( history )
-                {
-                    visitor( history->get() );
-                }
-            } );
+        if ( mHistoryPointStorage == nullptr )
+        {
+            return;
+        }
+
+        mHistoryPointStorage->VisitFaceStates( [&visitor]( CZMHistory& history ) { visitor( history ); } );
     }
 
-    std::string mStateKey;
+    CZMHistoryPointStorage* mHistoryPointStorage{ nullptr };
     int mStepDepth{ 0 };
     bool mStepRejected{ false };
 };
@@ -179,11 +181,11 @@ private:
 class LinearCZMIntegrator : public CZMIntegrator
 {
 public:
-    LinearCZMIntegrator( IntegrationPointStorage& pointStorage ) : CZMIntegrator( pointStorage )
+    LinearCZMIntegrator( IntegrationPointStorageBase& pointStorage ) : CZMIntegrator( pointStorage )
     {
     }
 
-    LinearCZMIntegrator( IntegrationPointStorage& pointStorage,
+    LinearCZMIntegrator( IntegrationPointStorageBase& pointStorage,
                          const mfem::real_t sigmaMax,
                          const mfem::real_t tauMax,
                          const mfem::real_t deltaN,
@@ -220,7 +222,7 @@ protected:
 class ExponentialCZMIntegrator : public CZMIntegrator
 {
 public:
-    ExponentialCZMIntegrator( IntegrationPointStorage& pointStorage,
+    ExponentialCZMIntegrator( CZMHistoryPointStorage& pointStorage,
                               mfem::Coefficient& sigmaMax,
                               mfem::Coefficient& tauMax,
                               mfem::Coefficient& deltaN,
@@ -246,7 +248,8 @@ protected:
 class ADCZMIntegrator : public CZMIntegrator
 {
 public:
-    ADCZMIntegrator( IntegrationPointStorage& pointStorage ) : CZMIntegrator( pointStorage )
+    /// Geometry-only construction used by reversible autodiff laws.
+    ADCZMIntegrator( IntegrationPointStorageBase& pointStorage ) : CZMIntegrator( pointStorage )
     {
     }
 
@@ -255,6 +258,10 @@ public:
     virtual void TractionStiffTangent( const Eigen::VectorXr& Delta, const int gauss, const int dim, Eigen::MatrixXr& H ) const;
 
 protected:
+    ADCZMIntegrator( CZMHistoryPointStorage& pointStorage ) : CZMIntegrator( pointStorage )
+    {
+    }
+
     void EvaluatePotential( const Eigen::VectorXr& Delta, const int gauss, Eigen::VectorXr& traction, Eigen::MatrixXr& tangent ) const;
 
     std::function<autodiff::dual2nd( const autodiff::VectorXdual2nd&, const int )> potential;
@@ -263,7 +270,7 @@ protected:
 class ExponentialADCZMIntegrator : public ADCZMIntegrator
 {
 public:
-    ExponentialADCZMIntegrator( IntegrationPointStorage& pointStorage,
+    ExponentialADCZMIntegrator( CZMHistoryPointStorage& pointStorage,
                                 mfem::Coefficient& sigmaMax,
                                 mfem::Coefficient& tauMax,
                                 mfem::Coefficient& deltaN,
@@ -276,6 +283,14 @@ public:
     virtual void TractionStiffTangent( const Eigen::VectorXr& Delta, const int gauss, const int dim, Eigen::MatrixXr& H ) const override;
 
 protected:
+    ExponentialADCZMIntegrator( IntegrationPointStorageBase& pointStorage,
+                                mfem::Coefficient& sigmaMax,
+                                mfem::Coefficient& tauMax,
+                                mfem::Coefficient& deltaN,
+                                mfem::Coefficient& deltaT );
+
+    void InitializePotential();
+
     mfem::Coefficient* mSigmaMax{ nullptr };
     mfem::Coefficient* mTauMax{ nullptr };
     mfem::Coefficient* mDeltaN{ nullptr };
@@ -287,7 +302,7 @@ protected:
 // class OrtizIrreversibleADCZMIntegrator : public ADCZMIntegrator
 // {
 // public:
-//     OrtizIrreversibleADCZMIntegrator( IntegrationPointStorage& pointStorage );
+//     OrtizIrreversibleADCZMIntegrator( CZMHistoryPointStorage& pointStorage );
 
 // protected:
 //     mfem::real_t mBeta{ .2 };
@@ -298,7 +313,7 @@ protected:
 class ExponentialRotADCZMIntegrator : public ExponentialADCZMIntegrator
 {
 public:
-    ExponentialRotADCZMIntegrator( IntegrationPointStorage& pointStorage,
+    ExponentialRotADCZMIntegrator( IntegrationPointStorageBase& pointStorage,
                                    mfem::Coefficient& sigmaMax,
                                    mfem::Coefficient& tauMax,
                                    mfem::Coefficient& deltaN,

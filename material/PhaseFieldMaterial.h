@@ -2,6 +2,7 @@
 
 #include "Material.h"
 #include <Eigen/Dense>
+#include <array>
 #include <autodiff/forward/dual.hpp>
 #include <autodiff/forward/dual/eigen.hpp>
 #include <autodiff/forward/real.hpp>
@@ -79,3 +80,42 @@ protected:
     // strain cache
     mutable autodiff::Vector6dual2nd mStrainVecDual;
 };
+
+namespace plugin
+{
+/// Irreversible positive-energy history at one material point.
+class PhaseFieldHistory
+{
+public:
+    mfem::real_t EvaluateTrial( mfem::real_t positiveEnergy );
+    void BeginStep();
+    void CommitStep();
+    void RollbackStep();
+    void RevertStep();
+
+    mfem::real_t CommittedValue() const noexcept
+    {
+        return mCommitted;
+    }
+
+    mfem::real_t TrialValue() const noexcept
+    {
+        return mTrial;
+    }
+
+private:
+    mfem::real_t mCommitted{ 0. };
+    mfem::real_t mTrial{ 0. };
+    std::array<mfem::real_t, MaterialStateHistoryCapacity> mCommittedHistory{};
+    std::size_t mCommittedHistorySize{ 0 };
+    std::size_t mNextCommittedHistory{ 0 };
+};
+
+template <>
+struct MaterialPointTraits<PhaseFieldElasticMaterial>
+{
+    using State = PhaseFieldHistory;
+};
+
+using PhaseFieldIntegrationPointState = MaterialPointStateBundle<PhaseFieldElasticMaterial>;
+} // namespace plugin

@@ -217,7 +217,7 @@ int main( int argc, char* argv[] )
     plugin::IsotropicThermalExpansion thermal_expansion( CTE_func, target_temperature, reference_temperature );
     IsotropicElasticMaterial material( E_func, nu_func );
 
-    plugin::IntegrationPointStorage pointStorage( pmesh );
+    plugin::IntegrationPointStorage<> pointStorage( pmesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( material, pointStorage );
     intg->AddStressFreeDeformation( thermal_expansion );

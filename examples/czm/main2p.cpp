@@ -150,7 +150,7 @@ int main( int argc, char* argv[] )
 
     IsotropicElasticMaterial iem( E_func, nu_func );
 
-    plugin::IntegrationPointStorage pointStorage( pmesh );
+    plugin::CZMHistoryPointStorage pointStorage( pmesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, pointStorage );
     // intg->setNonlinear( true );

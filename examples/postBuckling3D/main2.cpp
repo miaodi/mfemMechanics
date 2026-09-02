@@ -203,7 +203,7 @@ int main( int argc, char* argv[] )
     PWConstCoefficient E_func( E );
     IsotropicElasticMaterial iem( E_func, nu_func );
 
-    plugin::IntegrationPointStorage pointStorage( pmesh );
+    plugin::IntegrationPointStorage<> pointStorage( pmesh );
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, pointStorage );
     intg->setNonlinear( true );
     // intrinsic stress

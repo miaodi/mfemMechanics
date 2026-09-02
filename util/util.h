@@ -3,13 +3,11 @@
 #include "SymmetricEigensolver3x3.hpp"
 #include "typeDef.h"
 #include <Eigen/Dense>
-#include <any>
 #include <autodiff/forward/real.hpp>
 #include <cmath>
 #include <functional>
 #include <iostream>
 #include <mfem.hpp>
-#include <optional>
 namespace util
 {
 constexpr double pi = 3.14159265358979323846;
@@ -160,48 +158,4 @@ std::tuple<Eigen::Matrix<T, 3, 3>, Eigen::Matrix<T, 3, 3>> StrainSplit( const Ei
     return std::tuple<Eigen::Matrix<T, 3, 3>, Eigen::Matrix<T, 3, 3>>{ strainPos, strainNeg };
 };
 
-class AnyMap
-{
-public:
-    template <typename T>
-    std::optional<std::reference_wrapper<const T>> get_val( const std::string& key ) const
-    {
-        auto it = _option.find( key );
-
-        if ( it == _option.cend() )
-
-            return {};
-
-        return std::any_cast<const T&>( it->second );
-    }
-
-    template <typename T>
-    std::optional<std::reference_wrapper<T>> get_val( const std::string& key )
-    {
-        auto it = _option.find( key );
-
-        if ( it == _option.cend() )
-
-            return {};
-
-        return std::any_cast<T&>( it->second );
-    }
-
-    template <typename T>
-    void set_val( const std::string& key, const T& value )
-    {
-        _option[key] = value;
-    }
-
-    template <typename T>
-    void set_val( const std::string& key, T&& value )
-    {
-        _option.emplace( key, std::move( value ) );
-    }
-
-    // void print() const;
-
-protected:
-    std::map<std::string, std::any> _option;
-};
 } // namespace util

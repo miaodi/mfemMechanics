@@ -185,18 +185,18 @@ source failure. There is no repository lint, install, or benchmark target.
   for the form and its integrator to be destroyed before those borrowed
   dependencies, and never register a short-lived stack integrator with an owning
   form.
-- `IntegrationPointStorage` caches reference gradients and `AnyMap` state by
-  element/face. Each initialized entity is bound to the exact finite-element and
-  integration-rule objects used initially. Keep custom rules alive, and call
-  `Reset` after reference geometry, topology, finite-element, partition, or rule
-  changes. For history-dependent physics, transfer accepted state before reset;
-  if no conservative/admissible AMR transfer exists, disable AMR for that model
-  rather than silently discarding or reinitializing history.
+- `IntegrationPointStorage` caches reference gradients and compile-time typed
+  state by element/face. Each initialized entity is bound to the exact
+  finite-element and integration-rule objects used initially. Keep custom rules
+  alive, and call `Reset` after reference geometry, topology, finite-element,
+  partition, or rule changes. For history-dependent physics, transfer accepted
+  state before reset; if no conservative/admissible AMR transfer exists, disable
+  AMR for that model rather than silently discarding or reinitializing history.
 - Existing material/integrator objects contain mutable caches and reusable
-  scratch, and `IntegrationPointStorage` tracks a mutable current element. They
-  are not documented as reentrant or thread-safe. Parallel assembly requires
-  per-thread instances/state or an explicit redesign, not merely an OpenMP
-  loop around existing objects.
+  scratch, and `IntegrationPointStorage` tracks mutable current element/face
+  cursors. They are not documented as reentrant or thread-safe. Parallel
+  assembly requires per-thread instances/state or an explicit redesign, not
+  merely an OpenMP loop around existing objects.
 
 ### Tensor and kinematic invariants
 
@@ -235,8 +235,9 @@ source failure. There is no repository lint, install, or benchmark target.
   `ElasticMaterial` instance. Store typed point state through
   `IntegrationPointStorage` (or a deliberate replacement), and specify
   initialization, update, commit, rollback, revert, AMR transfer, and restart
-  behavior. Use collision-safe per-instance `AnyMap` keys when several stateful
-  integrators can share one storage object.
+  behavior. A typed material-state bundle supports one owner of each material
+  type. Use separate storage objects when independent instances of the same
+  stateful model are required.
 
 ### Integrators, solvers, contact, and coupled fields
 

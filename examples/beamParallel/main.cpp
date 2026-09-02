@@ -153,7 +153,7 @@ int RunBeamExample( int argc, char* argv[], MPI_Comm comm )
     mfem::VectorArrayCoefficient traction( dimension );
     traction.Set( traction_component, new mfem::PWConstCoefficient( traction_by_boundary ) );
 
-    plugin::IntegrationPointStorage point_storage( &mesh );
+    plugin::IntegrationPointStorage<> point_storage( &mesh );
     mfem::ParNonlinearForm residual( &space );
     // ParNonlinearForm owns the integrators registered with it.
     residual.AddDomainIntegrator( new plugin::NonlinearElasticityIntegrator( material, point_storage ) );

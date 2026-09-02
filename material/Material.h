@@ -1,4 +1,5 @@
 #pragma once
+#include "MaterialPointState.h"
 #include "mfem.hpp"
 #include "typeDef.h"
 #include "util.h"

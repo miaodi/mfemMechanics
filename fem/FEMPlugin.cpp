@@ -118,311 +118,6 @@ void largeDeformMatrixB( const int dof,
     }
 }
 
-IntegrationPointStorage::IntegrationPointStorage( mfem::Mesh* mesh )
-{
-    Reset( mesh );
-}
-
-void IntegrationPointStorage::Reset( mfem::Mesh* mesh )
-{
-    mElementStorage.clear();
-    mFaceStorage.clear();
-    mElementNo = 0;
-
-    if ( mesh == nullptr )
-    {
-        return;
-    }
-
-    mElementStorage.resize( mesh->GetNE() );
-    mFaceStorage.resize( mesh->GetNumFaces() );
-}
-
-void IntegrationPointStorage::InitializeElement( const mfem::FiniteElement& el,
-                                                 mfem::ElementTransformation& Trans,
-                                                 const mfem::IntegrationRule& ir )
-{
-    mElementNo = Trans.ElementNo;
-    MFEM_VERIFY( mElementNo >= 0 && mElementNo < static_cast<int>( mElementStorage.size() ),
-                 "Element quadrature storage does not match the current mesh. Call Reset after changing the mesh." );
-
-    auto& pointSet = mElementStorage[mElementNo];
-    if ( pointSet.IsInitialized() )
-    {
-        VerifyElementPointSet( pointSet, el, ir, mElementNo );
-        return;
-    }
-
-    pointSet = BuildElementPointSet( el, Trans, ir );
-}
-
-IntegrationPointStorage::ElementPointSet IntegrationPointStorage::BuildElementPointSet( const mfem::FiniteElement& el,
-                                                                                        mfem::ElementTransformation& Trans,
-                                                                                        const mfem::IntegrationRule& ir )
-{
-    const int dim = el.GetDim();
-    const int numOfNodes = el.GetDof();
-    const int numOfGauss = ir.GetNPoints();
-
-    ElementPointSet pointSet;
-    pointSet.Element = &el;
-    pointSet.Rule = &ir;
-    pointSet.Dof = numOfNodes;
-    pointSet.Dimension = dim;
-    pointSet.Points.resize( numOfGauss );
-
-    auto& referenceGradient = mBuildWorkspace.ReferenceGradient1;
-    referenceGradient.SetSize( numOfNodes, dim );
-    for ( int i = 0; i < numOfGauss; i++ )
-    {
-        auto& point = pointSet.Points[i];
-        point.GShape.resize( numOfNodes, dim );
-        mfem::DenseMatrix physicalGradientView( point.GShape.data(), numOfNodes, dim );
-        const mfem::IntegrationPoint& ip = ir.IntPoint( i );
-        Trans.SetIntPoint( &ip );
-        el.CalcDShape( ip, referenceGradient );
-        Mult( referenceGradient, Trans.InverseJacobian(), physicalGradientView );
-
-        point.DetdXdXi = Trans.Weight();
-    }
-
-    return pointSet;
-}
-
-void IntegrationPointStorage::InitializeFace( const mfem::FiniteElement& el1,
-                                              const mfem::FiniteElement& el2,
-                                              mfem::FaceElementTransformations& Trans,
-                                              const mfem::IntegrationRule& ir )
-{
-    mElementNo = Trans.ElementNo;
-    MFEM_VERIFY( mElementNo >= 0 && mElementNo < static_cast<int>( mFaceStorage.size() ),
-                 "Face quadrature storage does not match the current mesh. Call Reset after changing the mesh." );
-
-    auto& pointSet = mFaceStorage[mElementNo];
-    if ( pointSet )
-    {
-        VerifyFacePointSet( *pointSet, el1, el2, Trans, ir, mElementNo );
-        return;
-    }
-
-    pointSet = std::make_unique<FacePointSet>( BuildFacePointSet( el1, el2, Trans, ir ) );
-}
-
-IntegrationPointStorage::FacePointSet IntegrationPointStorage::BuildFacePointSet( const mfem::FiniteElement& el1,
-                                                                                  const mfem::FiniteElement& el2,
-                                                                                  mfem::FaceElementTransformations& Trans,
-                                                                                  const mfem::IntegrationRule& ir )
-{
-    const int dim = el1.GetDim();
-    const int numOfNodes1 = el1.GetDof();
-    const int numOfNodes2 = el2.GetDof();
-    const int numOfGauss = ir.GetNPoints();
-
-    auto& referenceGradient1 = mBuildWorkspace.ReferenceGradient1;
-    auto& referenceGradient2 = mBuildWorkspace.ReferenceGradient2;
-    auto& physicalGradient1 = mBuildWorkspace.PhysicalGradient1;
-    auto& physicalGradient2 = mBuildWorkspace.PhysicalGradient2;
-    referenceGradient1.SetSize( numOfNodes1, dim );
-    referenceGradient2.SetSize( numOfNodes2, dim );
-    physicalGradient1.SetSize( numOfNodes1, dim );
-    physicalGradient2.SetSize( numOfNodes2, dim );
-
-    FacePointSet pointSet;
-    pointSet.Element1 = &el1;
-    pointSet.Element2 = &el2;
-    pointSet.Rule = &ir;
-    pointSet.Dof1 = numOfNodes1;
-    pointSet.Dof2 = numOfNodes2;
-    pointSet.Dimension = dim;
-    pointSet.FaceDimension = Trans.GetDimension();
-    pointSet.Points.resize( numOfGauss );
-
-    for ( int i = 0; i < numOfGauss; i++ )
-    {
-        auto& point = pointSet.Points[i];
-        point.Shape1.SetSize( el1.GetDof() );
-        point.Shape2.SetSize( el2.GetDof() );
-        const mfem::IntegrationPoint& ip = ir.IntPoint( i );
-        Trans.SetAllIntPoints( &ip );
-        const mfem::IntegrationPoint& eip1 = Trans.GetElement1IntPoint();
-        const mfem::IntegrationPoint& eip2 = Trans.GetElement2IntPoint();
-        el1.CalcShape( eip1, point.Shape1 );
-        el2.CalcShape( eip2, point.Shape2 );
-
-        point.Weight = ip.weight * Trans.Weight();
-        point.Jacobian = Trans.Jacobian();
-
-        el1.CalcDShape( eip1, referenceGradient1 );
-        el2.CalcDShape( eip2, referenceGradient2 );
-        auto& Trans1 = Trans.GetElement1Transformation();
-        auto& Trans2 = Trans.GetElement2Transformation();
-        Trans1.SetIntPoint( &eip1 );
-        Trans2.SetIntPoint( &eip2 );
-
-        Mult( referenceGradient1, Trans1.InverseJacobian(), physicalGradient1 );
-        Mult( referenceGradient2, Trans2.InverseJacobian(), physicalGradient2 );
-
-        point.GShapeFace1.SetSize( numOfNodes1, Trans.GetDimension() );
-        point.GShapeFace2.SetSize( numOfNodes2, Trans.GetDimension() );
-        Mult( physicalGradient1, point.Jacobian, point.GShapeFace1 );
-        Mult( physicalGradient2, point.Jacobian, point.GShapeFace2 );
-    }
-
-    return pointSet;
-}
-
-void IntegrationPointStorage::VerifyElementPointSet( const ElementPointSet& pointSet,
-                                                     const mfem::FiniteElement& el,
-                                                     const mfem::IntegrationRule& ir,
-                                                     const int elementNo )
-{
-    MFEM_VERIFY( pointSet.Element == &el, "Element " << elementNo << " was initialized with a different finite element." );
-    MFEM_VERIFY( pointSet.Rule == &ir, "Element " << elementNo << " was initialized with a different integration rule." );
-    MFEM_VERIFY( pointSet.Dof == el.GetDof() && pointSet.Dimension == el.GetDim(),
-                 "Element " << elementNo << " quadrature metadata is incompatible with the requested finite element." );
-    MFEM_VERIFY( static_cast<int>( pointSet.Points.size() ) == ir.GetNPoints(),
-                 "Element " << elementNo << " quadrature-point count is incompatible with the requested integration rule." );
-}
-
-void IntegrationPointStorage::VerifyFacePointSet( const FacePointSet& pointSet,
-                                                  const mfem::FiniteElement& el1,
-                                                  const mfem::FiniteElement& el2,
-                                                  const mfem::FaceElementTransformations& Trans,
-                                                  const mfem::IntegrationRule& ir,
-                                                  const int faceNo )
-{
-    MFEM_VERIFY( pointSet.Element1 == &el1 && pointSet.Element2 == &el2,
-                 "Face " << faceNo << " was initialized with different finite elements." );
-    MFEM_VERIFY( pointSet.Rule == &ir, "Face " << faceNo << " was initialized with a different integration rule." );
-    MFEM_VERIFY( pointSet.Dof1 == el1.GetDof() && pointSet.Dof2 == el2.GetDof() && pointSet.Dimension == el1.GetDim() &&
-                     pointSet.FaceDimension == Trans.GetDimension(),
-                 "Face " << faceNo << " quadrature metadata is incompatible with the requested finite elements." );
-    MFEM_VERIFY( static_cast<int>( pointSet.Points.size() ) == ir.GetNPoints(),
-                 "Face " << faceNo << " quadrature-point count is incompatible with the requested integration rule." );
-}
-
-const IntegrationPointStorage::ElementPointSet& IntegrationPointStorage::CurrentElementPointSet() const
-{
-    MFEM_VERIFY( mElementNo >= 0 && mElementNo < static_cast<int>( mElementStorage.size() ),
-                 "No current element quadrature storage is available." );
-    const auto& pointSet = mElementStorage[mElementNo];
-    MFEM_VERIFY( pointSet.IsInitialized(), "Current element quadrature storage has not been initialized." );
-    return pointSet;
-}
-
-IntegrationPointStorage::ElementPointSet& IntegrationPointStorage::CurrentElementPointSet()
-{
-    MFEM_VERIFY( mElementNo >= 0 && mElementNo < static_cast<int>( mElementStorage.size() ),
-                 "No current element quadrature storage is available." );
-    auto& pointSet = mElementStorage[mElementNo];
-    MFEM_VERIFY( pointSet.IsInitialized(), "Current element quadrature storage has not been initialized." );
-    return pointSet;
-}
-
-const IntegrationPointStorage::FacePointSet& IntegrationPointStorage::CurrentFacePointSet() const
-{
-    MFEM_VERIFY( mElementNo >= 0 && mElementNo < static_cast<int>( mFaceStorage.size() ),
-                 "No current face quadrature storage is available." );
-    MFEM_VERIFY( mFaceStorage[mElementNo] != nullptr, "Current face quadrature storage has not been initialized." );
-    return *mFaceStorage[mElementNo];
-}
-
-IntegrationPointStorage::FacePointSet& IntegrationPointStorage::CurrentFacePointSet()
-{
-    MFEM_VERIFY( mElementNo >= 0 && mElementNo < static_cast<int>( mFaceStorage.size() ),
-                 "No current face quadrature storage is available." );
-    MFEM_VERIFY( mFaceStorage[mElementNo] != nullptr, "Current face quadrature storage has not been initialized." );
-    return *mFaceStorage[mElementNo];
-}
-
-const CZMGaussPointStorage& IntegrationPointStorage::GetFacePointStorage( const int gauss ) const
-{
-    const auto& points = CurrentFacePointSet().Points;
-    MFEM_VERIFY( gauss >= 0 && gauss < static_cast<int>( points.size() ),
-                 "Face quadrature-point index is out of range." );
-    return points[gauss];
-}
-
-CZMGaussPointStorage& IntegrationPointStorage::GetFacePointStorage( const int gauss )
-{
-    auto& points = CurrentFacePointSet().Points;
-    MFEM_VERIFY( gauss >= 0 && gauss < static_cast<int>( points.size() ),
-                 "Face quadrature-point index is out of range." );
-    return points[gauss];
-}
-
-const util::AnyMap& IntegrationPointStorage::GetBodyPointData( const int gauss ) const
-{
-    const auto& points = CurrentElementPointSet().Points;
-    MFEM_VERIFY( gauss >= 0 && gauss < static_cast<int>( points.size() ),
-                 "Element quadrature-point index is out of range." );
-    return points[gauss].PointData;
-}
-
-util::AnyMap& IntegrationPointStorage::GetBodyPointData( const int gauss )
-{
-    auto& points = CurrentElementPointSet().Points;
-    MFEM_VERIFY( gauss >= 0 && gauss < static_cast<int>( points.size() ),
-                 "Element quadrature-point index is out of range." );
-    return points[gauss].PointData;
-}
-
-const util::AnyMap& IntegrationPointStorage::GetFacePointData( const int gauss ) const
-{
-    return GetFacePointStorage( gauss ).PointData;
-}
-
-util::AnyMap& IntegrationPointStorage::GetFacePointData( const int gauss )
-{
-    return GetFacePointStorage( gauss ).PointData;
-}
-
-const mfem::Vector& IntegrationPointStorage::GetFace1Shape( const int gauss ) const
-{
-    return GetFacePointStorage( gauss ).Shape1;
-}
-
-const mfem::Vector& IntegrationPointStorage::GetFace2Shape( const int gauss ) const
-{
-    return GetFacePointStorage( gauss ).Shape2;
-}
-
-const mfem::DenseMatrix& IntegrationPointStorage::GetFace1GShape( const int gauss ) const
-{
-    return GetFacePointStorage( gauss ).GShapeFace1;
-}
-
-const mfem::DenseMatrix& IntegrationPointStorage::GetFace2GShape( const int gauss ) const
-{
-    return GetFacePointStorage( gauss ).GShapeFace2;
-}
-
-const Eigen::MatrixXr& IntegrationPointStorage::GetdNdX( const int gauss ) const
-{
-    const auto& points = CurrentElementPointSet().Points;
-    MFEM_VERIFY( gauss >= 0 && gauss < static_cast<int>( points.size() ),
-                 "Element quadrature-point index is out of range." );
-    return points[gauss].GShape;
-}
-
-mfem::real_t IntegrationPointStorage::GetDetdXdXi( const int gauss ) const
-{
-    const auto& points = CurrentElementPointSet().Points;
-    MFEM_VERIFY( gauss >= 0 && gauss < static_cast<int>( points.size() ),
-                 "Element quadrature-point index is out of range." );
-    return points[gauss].DetdXdXi;
-}
-
-const mfem::DenseMatrix& IntegrationPointStorage::GetFaceJacobian( const int gauss ) const
-{
-    return GetFacePointStorage( gauss ).Jacobian;
-}
-
-mfem::real_t IntegrationPointStorage::GetFaceWeight( const int gauss ) const
-{
-    return GetFacePointStorage( gauss ).Weight;
-}
-
 void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el, mfem::ElementTransformation& Trans, mfem::DenseMatrix& elmat )
 {
     int dof = el.GetDof();
@@ -511,7 +206,8 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
     {
         const mfem::IntegrationPoint& ip = ir->IntPoint( i );
         Ttr.SetIntPoint( &ip );
-        const Eigen::MatrixXr& gShape = mPointStorage.GetdNdX( i );
+        const auto& point = mPointStorage.GetElementPoint( i );
+        const Eigen::MatrixXr& gShape = point.GShape;
         mdxdX.setZero();
         mdxdX.block( 0, 0, dim, dim ) = u.transpose() * gShape;
         mdxdX += identity;
@@ -530,7 +226,7 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
 
         mMaterialModel->updateRefModuli();
 
-        w = ip.weight * mPointStorage.GetDetdXdXi( i ) * kinematics.VolumeScale;
+        w = ip.weight * point.DetdXdXi * kinematics.VolumeScale;
         if ( !onlyGeomStiff() )
             eigenMat += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
         if ( isNonlinear() || onlyGeomStiff() )
@@ -579,7 +275,8 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
     {
         const mfem::IntegrationPoint& ip = ir->IntPoint( i );
         Ttr.SetIntPoint( &ip );
-        const Eigen::MatrixXr& gShape = mPointStorage.GetdNdX( i );
+        const auto& point = mPointStorage.GetElementPoint( i );
+        const Eigen::MatrixXr& gShape = point.GShape;
 
         mdxdX.setZero();
         mdxdX.block( 0, 0, dim, dim ) = u.transpose() * gShape;
@@ -597,7 +294,7 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
         }
         mMaterialModel->updateRefModuli();
 
-        w = ip.weight * mPointStorage.GetDetdXdXi( i ) * kinematics.VolumeScale;
+        w = ip.weight * point.DetdXdXi * kinematics.VolumeScale;
         eigenVec += w * ( mB.transpose() * mMaterialModel->getPK2StressVector() );
     }
     // std::cout<<"Rhs:\n";

@@ -150,9 +150,9 @@ int main( int argc, char* argv[] )
 
     PhaseFieldElasticMaterial iem( E_func, nu_func, PhaseFieldElasticMaterial::StrainEnergyType::Amor );
 
-    plugin::IntegrationPointStorage pointStorage( mesh );
+    plugin::PhaseFieldPointStorage pointStorage( mesh );
 
-    auto intg = new plugin::PhaseFieldIntegrator( iem, pointStorage );
+    auto intg = new plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage>( iem, pointStorage );
     // intg->setNonlinear( true );
 
     auto* nlf = new mfem::BlockNonlinearForm( spaces );

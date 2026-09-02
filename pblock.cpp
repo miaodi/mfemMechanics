@@ -233,7 +233,7 @@ int main( int argc, char* argv[] )
 
     NeoHookeanMaterial nh( mu_func, lambda_func, NeoHookeanType::Poly1 );
 
-    plugin::IntegrationPointStorage pointStorage( pmesh );
+    plugin::IntegrationPointStorage<> pointStorage( pmesh );
 
     auto intg = new plugin::NonlinearElasticityIntegrator( nh, pointStorage );
 

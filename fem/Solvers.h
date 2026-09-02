@@ -269,7 +269,7 @@ protected:
     mutable std::function<bool( const mfem::Vector& )>* adaptive_mesh_refine_func{ nullptr };
 
     // L, lambda, u
-    mutable CircularBuffer<Stat, 20> solution_buffer;
+    mutable CircularBuffer<Stat, SolutionHistoryCapacity> solution_buffer;
 };
 
 class Crisfield : public ALMBase

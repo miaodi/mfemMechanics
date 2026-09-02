@@ -1,5 +1,6 @@
 
 #pragma once
+#include "IntegrationPointStorage.h"
 #include "Material.h"
 #include "StressFreeDeformation.h"
 #include "util.h"
@@ -19,139 +20,6 @@ Eigen::MatrixXr mapper( const int dim, const int dof );
 void smallDeformMatrixB( const int, const int, const Eigen::MatrixXr&, Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic>& );
 
 void largeDeformMatrixB( const int, const int, const Eigen::MatrixXr&, const Eigen::MatrixXr&, Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic>& );
-
-struct GaussPointStorage
-{
-    Eigen::MatrixXr GShape;
-    mfem::real_t DetdXdXi{ 0. };
-    util::AnyMap PointData;
-};
-
-struct CZMGaussPointStorage
-{
-    mfem::real_t Weight{ 0. };
-
-    mfem::Vector Shape1, Shape2;
-    mfem::DenseMatrix GShapeFace1, GShapeFace2;
-    mfem::DenseMatrix Jacobian;
-    util::AnyMap PointData;
-};
-
-// TODO: should rewrite IntegrationPointStorage class so that Initialize can be registered by integrators.
-class IntegrationPointStorage
-{
-    struct ElementPointSet
-    {
-        const mfem::FiniteElement* Element{ nullptr };
-        const mfem::IntegrationRule* Rule{ nullptr };
-        std::vector<GaussPointStorage> Points;
-        int Dof{ 0 };
-        int Dimension{ 0 };
-
-        bool IsInitialized() const noexcept
-        {
-            return Element != nullptr;
-        }
-    };
-
-    struct FacePointSet
-    {
-        const mfem::FiniteElement* Element1{ nullptr };
-        const mfem::FiniteElement* Element2{ nullptr };
-        const mfem::IntegrationRule* Rule{ nullptr };
-        std::vector<CZMGaussPointStorage> Points;
-        int Dof1{ 0 };
-        int Dof2{ 0 };
-        int Dimension{ 0 };
-        int FaceDimension{ 0 };
-    };
-
-    struct PointSetBuildWorkspace
-    {
-        // These matrices must remain owning. Use scoped views for point-storage output.
-        mfem::DenseMatrix ReferenceGradient1, ReferenceGradient2;
-        mfem::DenseMatrix PhysicalGradient1, PhysicalGradient2;
-    };
-
-public:
-    IntegrationPointStorage( mfem::Mesh* );
-
-    void InitializeElement( const mfem::FiniteElement&, mfem::ElementTransformation&, const mfem::IntegrationRule& );
-
-    void InitializeFace( const mfem::FiniteElement&, const mfem::FiniteElement&, mfem::FaceElementTransformations&, const mfem::IntegrationRule& );
-
-    const Eigen::MatrixXr& GetdNdX( const int gauss ) const;
-
-    const mfem::Vector& GetFace1Shape( const int gauss ) const;
-
-    const mfem::Vector& GetFace2Shape( const int gauss ) const;
-
-    const mfem::DenseMatrix& GetFace1GShape( const int gauss ) const;
-
-    const mfem::DenseMatrix& GetFace2GShape( const int gauss ) const;
-
-    mfem::real_t GetDetdXdXi( const int gauss ) const;
-
-    mfem::real_t GetFaceWeight( const int gauss ) const;
-
-    const mfem::DenseMatrix& GetFaceJacobian( const int gauss ) const;
-
-    void Reset( mfem::Mesh* m );
-
-    template <typename Visitor>
-    void VisitFacePointData( Visitor&& visitor )
-    {
-        for ( auto& face : mFaceStorage )
-        {
-            if ( !face )
-            {
-                continue;
-            }
-
-            for ( auto& point : face->Points )
-            {
-                visitor( point.PointData );
-            }
-        }
-    }
-
-    const CZMGaussPointStorage& GetFacePointStorage( const int gauss ) const;
-
-    CZMGaussPointStorage& GetFacePointStorage( const int gauss );
-
-    const util::AnyMap& GetBodyPointData( const int gauss ) const;
-
-    util::AnyMap& GetBodyPointData( const int gauss );
-
-    const util::AnyMap& GetFacePointData( const int gauss ) const;
-
-    util::AnyMap& GetFacePointData( const int gauss );
-
-private:
-    ElementPointSet BuildElementPointSet( const mfem::FiniteElement&, mfem::ElementTransformation&, const mfem::IntegrationRule& );
-    FacePointSet BuildFacePointSet( const mfem::FiniteElement&,
-                                    const mfem::FiniteElement&,
-                                    mfem::FaceElementTransformations&,
-                                    const mfem::IntegrationRule& );
-
-    static void VerifyElementPointSet( const ElementPointSet&, const mfem::FiniteElement&, const mfem::IntegrationRule&, int );
-    static void VerifyFacePointSet( const FacePointSet&,
-                                    const mfem::FiniteElement&,
-                                    const mfem::FiniteElement&,
-                                    const mfem::FaceElementTransformations&,
-                                    const mfem::IntegrationRule&,
-                                    int );
-
-    const ElementPointSet& CurrentElementPointSet() const;
-    ElementPointSet& CurrentElementPointSet();
-    const FacePointSet& CurrentFacePointSet() const;
-    FacePointSet& CurrentFacePointSet();
-
-    std::vector<ElementPointSet> mElementStorage;
-    std::vector<std::unique_ptr<FacePointSet>> mFaceStorage;
-    PointSetBuildWorkspace mBuildWorkspace;
-    int mElementNo{ 0 };
-};
 
 class ElasticityIntegrator : public mfem::BilinearFormIntegrator
 {
@@ -226,7 +94,7 @@ protected:
 class NonlinearElasticityIntegrator : public StepAwareNonlinearFormIntegrator
 {
 public:
-    NonlinearElasticityIntegrator( ElasticMaterial& m, IntegrationPointStorage& pointStorage )
+    NonlinearElasticityIntegrator( ElasticMaterial& m, IntegrationPointStorageBase& pointStorage )
         : mMaterialModel( &m ), mPointStorage{ pointStorage }
     {
         mMaterialModel->setLargeDeformation( mNonlinear );
@@ -306,7 +174,7 @@ protected:
     Eigen::Matrix3r mMechanicalStrain;
     Eigen::Matrix3r mStressFreeDeformationGradient;
     ElasticMaterial* mMaterialModel{ nullptr };
-    IntegrationPointStorage& mPointStorage;
+    IntegrationPointStorageBase& mPointStorage;
     StressFreeDeformationModel mStressFreeDeformations;
     bool mOnlyGeomStiff{ false };
     bool mNonlinear{ true };
@@ -569,7 +437,7 @@ private:
     const mfem::Array2D<mfem::DenseMatrix*>* mElmats;
 
 public:
-    TempDependentNonlinearElasticityIntegrator( ElasticMaterial& m, IntegrationPointStorage& pointStorage )
+    TempDependentNonlinearElasticityIntegrator( ElasticMaterial& m, IntegrationPointStorageBase& pointStorage )
         : BlockStepAwareNonlinearFormIntegrator(), NonlinearElasticityIntegrator( m, pointStorage )
     {
     }

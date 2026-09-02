@@ -4,63 +4,64 @@
 #include "PhaseFieldMaterial.h"
 #include "util.h"
 #include <Eigen/Dense>
-#include <memory>
 #include <mfem.hpp>
-#include <vector>
+#include <type_traits>
 
 namespace plugin
 {
+using PhaseFieldPointStorage = IntegrationPointStorage<PhaseFieldIntegrationPointState>;
+
+template <typename PointStorage>
 class PhaseFieldIntegrator : public BlockStepAwareNonlinearFormIntegrator
 {
-    struct PointData
-    {
-        double H{ 0. };
-        double H_bac{ 0. };
-        int success_step{ 0 };
-    };
-
-    void UpdateH( const int, double& );
+    static_assert( std::is_base_of_v<IntegrationPointStorageBase, PointStorage>,
+                   "PhaseFieldIntegrator requires an IntegrationPointStorage specialization." );
 
 public:
-    PhaseFieldIntegrator( PhaseFieldElasticMaterial& m, IntegrationPointStorage& pointStorage )
+    /// Use separate storage for independent PhaseFieldElasticMaterial instances.
+    PhaseFieldIntegrator( PhaseFieldElasticMaterial& m, PointStorage& pointStorage )
         : BlockStepAwareNonlinearFormIntegrator(), mMaterialModel( &m ), mPointStorage{ pointStorage }
     {
     }
 
     /// Perform the local action of the BlockNonlinearFormIntegrator
-    virtual void AssembleElementVector( const mfem::Array<const mfem::FiniteElement*>& el,
-                                        mfem::ElementTransformation& Tr,
-                                        const mfem::Array<const mfem::Vector*>& elfun,
-                                        const mfem::Array<mfem::Vector*>& elvec );
+    void AssembleElementVector( const mfem::Array<const mfem::FiniteElement*>& el,
+                                mfem::ElementTransformation& Tr,
+                                const mfem::Array<const mfem::Vector*>& elfun,
+                                const mfem::Array<mfem::Vector*>& elvec ) override;
 
     /// Assemble the local gradient matrix
-    virtual void AssembleElementGrad( const mfem::Array<const mfem::FiniteElement*>& el,
-                                      mfem::ElementTransformation& Tr,
-                                      const mfem::Array<const mfem::Vector*>& elfun,
-                                      const mfem::Array2D<mfem::DenseMatrix*>& elmats );
+    void AssembleElementGrad( const mfem::Array<const mfem::FiniteElement*>& el,
+                              mfem::ElementTransformation& Tr,
+                              const mfem::Array<const mfem::Vector*>& elfun,
+                              const mfem::Array2D<mfem::DenseMatrix*>& elmats ) override;
 
-    // void setGeomStiff( const bool flg )
-    // {
-    //     mOnlyGeomStiff = flg;
-    // }
-
-    // bool onlyGeomStiff() const
-    // {
-    //     return mOnlyGeomStiff;
-    // }
+    void BeginStep() override;
+    void CommitStep() override;
+    void RollbackStep() override;
+    void RevertStep() override;
 
 protected:
+    template <typename Visitor>
+    void VisitHistory( Visitor&& visitor )
+    {
+        mPointStorage.VisitElementStates( [&visitor]( auto& state )
+                                          { visitor( state.template Get<PhaseFieldElasticMaterial>() ); } );
+    }
+
+    static void UpdateHistory( PhaseFieldHistory& history, mfem::real_t& positiveEnergy );
+
     PhaseFieldElasticMaterial* mMaterialModel{ nullptr };
 
     Eigen::Matrix<mfem::real_t, 3, 3> mdxdX;
     Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic> mB;
-    // Eigen::MatrixXr mGeomStiff;
-    IntegrationPointStorage& mPointStorage;
-    // bool mOnlyGeomStiff{ false };
+    PointStorage& mPointStorage;
 
     // data for phase field
     mfem::Vector shape;
     mfem::DenseMatrix mDShape, mGShape;
+    int mStepDepth{ 0 };
+    bool mStepRejected{ false };
 };
 
 class BlockNonlinearDirichletPenaltyIntegrator : public BlockStepAwareNonlinearFormIntegrator
@@ -95,3 +96,5 @@ protected:
     NonlinearDirichletPenaltyIntegrator mIntegrator;
 };
 } // namespace plugin
+
+#include "PhaseField.tpp"

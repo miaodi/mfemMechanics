@@ -150,7 +150,7 @@ int main( int argc, char* argv[] )
     PWConstCoefficient E_func( E );
 
     IsotropicElasticMaterial iem( E_func, nu_func );
-    plugin::IntegrationPointStorage pointStorage( mesh );
+    plugin::IntegrationPointStorage<> pointStorage( mesh );
     auto intg = new plugin::NonlinearElasticityIntegrator( iem, pointStorage );
     intg->setNonlinear( true );
     auto* nlf = new NonlinearForm( fespace );

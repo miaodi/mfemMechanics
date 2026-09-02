@@ -1,4 +1,6 @@
 #include "CZM.h"
+#include "PhaseField.h"
+#include "Solvers.h"
 #include <Eigen/Dense>
 #include <algorithm>
 #include <cmath>
@@ -6,6 +8,24 @@
 #include <gtest/gtest.h>
 #include <limits>
 #include <type_traits>
+
+struct TestPlasticityMaterial
+{
+};
+
+struct TestPlasticityHistory
+{
+    mfem::real_t equivalentPlasticStrain{ 0. };
+};
+
+namespace plugin
+{
+template <>
+struct MaterialPointTraits<TestPlasticityMaterial>
+{
+    using State = TestPlasticityHistory;
+};
+} // namespace plugin
 
 namespace
 {
@@ -25,6 +45,26 @@ plugin::ExponentialCZMConst MakeLaw()
     law.update_phi();
     return law;
 }
+
+class TestExponentialCZMIntegrator : public plugin::ExponentialCZMIntegrator
+{
+public:
+    using ExponentialCZMIntegrator::ExponentialCZMIntegrator;
+
+    plugin::CZMHistory& History( const int integrationPoint ) const
+    {
+        return GetHistory( integrationPoint );
+    }
+};
+
+class TestStepContext : public plugin::NonlinearStepContext
+{
+public:
+    bool Convergence() const override
+    {
+        return true;
+    }
+};
 
 Eigen::MatrixXr FiniteDifferenceTangent( const std::function<Eigen::VectorXr( const Eigen::VectorXr& )>& traction,
                                          const Eigen::VectorXr& separation )
@@ -71,22 +111,22 @@ static_assert( !std::is_copy_constructible_v<plugin::ExponentialCZMIntegrator> )
 
 TEST( IntegrationPointStorage, EmptyAndResetFaceStorageCanBeVisited )
 {
-    plugin::IntegrationPointStorage pointStorage( nullptr );
+    plugin::IntegrationPointStorage<plugin::NoIntegrationPointState, int> pointStorage( nullptr );
     int visits = 0;
-    pointStorage.VisitFacePointData( [&visits]( util::AnyMap& ) { visits++; } );
+    pointStorage.VisitFaceStates( [&visits]( int& ) { visits++; } );
     EXPECT_EQ( visits, 0 );
 
     pointStorage.Reset( nullptr );
-    pointStorage.VisitFacePointData( [&visits]( util::AnyMap& ) { visits++; } );
+    pointStorage.VisitFaceStates( [&visits]( int& ) { visits++; } );
     EXPECT_EQ( visits, 0 );
 }
 
-TEST( IntegrationPointStorage, DenseElementStoragePreservesPointDataAcrossReuse )
+TEST( IntegrationPointStorage, DenseElementStoragePreservesTypedStateAcrossReuse )
 {
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 2, 1, mfem::Element::QUADRILATERAL );
     mfem::H1_FECollection collection( 1, mesh.Dimension() );
     mfem::FiniteElementSpace space( &mesh, &collection );
-    plugin::IntegrationPointStorage pointStorage( &mesh );
+    plugin::IntegrationPointStorage<int> pointStorage( &mesh );
 
     for ( int element = 0; element < mesh.GetNE(); element++ )
     {
@@ -97,7 +137,7 @@ TEST( IntegrationPointStorage, DenseElementStoragePreservesPointDataAcrossReuse 
 
         const auto& rule = mfem::IntRules.Get( finite_element->GetGeomType(), 2 * finite_element->GetOrder() + 1 );
         pointStorage.InitializeElement( *finite_element, *transformation, rule );
-        pointStorage.GetBodyPointData( 0 ).set_val<int>( "element", element );
+        pointStorage.GetElementPoint( 0 ).State = element;
 
         EXPECT_EQ( pointStorage.GetdNdX( 0 ).rows(), finite_element->GetDof() );
         EXPECT_EQ( pointStorage.GetdNdX( 0 ).cols(), finite_element->GetDim() );
@@ -111,18 +151,16 @@ TEST( IntegrationPointStorage, DenseElementStoragePreservesPointDataAcrossReuse 
         const auto& rule = mfem::IntRules.Get( finite_element->GetGeomType(), 2 * finite_element->GetOrder() + 1 );
 
         pointStorage.InitializeElement( *finite_element, *transformation, rule );
-        const auto value = pointStorage.GetBodyPointData( 0 ).get_val<int>( "element" );
-        ASSERT_TRUE( value.has_value() );
-        EXPECT_EQ( value->get(), element );
+        EXPECT_EQ( pointStorage.GetElementPoint( 0 ).State, element );
     }
 }
 
-TEST( IntegrationPointStorage, SparseFaceStorageInitializesOnlyVisitedFacesAndPreservesPointData )
+TEST( IntegrationPointStorage, SparseFaceStorageInitializesOnlyVisitedFacesAndPreservesTypedState )
 {
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 2, 2, mfem::Element::QUADRILATERAL );
     mfem::H1_FECollection collection( 1, mesh.Dimension() );
     mfem::FiniteElementSpace space( &mesh, &collection );
-    plugin::IntegrationPointStorage pointStorage( &mesh );
+    plugin::IntegrationPointStorage<plugin::NoIntegrationPointState, int> pointStorage( &mesh );
 
     int face = -1;
     mfem::FaceElementTransformations* transformation = nullptr;
@@ -145,16 +183,14 @@ TEST( IntegrationPointStorage, SparseFaceStorageInitializesOnlyVisitedFacesAndPr
 
     const auto& rule = mfem::IntRules.Get( transformation->GetGeometryType(), 2 * element1->GetOrder() );
     pointStorage.InitializeFace( *element1, *element2, *transformation, rule );
-    pointStorage.GetFacePointData( 0 ).set_val<int>( "face", face );
+    pointStorage.GetFacePoint( 0 ).State = face;
 
     pointStorage.InitializeFace( *element1, *element2, *transformation, rule );
-    const auto value = pointStorage.GetFacePointData( 0 ).get_val<int>( "face" );
-    ASSERT_TRUE( value.has_value() );
-    EXPECT_EQ( value->get(), face );
+    EXPECT_EQ( pointStorage.GetFacePoint( 0 ).State, face );
     EXPECT_GT( pointStorage.GetFaceWeight( 0 ), 0. );
 
     int visits = 0;
-    pointStorage.VisitFacePointData( [&visits]( util::AnyMap& ) { visits++; } );
+    pointStorage.VisitFaceStates( [&visits]( int& ) { visits++; } );
     EXPECT_EQ( visits, rule.GetNPoints() );
 }
 
@@ -163,7 +199,7 @@ TEST( IntegrationPointStorage, FaceInitializationDoesNotModifyStoredElementGradi
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 2, 1, mfem::Element::QUADRILATERAL );
     mfem::H1_FECollection collection( 1, mesh.Dimension() );
     mfem::FiniteElementSpace space( &mesh, &collection );
-    plugin::IntegrationPointStorage pointStorage( &mesh );
+    plugin::IntegrationPointStorage<> pointStorage( &mesh );
 
     mfem::FaceElementTransformations* faceTransformation = nullptr;
     for ( int face = 0; face < mesh.GetNumFaces(); face++ )
@@ -194,6 +230,238 @@ TEST( IntegrationPointStorage, FaceInitializationDoesNotModifyStoredElementGradi
 
     pointStorage.InitializeElement( *finiteElement1, *elementTransformation, elementRule );
     ExpectMatricesNear( pointStorage.GetdNdX( lastElementPoint ), storedGradient, 0. );
+}
+
+TEST( IntegrationPointStorage, MaterialStateTraitsComposeIndependentPointState )
+{
+    using CoupledState = plugin::MaterialPointStateBundle<PhaseFieldElasticMaterial, TestPlasticityMaterial>;
+
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL );
+    mfem::H1_FECollection collection( 1, mesh.Dimension() );
+    mfem::FiniteElementSpace space( &mesh, &collection );
+    plugin::IntegrationPointStorage<CoupledState> pointStorage( &mesh );
+
+    const auto* finiteElement = space.GetFE( 0 );
+    auto* transformation = mesh.GetElementTransformation( 0 );
+    ASSERT_NE( finiteElement, nullptr );
+    ASSERT_NE( transformation, nullptr );
+
+    const auto& rule = mfem::IntRules.Get( finiteElement->GetGeomType(), 2 * finiteElement->GetOrder() + 1 );
+    pointStorage.InitializeElement( *finiteElement, *transformation, rule );
+
+    auto& state = pointStorage.GetElementPoint( 0 ).State;
+    auto& phaseHistory = state.Get<PhaseFieldElasticMaterial>();
+    auto& plasticityHistory = state.Get<TestPlasticityMaterial>();
+    phaseHistory.EvaluateTrial( 2.5 );
+    plasticityHistory.equivalentPlasticStrain = .35;
+
+    plugin::IntegrationPointStorageBase& geometryStorage = pointStorage;
+    EXPECT_EQ( geometryStorage.GetElementPoint( 0 ).GShape.rows(), finiteElement->GetDof() );
+
+    pointStorage.InitializeElement( *finiteElement, *transformation, rule );
+    const auto& preservedState = pointStorage.GetElementPoint( 0 ).State;
+    EXPECT_EQ( preservedState.Get<PhaseFieldElasticMaterial>().TrialValue(), 2.5 );
+    EXPECT_EQ( preservedState.Get<TestPlasticityMaterial>().equivalentPlasticStrain, .35 );
+}
+
+TEST( IntegrationPointStorage, ResetReinitializesTypedPointState )
+{
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL );
+    mfem::H1_FECollection collection( 1, mesh.Dimension() );
+    mfem::FiniteElementSpace space( &mesh, &collection );
+    plugin::IntegrationPointStorage<int> pointStorage( &mesh );
+
+    const auto* finiteElement = space.GetFE( 0 );
+    auto* transformation = mesh.GetElementTransformation( 0 );
+    const auto& rule = mfem::IntRules.Get( finiteElement->GetGeomType(), 2 * finiteElement->GetOrder() + 1 );
+    pointStorage.InitializeElement( *finiteElement, *transformation, rule );
+    pointStorage.GetElementPoint( 0 ).State = 42;
+
+    pointStorage.Reset( &mesh );
+    pointStorage.InitializeElement( *finiteElement, *transformation, rule );
+    EXPECT_EQ( pointStorage.GetElementPoint( 0 ).State, 0 );
+}
+
+TEST( IntegrationPointStorage, CZMIntegratorUsesTypedFaceHistory )
+{
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 2, 1, mfem::Element::QUADRILATERAL );
+    mfem::H1_FECollection collection( 1, mesh.Dimension() );
+    mfem::FiniteElementSpace space( &mesh, &collection );
+    plugin::CZMHistoryPointStorage pointStorage( &mesh );
+
+    mfem::FaceElementTransformations* transformation = nullptr;
+    for ( int face = 0; face < mesh.GetNumFaces() && transformation == nullptr; face++ )
+    {
+        transformation = mesh.GetInteriorFaceTransformations( face );
+    }
+    ASSERT_NE( transformation, nullptr );
+
+    const auto* element1 = space.GetFE( transformation->Elem1No );
+    const auto* element2 = space.GetFE( transformation->Elem2No );
+    ASSERT_NE( element1, nullptr );
+    ASSERT_NE( element2, nullptr );
+    const auto& rule = mfem::IntRules.Get( transformation->GetGeometryType(), 2 * element1->GetOrder() );
+    pointStorage.InitializeFace( *element1, *element2, *transformation, rule );
+
+    mfem::ConstantCoefficient sigmaMax( 4.2 );
+    mfem::ConstantCoefficient tauMax( 3.1 );
+    mfem::ConstantCoefficient deltaN( .5 );
+    mfem::ConstantCoefficient deltaT( .7 );
+    TestExponentialCZMIntegrator integrator( pointStorage, sigmaMax, tauMax, deltaN, deltaT );
+
+    auto& history = pointStorage.GetFacePoint( 0 ).State;
+    EXPECT_EQ( &integrator.History( 0 ), &history );
+    const auto law = MakeLaw();
+    integrator.BeginStep();
+    plugin::EvaluateIrreversibleExponentialCZM( law, Eigen::Vector2r( .1, .2 ), history );
+    integrator.CommitStep();
+    EXPECT_EQ( history.CommittedState().maximum_normal_opening, .2 );
+
+    integrator.BeginStep();
+    integrator.BeginStep();
+    plugin::EvaluateIrreversibleExponentialCZM( law, Eigen::Vector2r( .1, .4 ), history );
+    integrator.RollbackStep();
+    integrator.CommitStep();
+    EXPECT_EQ( history.CommittedState().maximum_normal_opening, .2 );
+}
+
+TEST( PhaseFieldHistory, TrialEvaluationIsDeterministicFromCommittedState )
+{
+    plugin::PhaseFieldHistory history;
+
+    history.BeginStep();
+    EXPECT_EQ( history.EvaluateTrial( 2. ), 2. );
+    EXPECT_EQ( history.EvaluateTrial( 1. ), 1. );
+    EXPECT_EQ( history.CommittedValue(), 0. );
+    history.CommitStep();
+
+    EXPECT_EQ( history.CommittedValue(), 1. );
+    EXPECT_EQ( history.EvaluateTrial( .5 ), 1. );
+    history.RollbackStep();
+    EXPECT_EQ( history.TrialValue(), 1. );
+}
+
+TEST( PhaseFieldHistory, RevertRestoresCommittedStatesAfterCircularHistoryWraps )
+{
+    plugin::PhaseFieldHistory history;
+    constexpr int totalSteps = static_cast<int>( plugin::SolutionHistoryCapacity ) + 5;
+    constexpr int oldestRetainedState = totalSteps - static_cast<int>( plugin::MaterialStateHistoryCapacity );
+    for ( int step = 1; step <= totalSteps; step++ )
+    {
+        history.BeginStep();
+        history.EvaluateTrial( static_cast<mfem::real_t>( step ) );
+        history.CommitStep();
+    }
+
+    for ( int expected = totalSteps - 1; expected >= oldestRetainedState; expected-- )
+    {
+        history.RevertStep();
+        EXPECT_EQ( history.CommittedValue(), expected );
+    }
+
+    history.RevertStep();
+    EXPECT_EQ( history.CommittedValue(), oldestRetainedState );
+}
+
+TEST( PhaseFieldIntegrator, NestedLifecycleCommitsAndRollsBackTypedPointHistory )
+{
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL );
+    mfem::H1_FECollection collection( 1, mesh.Dimension() );
+    mfem::FiniteElementSpace space( &mesh, &collection );
+    mfem::ConstantCoefficient youngsModulus( 10. );
+    mfem::ConstantCoefficient poissonRatio( .25 );
+    PhaseFieldElasticMaterial material( youngsModulus, poissonRatio );
+    plugin::PhaseFieldPointStorage pointStorage( &mesh );
+    plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage> integrator( material, pointStorage );
+
+    const auto* finiteElement = space.GetFE( 0 );
+    auto* transformation = mesh.GetElementTransformation( 0 );
+    const auto& rule = mfem::IntRules.Get( finiteElement->GetGeomType(), 2 * finiteElement->GetOrder() + 1 );
+    pointStorage.InitializeElement( *finiteElement, *transformation, rule );
+    auto& history = pointStorage.GetElementPoint( 0 ).State.Get<PhaseFieldElasticMaterial>();
+
+    integrator.BeginStep();
+    integrator.BeginStep();
+    history.EvaluateTrial( 2. );
+    integrator.CommitStep();
+    EXPECT_EQ( history.CommittedValue(), 0. );
+    integrator.CommitStep();
+    EXPECT_EQ( history.CommittedValue(), 2. );
+
+    integrator.BeginStep();
+    history.EvaluateTrial( 3. );
+    integrator.RollbackStep();
+    EXPECT_EQ( history.CommittedValue(), 2. );
+    EXPECT_EQ( history.TrialValue(), 2. );
+
+    integrator.RevertStep();
+    EXPECT_EQ( history.CommittedValue(), 0. );
+
+    integrator.BeginStep();
+    integrator.BeginStep();
+    history.EvaluateTrial( 4. );
+    integrator.RollbackStep();
+    integrator.CommitStep();
+    EXPECT_EQ( history.CommittedValue(), 0. );
+    EXPECT_EQ( history.TrialValue(), 0. );
+}
+
+TEST( PhaseFieldIntegrator, RepeatedAssemblyDoesNotAccumulateRejectedNewtonHistory )
+{
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL );
+    mfem::H1_FECollection collection( 1, mesh.Dimension() );
+    mfem::FiniteElementSpace space( &mesh, &collection );
+    mfem::ConstantCoefficient youngsModulus( 10. );
+    mfem::ConstantCoefficient poissonRatio( .25 );
+    PhaseFieldElasticMaterial material( youngsModulus, poissonRatio );
+    plugin::PhaseFieldPointStorage pointStorage( &mesh );
+    plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage> integrator( material, pointStorage );
+    TestStepContext context;
+    integrator.SetStepContext( &context );
+
+    const auto* finiteElement = space.GetFE( 0 );
+    auto* transformation = mesh.GetElementTransformation( 0 );
+    ASSERT_NE( finiteElement, nullptr );
+    ASSERT_NE( transformation, nullptr );
+    const int dofs = finiteElement->GetDof();
+    const int dimension = finiteElement->GetDim();
+
+    mfem::Array<const mfem::FiniteElement*> elements( 2 );
+    elements[0] = finiteElement;
+    elements[1] = finiteElement;
+    mfem::Vector displacement( dofs * dimension );
+    mfem::Vector phaseField( dofs );
+    displacement = 0.;
+    phaseField = 0.;
+    for ( int i = 0; i < dofs; i++ )
+    {
+        displacement( i ) = .01 * i;
+    }
+
+    mfem::Array<const mfem::Vector*> elementState( 2 );
+    elementState[0] = &displacement;
+    elementState[1] = &phaseField;
+    mfem::Vector displacementResidual, phaseResidual;
+    mfem::Array<mfem::Vector*> elementResidual( 2 );
+    elementResidual[0] = &displacementResidual;
+    elementResidual[1] = &phaseResidual;
+
+    integrator.BeginStep();
+    integrator.AssembleElementVector( elements, *transformation, elementState, elementResidual );
+    mfem::real_t maximumTrialHistory = 0.;
+    pointStorage.VisitElementStates(
+        [&maximumTrialHistory]( auto& state )
+        {
+            maximumTrialHistory = std::max( maximumTrialHistory, state.template Get<PhaseFieldElasticMaterial>().TrialValue() );
+        } );
+    EXPECT_GT( maximumTrialHistory, 0. );
+
+    displacement = 0.;
+    integrator.AssembleElementVector( elements, *transformation, elementState, elementResidual );
+    pointStorage.VisitElementStates(
+        []( auto& state )
+        { EXPECT_NEAR( state.template Get<PhaseFieldElasticMaterial>().TrialValue(), 0., kTightTolerance ); } );
+    integrator.RollbackStep();
 }
 
 TEST( CZMHistory, ZeroAndCompressionAreFinite )
@@ -317,6 +585,30 @@ TEST( CZMHistory, RevertRestoresPreviousCommittedStep )
     history.RevertStep();
     ExpectStatesEqual( history.CommittedState(), first_commit );
     ExpectStatesEqual( history.TrialState(), first_commit );
+}
+
+TEST( CZMHistory, RevertRestoresCommittedStatesAfterCircularHistoryWraps )
+{
+    const auto law = MakeLaw();
+    plugin::CZMHistory history;
+    constexpr int totalSteps = static_cast<int>( plugin::SolutionHistoryCapacity ) + 5;
+    constexpr int oldestRetainedState = totalSteps - static_cast<int>( plugin::MaterialStateHistoryCapacity );
+    for ( int step = 1; step <= totalSteps; step++ )
+    {
+        const mfem::real_t opening = .01 * step;
+        history.BeginStep();
+        plugin::EvaluateIrreversibleExponentialCZM( law, Eigen::Vector2r( 0., opening ), history );
+        history.CommitStep();
+    }
+
+    for ( int expected = totalSteps - 1; expected >= oldestRetainedState; expected-- )
+    {
+        history.RevertStep();
+        EXPECT_NEAR( history.CommittedState().maximum_normal_opening, .01 * expected, kTightTolerance );
+    }
+
+    history.RevertStep();
+    EXPECT_NEAR( history.CommittedState().maximum_normal_opening, .01 * oldestRetainedState, kTightTolerance );
 }
 
 TEST( CZMHistory, PureModeLoadingDoesNotHealCoupledStiffness )
@@ -714,7 +1006,7 @@ TEST( CZMHistory, AnalyticEnvelopeMatchesPureAutodiffFormula )
 
 TEST( CZMIntegrator, RotatingGeneralizedLawReportsDampingUnsupported )
 {
-    plugin::IntegrationPointStorage pointStorage( nullptr );
+    plugin::IntegrationPointStorage<> pointStorage( nullptr );
     mfem::ConstantCoefficient sigma_max( 4.2 );
     mfem::ConstantCoefficient tau_max( 3.1 );
     mfem::ConstantCoefficient delta_n( .5 );
