@@ -6,7 +6,7 @@ namespace plugin
 
 void PhaseFieldIntegrator::UpdateH( const int gauss, double& H )
 {
-    auto& pd = mMemo.GetBodyPointData( gauss );
+    auto& pd = mPointStorage.GetBodyPointData( gauss );
     // historical strain energy+ for KKT condition
     if ( mIterAux->IterNumber() == 0 )
     {
@@ -63,8 +63,8 @@ void PhaseFieldIntegrator::AssembleElementVector( const mfem::Array<const mfem::
 
     // mGeomStiff.resize( dof_u, dof_u );
 
-    Eigen::Map<const Eigen::MatrixXd> u( elfun[0]->GetData(), dof_u, dim );
-    Eigen::Map<const Eigen::VectorXd> p( elfun[1]->GetData(), dof_p );
+    Eigen::Map<const Eigen::MatrixXr> u( elfun[0]->GetData(), dof_u, dim );
+    Eigen::Map<const Eigen::VectorXr> p( elfun[1]->GetData(), dof_p );
 
     elvec[0]->SetSize( dof_u * dim );
     elvec[1]->SetSize( dof_p );
@@ -72,18 +72,18 @@ void PhaseFieldIntegrator::AssembleElementVector( const mfem::Array<const mfem::
     *elvec[0] = 0.0;
     *elvec[1] = 0.0;
 
-    Eigen::Map<Eigen::VectorXd> eigenVec0( elvec[0]->GetData(), dof_u * dim );
-    Eigen::Map<Eigen::VectorXd> eigenVec1( elvec[1]->GetData(), dof_p );
+    Eigen::Map<Eigen::VectorXr> eigenVec0( elvec[0]->GetData(), dof_u * dim );
+    Eigen::Map<Eigen::VectorXr> eigenVec1( elvec[1]->GetData(), dof_p );
 
     const mfem::IntegrationRule* ir = &( mfem::IntRules.Get( el[0]->GetGeomType(), 2 * el[0]->GetOrder() + 1 ) ); // <---
 
-    const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
-    mMemo.InitializeElement( *el[0], Tr, *ir );
+    const Eigen::Matrix3r identity = Eigen::Matrix3r::Identity();
+    mPointStorage.InitializeElement( *el[0], Tr, *ir );
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
         const mfem::IntegrationPoint& ip = ir->IntPoint( i );
         Tr.SetIntPoint( &ip );
-        const Eigen::MatrixXd& gShape = mMemo.GetdNdX( i );
+        const Eigen::MatrixXr& gShape = mPointStorage.GetdNdX( i );
         mdxdX.setZero();
         mdxdX.block( 0, 0, dim, dim ) = u.transpose() * gShape;
         mdxdX += identity;
@@ -93,14 +93,14 @@ void PhaseFieldIntegrator::AssembleElementVector( const mfem::Array<const mfem::
         el[1]->CalcShape( ip, shape );
         el[1]->CalcDShape( ip, mDShape );
         Mult( mDShape, Tr.InverseJacobian(), mGShape );
-        Eigen::Map<const Eigen::MatrixXd> eigenGShape( mGShape.Data(), dof_p, dim );
-        Eigen::Map<const Eigen::VectorXd> eigenShape( shape.GetData(), dof_p );
+        Eigen::Map<const Eigen::MatrixXr> eigenGShape( mGShape.Data(), dof_p, dim );
+        Eigen::Map<const Eigen::VectorXr> eigenShape( shape.GetData(), dof_p );
 
         smallDeformMatrixB( dof_u, dim, gShape, mB );
 
         double pVal = p.dot( eigenShape );
 
-        Eigen::MatrixXd pGrad = p.transpose() * eigenGShape;
+        Eigen::MatrixXr pGrad = p.transpose() * eigenGShape;
         // std::cout<<pGrad<<std::endl<<std::endl;
 
         mMaterialModel->at( Tr, ip );
@@ -109,7 +109,7 @@ void PhaseFieldIntegrator::AssembleElementVector( const mfem::Array<const mfem::
 
         // mMaterialModel->updateRefModuli();
 
-        w = ip.weight * mMemo.GetDetdXdXi( i );
+        w = ip.weight * mPointStorage.GetDetdXdXi( i );
         eigenVec0 += w * ( mB.transpose() * mMaterialModel->getPK2StressVector() );
         double H = mMaterialModel->getPsiPos();
         UpdateH( i, H );
@@ -139,8 +139,8 @@ void PhaseFieldIntegrator::AssembleElementGrad( const mfem::Array<const mfem::Fi
 
     // mGeomStiff.resize( dof_u, dof_u );
 
-    Eigen::Map<const Eigen::MatrixXd> u( elfun[0]->GetData(), dof_u, dim );
-    Eigen::Map<const Eigen::VectorXd> p( elfun[1]->GetData(), dof_p );
+    Eigen::Map<const Eigen::MatrixXr> u( elfun[0]->GetData(), dof_u, dim );
+    Eigen::Map<const Eigen::VectorXr> p( elfun[1]->GetData(), dof_p );
 
     elmats( 0, 0 )->SetSize( dof_u * dim, dof_u * dim );
     elmats( 0, 1 )->SetSize( dof_u * dim, dof_p );
@@ -152,19 +152,19 @@ void PhaseFieldIntegrator::AssembleElementGrad( const mfem::Array<const mfem::Fi
     *elmats( 1, 0 ) = 0.0;
     *elmats( 1, 1 ) = 0.0;
 
-    Eigen::Map<Eigen::MatrixXd> eigenMat00( elmats( 0, 0 )->Data(), dof_u * dim, dof_u * dim );
+    Eigen::Map<Eigen::MatrixXr> eigenMat00( elmats( 0, 0 )->Data(), dof_u * dim, dof_u * dim );
 
-    Eigen::Map<Eigen::MatrixXd> eigenMat11( elmats( 1, 1 )->Data(), dof_p, dof_p );
+    Eigen::Map<Eigen::MatrixXr> eigenMat11( elmats( 1, 1 )->Data(), dof_p, dof_p );
 
     const mfem::IntegrationRule* ir = &( mfem::IntRules.Get( el[0]->GetGeomType(), 2 * el[0]->GetOrder() + 1 ) ); // <---
 
-    const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
-    mMemo.InitializeElement( *el[0], Tr, *ir );
+    const Eigen::Matrix3r identity = Eigen::Matrix3r::Identity();
+    mPointStorage.InitializeElement( *el[0], Tr, *ir );
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
         const mfem::IntegrationPoint& ip = ir->IntPoint( i );
         Tr.SetIntPoint( &ip );
-        const Eigen::MatrixXd& gShape = mMemo.GetdNdX( i );
+        const Eigen::MatrixXr& gShape = mPointStorage.GetdNdX( i );
         mdxdX.setZero();
         mdxdX.block( 0, 0, dim, dim ) = u.transpose() * gShape;
         mdxdX += identity;
@@ -174,8 +174,8 @@ void PhaseFieldIntegrator::AssembleElementGrad( const mfem::Array<const mfem::Fi
         el[1]->CalcShape( ip, shape );
         el[1]->CalcDShape( ip, mDShape );
         Mult( mDShape, Tr.InverseJacobian(), mGShape );
-        Eigen::Map<const Eigen::MatrixXd> eigenGShape( mGShape.Data(), dof_p, dim );
-        Eigen::Map<const Eigen::VectorXd> eigenShape( shape.GetData(), dof_p );
+        Eigen::Map<const Eigen::MatrixXr> eigenGShape( mGShape.Data(), dof_p, dim );
+        Eigen::Map<const Eigen::VectorXr> eigenShape( shape.GetData(), dof_p );
 
         smallDeformMatrixB( dof_u, dim, gShape, mB );
 
@@ -187,7 +187,7 @@ void PhaseFieldIntegrator::AssembleElementGrad( const mfem::Array<const mfem::Fi
 
         mMaterialModel->updateRefModuli();
 
-        w = ip.weight * mMemo.GetDetdXdXi( i );
+        w = ip.weight * mPointStorage.GetDetdXdXi( i );
         // if ( !onlyGeomStiff() )
         eigenMat00 += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
 
@@ -229,8 +229,8 @@ void BlockNonlinearDirichletPenaltyIntegrator::AssembleFaceGrad( const mfem::Arr
     int dof_p = el1[1]->GetDof();
     // mGeomStiff.resize( dof_u, dof_u );
 
-    Eigen::Map<const Eigen::MatrixXd> u( elfun[0]->GetData(), dof_u, dim );
-    Eigen::Map<const Eigen::VectorXd> p( elfun[1]->GetData(), dof_p );
+    Eigen::Map<const Eigen::MatrixXr> u( elfun[0]->GetData(), dof_u, dim );
+    Eigen::Map<const Eigen::VectorXr> p( elfun[1]->GetData(), dof_p );
 
     elmats( 0, 0 )->SetSize( dof_u * dim, dof_u * dim );
     elmats( 0, 1 )->SetSize( dof_u * dim, dof_p );

@@ -83,11 +83,11 @@ Eigen::Matrix<T, 3, 3> InverseVoigt( const Eigen::Vector<T, 6>& vector, const bo
     }
 }
 
-void symmetricIdentityTensor( const Eigen::Matrix3d& C, Eigen::Matrix6d& CC );
+void symmetricIdentityTensor( const Eigen::Matrix3r& C, Eigen::Matrix6r& CC );
 
-void tensorProduct( const Eigen::Matrix3d& A, const Eigen::Matrix3d& B, Eigen::Matrix6d& CC );
+void tensorProduct( const Eigen::Matrix3r& A, const Eigen::Matrix3r& B, Eigen::Matrix6r& CC );
 
-Eigen::Matrix6d TransformationVoigtForm( const Eigen::Matrix3d& transformation );
+Eigen::Matrix6r TransformationVoigtForm( const Eigen::Matrix3r& transformation );
 
 double ConvergenceRate( const double cur, const double prev, const double prevprev );
 

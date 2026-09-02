@@ -38,22 +38,22 @@ public:
         return step;
     }
 
-    double GetCurLambda() const
+    mfem::real_t GetCurLambda() const
     {
         return lambda + Delta_lambda;
     }
 
-    double GetDeltaLambda() const
+    mfem::real_t GetDeltaLambda() const
     {
         return Delta_lambda;
     }
 
-    virtual void SetDelta( const double delta )
+    virtual void SetDelta( const mfem::real_t delta )
     {
         Delta_lambda = delta;
     }
 
-    void SetPrevLambda( const double _lambda ) const
+    void SetPrevLambda( const mfem::real_t _lambda ) const
     {
         lambda = _lambda;
     }
@@ -70,22 +70,22 @@ protected:
 
     mutable int step = 0; // step #
 
-    mutable double lambda = 0., Delta_lambda = 0;
+    mutable mfem::real_t lambda = 0., Delta_lambda = 0;
 
-    mutable std::function<void( int, int, double )> data_collect_func{ nullptr };
+    mutable std::function<void( int, int, mfem::real_t )> data_collect_func{ nullptr };
 
     // args: converged, final_iter, lambda, L
-    mutable std::function<void( bool, int, double, double& )> L_update_func{ nullptr };
+    mutable std::function<void( bool, int, mfem::real_t, mfem::real_t& )> L_update_func{ nullptr };
 };
 
 class NewtonLineSearch : public mfem::NewtonSolver, public IterAuxilliary
 {
 protected:
-    double max_eta{ 10. };
-    double min_eta{ .1 };
-    double eta_coef{ 1.5 };
+    mfem::real_t max_eta{ 10. };
+    mfem::real_t min_eta{ .1 };
+    mfem::real_t eta_coef{ 1.5 };
     int max_line_search_iter{ 10 };
-    double tol{ .006 };
+    mfem::real_t tol{ .006 };
     bool line_search{ false };
     mutable mfem::Vector aux_line_search;
 
@@ -100,12 +100,12 @@ public:
     }
 #endif
 
-    void SetLineSearchTol( const double t )
+    void SetLineSearchTol( const mfem::real_t t )
     {
         tol = t;
     }
 
-    void SetMaxEta( const double t )
+    void SetMaxEta( const mfem::real_t t )
     {
         max_eta = t;
     }
@@ -114,7 +114,7 @@ public:
         line_search = ls;
     }
 
-    double GetMaxIter() const
+    int GetMaxIter() const
     {
         return this->max_iter;
     }
@@ -126,7 +126,7 @@ public:
 
     int MyRank() const;
 
-    virtual double ComputeScalingFactor( const mfem::Vector& x, const mfem::Vector& b ) const;
+    virtual mfem::real_t ComputeScalingFactor( const mfem::Vector& x, const mfem::Vector& b ) const;
     virtual void SetOperator( const mfem::Operator& op );
     virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;
 };
@@ -157,7 +157,7 @@ public:
 class ALMBase : public mfem::IterativeSolver, public IterAuxilliary
 {
 protected:
-    double InnerProduct( const mfem::Vector& a, const double la, const mfem::Vector& b, const double lb ) const;
+    mfem::real_t InnerProduct( const mfem::Vector& a, const mfem::real_t la, const mfem::Vector& b, const mfem::real_t lb ) const;
 
     void ResizeVectors( const int size ) const;
 
@@ -165,9 +165,9 @@ protected:
 
     struct Stat
     {
-        double L{ 0. };
-        double lambda{ 0. };
-        double phi{ 0. };
+        mfem::real_t L{ 0. };
+        mfem::real_t lambda{ 0. };
+        mfem::real_t phi{ 0. };
         mfem::Vector u;
     };
 
@@ -203,14 +203,14 @@ public:
     {
     }
 
-    virtual void SetDelta( const double l )
+    virtual void SetDelta( const mfem::real_t l )
     {
         L = l;
         max_delta = l * 1e2;
         min_delta = l * 1e-3;
     }
 
-    void SetPhi( const double p )
+    void SetPhi( const mfem::real_t p )
     {
         phi = p;
     }
@@ -220,12 +220,12 @@ public:
         max_steps = step;
     }
 
-    void SetMaxDelta( const double delta )
+    void SetMaxDelta( const mfem::real_t delta )
     {
         max_delta = delta;
     }
 
-    void SetMinDelta( const double delta )
+    void SetMinDelta( const mfem::real_t delta )
     {
         min_delta = delta;
     }
@@ -235,7 +235,7 @@ public:
         adaptive_mesh_refine_func = &f;
     }
 
-    virtual bool updateStep( const int it, const int step, const double det ) const = 0;
+    virtual bool updateStep( const int it, const int step, const mfem::real_t det ) const = 0;
 
     void SetCheckConvRatio( const bool check )
     {
@@ -260,7 +260,7 @@ protected:
 
     mutable mfem::Vector u_direction_pred;
 
-    mutable double delta_lambda, max_delta{ 1. }, min_delta{ 1. }, L{ 1 }, phi{ 1 }, lambda_direction_pred{ 0. };
+    mutable mfem::real_t delta_lambda, max_delta{ 1. }, min_delta{ 1. }, L{ 1 }, phi{ 1 }, lambda_direction_pred{ 0. };
 
     int max_steps{ 100 };
 
@@ -285,7 +285,7 @@ public:
     }
 #endif
 
-    virtual bool updateStep( const int it, const int step, const double det ) const;
+    virtual bool updateStep( const int it, const int step, const mfem::real_t det ) const;
 };
 
 class ArcLengthLinearize : public ALMBase
@@ -301,7 +301,7 @@ public:
     }
 #endif
 
-    virtual bool updateStep( const int it, const int step, const double det ) const;
+    virtual bool updateStep( const int it, const int step, const mfem::real_t det ) const;
 };
 
 template <typename Newton>
@@ -328,12 +328,12 @@ public:
     virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;
     virtual void SetOperator( const mfem::Operator& op );
 
-    void SetMaxDelta( const double delta )
+    void SetMaxDelta( const mfem::real_t delta )
     {
         max_delta = delta;
     }
 
-    void SetMinDelta( const double delta )
+    void SetMinDelta( const mfem::real_t delta )
     {
         min_delta = delta;
     }
@@ -343,6 +343,6 @@ protected:
     mutable mfem::IterativeSolver* prec{ nullptr };
     const mfem::Operator* oper{ nullptr };
     mutable mfem::Vector cur;
-    mutable double max_delta{ 1. }, min_delta{ 1. };
+    mutable mfem::real_t max_delta{ 1. }, min_delta{ 1. };
 };
 } // namespace plugin

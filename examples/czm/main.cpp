@@ -167,9 +167,9 @@ int main( int argc, char* argv[] )
 
     IsotropicElasticMaterial iem( E_func, nu_func );
 
-    plugin::Memorize mm( mesh );
+    plugin::IntegrationPointStorage pointStorage( mesh );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
+    auto intg = new plugin::NonlinearElasticityIntegrator( iem, pointStorage );
     intg->setNonlinear( true );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
@@ -183,7 +183,7 @@ int main( int argc, char* argv[] )
     mfem::ConstantCoefficient delta_n{ 4E-7 };
     mfem::ConstantCoefficient delta_t{ 4E-7 };
 
-    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( mm, sigma_max, tau_max, delta_n, delta_t );
+    auto czm_intg = new plugin::ExponentialRotADCZMIntegrator( pointStorage, sigma_max, tau_max, delta_n, delta_t );
 
     nlf->AddInteriorFaceIntegrator( czm_intg );
     mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
@@ -208,7 +208,7 @@ int main( int argc, char* argv[] )
     newton_solver->SetMaxDelta( 1e-2 );
     newton_solver->SetMinDelta( 1e-16 );
     newton_solver->SetMaxStep( 100000 );
-    // nlf->AddInteriorFaceIntegrator( new plugin::ExponentialCZMIntegrator( mm, 324E5, 755.4E5, 4E-4, 4E-4 ) );
+    // nlf->AddInteriorFaceIntegrator( new plugin::ExponentialCZMIntegrator( pointStorage, 324E5, 755.4E5, 4E-4, 4E-4 ) );
 
     Vector zero;
 
@@ -267,7 +267,7 @@ int main( int argc, char* argv[] )
     // refiner.SetCriticalH( 1e-2 );
 
     // std::function<bool( const Vector& )> func2 =
-    //     [&ue, mesh, &refiner, fespace, &u, nlf, &mm, stress_fespace, &stress_grid]( const Vector& du )
+    //     [&ue, mesh, &refiner, fespace, &u, nlf, &pointStorage, stress_fespace, &stress_grid]( const Vector& du )
     // {
     //     add( u, du, ue );
     //     refiner.Apply( *mesh );
@@ -281,7 +281,7 @@ int main( int argc, char* argv[] )
     //     nlf->Update();
     //     ue.Update();
     //     stress_grid.Update();
-    //     mm.Reset( mesh );
+    //     pointStorage.Reset( mesh );
     //     return false;
     // };
 

@@ -5,49 +5,49 @@ ElasticMaterial::ElasticMaterial() : mRefModuli(), mCurModuli()
 {
 }
 
-Eigen::Matrix3d ElasticMaterial::getGreenLagrangeStrainTensor() const
+Eigen::Matrix3r ElasticMaterial::getGreenLagrangeStrainTensor() const
 {
     if ( isSamllDeformation() )
     {
-        Eigen::Matrix3d dudX = *mdxdX - Eigen::Matrix3d::Identity();
+        Eigen::Matrix3r dudX = *mdxdX - Eigen::Matrix3r::Identity();
         return .5 * ( dudX + dudX.transpose() );
     }
     else
     {
-        return .5 * ( ( *mdxdX ).transpose() * ( *mdxdX ) - Eigen::Matrix3d::Identity() );
+        return .5 * ( ( *mdxdX ).transpose() * ( *mdxdX ) - Eigen::Matrix3r::Identity() );
     }
 }
 
-const Eigen::Vector6d& ElasticMaterial::getGreenLagrangeStrainVector() const
+const Eigen::Vector6r& ElasticMaterial::getGreenLagrangeStrainVector() const
 {
-    getGreenLagrangeStrainVector<double>( mStrainVec );
+    getGreenLagrangeStrainVector<mfem::real_t>( mStrainVec );
     return mStrainVec;
 }
 
-Eigen::Matrix3d ElasticMaterial::getPK2StressTensor() const
+Eigen::Matrix3r ElasticMaterial::getPK2StressTensor() const
 {
     return util::InverseVoigt( getPK2StressVector(), false );
 }
 
-const Eigen::Vector6d& ElasticMaterial::getPK2StressVector() const
+const Eigen::Vector6r& ElasticMaterial::getPK2StressVector() const
 {
-    getPK2StressVector<double>( mStressVec );
+    getPK2StressVector<mfem::real_t>( mStressVec );
     return mStressVec;
 }
 
-Eigen::Matrix3d ElasticMaterial::getCauchyStressTensor() const
+Eigen::Matrix3r ElasticMaterial::getCauchyStressTensor() const
 {
     return 1. / mdxdX->determinant() * ( *mdxdX * getPK2StressTensor() * mdxdX->transpose() );
 }
 
-Eigen::Vector6d ElasticMaterial::getCauchyStressVector() const
+Eigen::Vector6r ElasticMaterial::getCauchyStressVector() const
 {
-    return util::Voigt<double, double>( getCauchyStressTensor(), false );
+    return util::Voigt<mfem::real_t, mfem::real_t>( getCauchyStressTensor(), false );
 }
 
 void ElasticMaterial::updateCurModuli()
 {
-    const Eigen::Matrix3d& F = *mdxdX;
+    const Eigen::Matrix3r& F = *mdxdX;
     static const Eigen::Matrix<int, 3, 3> indexMap{ { 0, 3, 5 }, { 3, 1, 4 }, { 5, 4, 2 } };
     static const Eigen::Matrix<int, 2, 6> inverseMap{ { 0, 1, 2, 0, 1, 0 }, { 0, 1, 2, 1, 2, 2 } };
     const double determinant = F.determinant();
@@ -77,9 +77,9 @@ void ElasticMaterial::updateCurModuli()
     }
 }
 
-Eigen::Vector6d ElasticMaterial::getIntrinsicPK2StressVector() const
+Eigen::Vector6r ElasticMaterial::getIntrinsicPK2StressVector() const
 {
-    Eigen::Vector6d stressVector;
+    Eigen::Vector6r stressVector;
     stressVector.setZero();
     mfem::Vector vec( stressVector.data(), stressVector.size() );
     if ( mIntrinsicStress )
@@ -114,7 +114,7 @@ void IsotropicElasticMaterial::updateRefModuli()
     mRefModuli( 5, 5 ) = mu;
 }
 
-const Eigen::Vector6d& IsotropicElasticMaterial::getPK2StressVector() const
+const Eigen::Vector6r& IsotropicElasticMaterial::getPK2StressVector() const
 {
     if ( mIntrinsicStress )
         mStressVec = getRefModuli() * getGreenLagrangeStrainVector() + getIntrinsicPK2StressVector();
@@ -123,7 +123,7 @@ const Eigen::Vector6d& IsotropicElasticMaterial::getPK2StressVector() const
     return mStressVec;
 }
 
-Eigen::Matrix3d IsotropicElasticThermalMaterial::getGreenLagrangeStrainTensor() const
+Eigen::Matrix3r IsotropicElasticThermalMaterial::getGreenLagrangeStrainTensor() const
 {
-    return ElasticMaterial::getGreenLagrangeStrainTensor() - Eigen::Matrix3d::Identity() * ( CTE() * ( mTF - mT0 ) * mLambda );
+    return ElasticMaterial::getGreenLagrangeStrainTensor() - Eigen::Matrix3r::Identity() * ( CTE() * ( mTF - mT0 ) * mLambda );
 }

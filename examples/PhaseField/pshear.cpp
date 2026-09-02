@@ -199,9 +199,9 @@ int main( int argc, char* argv[] )
 
     PhaseFieldElasticMaterial iem( E_func, nu_func, PhaseFieldElasticMaterial::StrainEnergyType::Amor );
 
-    plugin::Memorize mm( pmesh );
+    plugin::IntegrationPointStorage pointStorage( pmesh );
 
-    auto intg = new plugin::PhaseFieldIntegrator( iem, mm );
+    auto intg = new plugin::PhaseFieldIntegrator( iem, pointStorage );
     // intg->setNonlinear( true );
 
     auto* nlf = new mfem::ParBlockNonlinearForm( spaces );

@@ -175,9 +175,9 @@ int main( int argc, char* argv[] )
     IsotropicElasticMaterial iem( E_func, nu_func );
     iem.setLargeDeformation( true );
 
-    plugin::Memorize mm( pmesh );
+    plugin::IntegrationPointStorage pointStorage( pmesh );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
+    auto intg = new plugin::NonlinearElasticityIntegrator( iem, pointStorage );
 
     auto* nlf = new ParNonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );

@@ -33,7 +33,7 @@ public:
         return mNu->Eval( *mEleTrans, *mIntgP );
     }
 
-    virtual const Eigen::Vector6d& getPK2StressVector() const override;
+    virtual const Eigen::Vector6r& getPK2StressVector() const override;
 
     void setPhaseField( const double val )
     {
@@ -58,7 +58,7 @@ public:
     }
 
 protected:
-    std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::VectorXd& )> StrainEnergyFactory( const StrainEnergyType set ) const;
+    std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::VectorXr& )> StrainEnergyFactory( const StrainEnergyType set ) const;
 
 protected:
     mfem::Coefficient* mE{ nullptr };
@@ -70,11 +70,11 @@ protected:
     double mL0{ 0.015e-3 }; // length scale
     StrainEnergyType mSET;
 
-    std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::VectorXd& )> mStrainEnergyFunc;
+    std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::VectorXr& )> mStrainEnergyFunc;
 
     // params[0]: select strain energy: 0 positive, 1 negative, 2 total
     // params[1]: phase field phi
-    mutable Eigen::VectorXd mParams;
+    mutable Eigen::VectorXr mParams;
 
     // strain cache
     mutable autodiff::Vector6dual2nd mStrainVecDual;

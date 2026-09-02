@@ -9,45 +9,45 @@ class ElasticMaterial
 public:
     ElasticMaterial();
 
-    virtual Eigen::Matrix3d getGreenLagrangeStrainTensor() const;
+    virtual Eigen::Matrix3r getGreenLagrangeStrainTensor() const;
 
     template <typename T>
     void getGreenLagrangeStrainVector( Eigen::Vector<T, 6>& strainVec ) const
     {
-        return util::Voigt<double, T>( getGreenLagrangeStrainTensor(), true, strainVec );
+        return util::Voigt<mfem::real_t, T>( getGreenLagrangeStrainTensor(), true, strainVec );
     }
 
-    virtual const Eigen::Vector6d& getGreenLagrangeStrainVector() const;
+    virtual const Eigen::Vector6r& getGreenLagrangeStrainVector() const;
 
     bool isSamllDeformation() const
     {
         return mSmallDeformation;
     }
 
-    virtual Eigen::Matrix3d getPK2StressTensor() const;
+    virtual Eigen::Matrix3r getPK2StressTensor() const;
 
     template <typename T>
     void getPK2StressVector( Eigen::Vector<T, 6>& stressVec ) const
     {
-        return util::Voigt<double, T>( getPK2StressTensor(), false, stressVec );
+        return util::Voigt<mfem::real_t, T>( getPK2StressTensor(), false, stressVec );
     }
 
-    virtual const Eigen::Vector6d& getPK2StressVector() const;
+    virtual const Eigen::Vector6r& getPK2StressVector() const;
 
-    Eigen::Matrix3d getCauchyStressTensor() const;
+    Eigen::Matrix3r getCauchyStressTensor() const;
 
-    Eigen::Vector6d getCauchyStressVector() const;
+    Eigen::Vector6r getCauchyStressVector() const;
 
     virtual void updateRefModuli() = 0;
 
     void updateCurModuli();
 
-    const Eigen::Matrix6d& getRefModuli() const
+    const Eigen::Matrix6r& getRefModuli() const
     {
         return mRefModuli;
     }
 
-    const Eigen::Matrix6d& getCurModuli() const
+    const Eigen::Matrix6r& getCurModuli() const
     {
         return mCurModuli;
     }
@@ -58,7 +58,7 @@ public:
         mIntgP = &p;
     }
 
-    void setDeformationGradient( const Eigen::Matrix<double, 3, 3>& F )
+    void setDeformationGradient( const Eigen::Matrix<mfem::real_t, 3, 3>& F )
     {
         mdxdX = &F;
     }
@@ -73,7 +73,7 @@ public:
         mLambda = l;
     }
 
-    Eigen::Vector6d getIntrinsicPK2StressVector() const;
+    Eigen::Vector6r getIntrinsicPK2StressVector() const;
 
     void setIntrinsicStress( mfem::VectorCoefficient* intrinsicStress )
     {
@@ -82,11 +82,11 @@ public:
 
 protected:
     // moduli in reference configuration
-    Eigen::Matrix6d mRefModuli;
+    Eigen::Matrix6r mRefModuli;
 
     // moduli in current configuration
-    Eigen::Matrix6d mCurModuli;
-    const Eigen::Matrix3d* mdxdX{ nullptr };
+    Eigen::Matrix6r mCurModuli;
+    const Eigen::Matrix3r* mdxdX{ nullptr };
     bool mSmallDeformation{ true };
 
     mfem::ElementTransformation* mEleTrans{ nullptr };
@@ -96,8 +96,8 @@ protected:
     mfem::VectorCoefficient* mIntrinsicStress{ nullptr };
 
     // strain cache
-    mutable Eigen::Vector6d mStrainVec;
-    mutable Eigen::Vector6d mStressVec;
+    mutable Eigen::Vector6r mStrainVec;
+    mutable Eigen::Vector6r mStressVec;
 };
 
 class IsotropicElasticMaterial : public ElasticMaterial
@@ -121,7 +121,7 @@ public:
 
     virtual void updateRefModuli() override;
 
-    virtual const Eigen::Vector6d& getPK2StressVector() const;
+    virtual const Eigen::Vector6r& getPK2StressVector() const;
 
 protected:
     mfem::Coefficient* mE{ nullptr };
@@ -163,7 +163,7 @@ public:
         return mCTE->Eval( *mEleTrans, *mIntgP );
     }
 
-    virtual Eigen::Matrix3d getGreenLagrangeStrainTensor() const;
+    virtual Eigen::Matrix3r getGreenLagrangeStrainTensor() const;
 
 protected:
     mfem::Coefficient* mCTE{ nullptr };

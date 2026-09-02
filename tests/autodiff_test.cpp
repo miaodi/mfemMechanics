@@ -69,21 +69,21 @@ TEST( autodiff, dual_vs_double )
     // p: deltaT, deltaN, phiT, phiN, dA1x, dA1y, dA2x, dA2y
     auto func2 = [&p]( const autodiff::VectorXdual2nd& x )
     {
-        Eigen::VectorXd pp = p.template cast<double>();
+        Eigen::VectorXr pp = p.template cast<mfem::real_t>();
 
         const double deltaT = pp[0];
         const double deltaN = pp[1];
         const double phiT = pp[2];
         const double phiN = pp[3];
 
-        Eigen::Vector2d dA1;
+        Eigen::Vector2r dA1;
         dA1 << pp[4], pp[5];
-        Eigen::Vector2d dA2;
+        Eigen::Vector2r dA2;
         dA2 << pp[6], pp[7];
         const double q = phiT / phiN;
         const double r = 0.;
 
-        VectorXdual2nd directionT = dA1 + dA2;
+        VectorXdual2nd directionT = ( dA1 + dA2 ).cast<autodiff::dual2nd>();
         directionT.normalize();
 
         static Eigen::Rotation2Dd rot( EIGEN_PI / 2 );
@@ -150,10 +150,10 @@ TEST( autodiff, dual_vs_double )
 
 //     autodiff::VectorXdual2nd F; // the output vector F = f(x, p, q) evaluated together with Jacobian below
 
-//     Eigen::MatrixXd Jx1 = autodiff::jacobian( eigenvalue1, wrt( strain ), at( strain ),
+//     Eigen::MatrixXr Jx1 = autodiff::jacobian( eigenvalue1, wrt( strain ), at( strain ),
 //                                               F ); // evaluate the function and the Jacobian matrix J\Lambda = d\Lambda/dE
 
-//     Eigen::MatrixXd Jx2 = autodiff::jacobian( eigenvalue2, wrt( strain ), at( strain ),
+//     Eigen::MatrixXr Jx2 = autodiff::jacobian( eigenvalue2, wrt( strain ), at( strain ),
 //                                               F ); // evaluate the function and the Jacobian matrix  J\Lambda = d\Lambda/dE
 //     //   compare jacobian
 //     for ( int i = 0; i < 6; i++ )
@@ -208,11 +208,11 @@ TEST( autodiff, eigen_value_derivatives_Iterative_VS_CloseForm )
 
     autodiff::VectorXdual2nd F; // the output vector F = f(x, p, q) evaluated together with Jacobian below
 
-    Eigen::MatrixXd Jx1 = autodiff::jacobian( eigenvalue1, wrt( strain ), at( strain ),
-                                              F ); // evaluate the function and the Jacobian matrix J\Lambda = d\Lambda/dE
+    const auto Jx1 = autodiff::jacobian( eigenvalue1, wrt( strain ), at( strain ),
+                                         F ); // evaluate the function and the Jacobian matrix J\Lambda = d\Lambda/dE
 
-    Eigen::MatrixXd Jx2 = autodiff::jacobian( eigenvalue2, wrt( strain ), at( strain ),
-                                              F ); // evaluate the function and the Jacobian matrix  J\Lambda = d\Lambda/dE
+    const auto Jx2 = autodiff::jacobian( eigenvalue2, wrt( strain ), at( strain ),
+                                         F ); // evaluate the function and the Jacobian matrix  J\Lambda = d\Lambda/dE
     //   compare jacobian
     for ( int i = 0; i < 6; i++ )
     {

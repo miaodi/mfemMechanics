@@ -1,10 +1,10 @@
 #include "NeoHookeanMaterial.h"
 #include "util.h"
 
-Eigen::Matrix3d NeoHookeanMaterial::getPK2StressTensor() const
+Eigen::Matrix3r NeoHookeanMaterial::getPK2StressTensor() const
 {
-    const Eigen::Matrix3d C = ( *mdxdX ).transpose() * ( *mdxdX );
-    const Eigen::Matrix3d CInv = C.inverse();
+    const Eigen::Matrix3r C = ( *mdxdX ).transpose() * ( *mdxdX );
+    const Eigen::Matrix3r CInv = C.inverse();
     const auto mu = Mu();
     const auto lambda = Lambda();
     const auto J = ( *mdxdX ).determinant();
@@ -12,24 +12,24 @@ Eigen::Matrix3d NeoHookeanMaterial::getPK2StressTensor() const
     {
     case NeoHookeanType::Poly1:
     {
-        return mu * ( Eigen::Matrix3d::Identity() - CInv ) + lambda * ( J - 1 ) * J * CInv;
+        return mu * ( Eigen::Matrix3r::Identity() - CInv ) + lambda * ( J - 1 ) * J * CInv;
     }
     case NeoHookeanType::Ln:
     {
-        return mu * ( Eigen::Matrix3d::Identity() - CInv ) + lambda * log( J ) * CInv;
+        return mu * ( Eigen::Matrix3r::Identity() - CInv ) + lambda * log( J ) * CInv;
     }
     case NeoHookeanType::Poly2:
 
     default:
         MFEM_ABORT( "Not implemented" );
-        return Eigen::Matrix3d();
+        return Eigen::Matrix3r();
     }
 }
 
 void NeoHookeanMaterial::updateRefModuli()
 {
-    const Eigen::Matrix3d C = ( *mdxdX ).transpose() * ( *mdxdX );
-    const Eigen::Matrix3d CInv = C.inverse();
+    const Eigen::Matrix3r C = ( *mdxdX ).transpose() * ( *mdxdX );
+    const Eigen::Matrix3r CInv = C.inverse();
     const auto mu = Mu();
     const auto lambda = Lambda();
     const auto J = ( *mdxdX ).determinant();

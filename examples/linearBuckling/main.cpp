@@ -216,9 +216,9 @@ int main( int argc, char* argv[] )
     ietm.setInitialTemp( 0 );
     ietm.setFinalTemp( f_temp );
 
-    plugin::Memorize mm( pmesh );
+    plugin::IntegrationPointStorage pointStorage( pmesh );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( ietm, mm );
+    auto intg = new plugin::NonlinearElasticityIntegrator( ietm, pointStorage );
     intg->setNonlinear( false );
     auto* nlf = new ParNonlinearForm( fespace );
     nlf->AddDomainIntegrator( intg );

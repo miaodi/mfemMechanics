@@ -10,7 +10,7 @@ PhaseFieldElasticMaterial::PhaseFieldElasticMaterial( mfem::Coefficient& E, mfem
     mParams.resize( 10 );
 }
 
-std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::VectorXd& )> PhaseFieldElasticMaterial::StrainEnergyFactory(
+std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::VectorXr& )> PhaseFieldElasticMaterial::StrainEnergyFactory(
     const PhaseFieldElasticMaterial::StrainEnergyType set ) const
 {
     switch ( set )
@@ -18,7 +18,7 @@ std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::V
     case PhaseFieldElasticMaterial::StrainEnergyType::Amor:
     {
         // zhou2018phase
-        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXd& params ) {
+        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXr& params ) {
             using T = typename std::decay_t<decltype( strainVec( 0 ) )>;
 
             auto curlyBracPos = []( const T& val ) { return val > 0 ? val : static_cast<T>( 0 ); };
@@ -49,7 +49,7 @@ std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::V
     }
     case StrainEnergyType::IsotropicLinearElastic:
     {
-        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXd& params ) {
+        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXr& params ) {
             const auto strainTensor = util::InverseVoigt( strainVec, true );
             const double Nu = this->Nu();
             const double E = this->E();
@@ -61,7 +61,7 @@ std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::V
         };
     }
     default:
-        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXd& params ) {
+        return [this]( const autodiff::Vector6dual2nd& strainVec, const Eigen::VectorXr& params ) {
             return autodiff::dual2nd( 0 );
         };
     }
@@ -76,11 +76,12 @@ void PhaseFieldElasticMaterial::updateRefModuli()
     mParams[0] = 2;
     mParams[1] = mPhi;
 
-    mRefModuli = autodiff::hessian( mStrainEnergyFunc, autodiff::wrt( mStrainVecDual ),
-                                    autodiff::at( mStrainVecDual, mParams ), u, g );
+    mRefModuli =
+        autodiff::hessian( mStrainEnergyFunc, autodiff::wrt( mStrainVecDual ), autodiff::at( mStrainVecDual, mParams ), u, g )
+            .cast<mfem::real_t>();
 }
 
-const Eigen::Vector6d& PhaseFieldElasticMaterial::getPK2StressVector() const
+const Eigen::Vector6r& PhaseFieldElasticMaterial::getPK2StressVector() const
 {
     getGreenLagrangeStrainVector( mStrainVecDual );
     autodiff::dual2nd u;
@@ -89,7 +90,8 @@ const Eigen::Vector6d& PhaseFieldElasticMaterial::getPK2StressVector() const
     mParams[1] = mPhi;
 
     mStressVec =
-        autodiff::gradient( mStrainEnergyFunc, autodiff::wrt( mStrainVecDual ), autodiff::at( mStrainVecDual, mParams ), u );
+        autodiff::gradient( mStrainEnergyFunc, autodiff::wrt( mStrainVecDual ), autodiff::at( mStrainVecDual, mParams ), u )
+            .cast<mfem::real_t>();
     return mStressVec;
 }
 

@@ -22,8 +22,8 @@ class PhaseFieldIntegrator : public BlockNonlinearFormIntegratorLambda
     void UpdateH( const int, double& );
 
 public:
-    PhaseFieldIntegrator( PhaseFieldElasticMaterial& m, Memorize& memo )
-        : BlockNonlinearFormIntegratorLambda(), mMaterialModel( &m ), mMemo{ memo }
+    PhaseFieldIntegrator( PhaseFieldElasticMaterial& m, IntegrationPointStorage& pointStorage )
+        : BlockNonlinearFormIntegratorLambda(), mMaterialModel( &m ), mPointStorage{ pointStorage }
     {
     }
 
@@ -52,10 +52,10 @@ public:
 protected:
     PhaseFieldElasticMaterial* mMaterialModel{ nullptr };
 
-    Eigen::Matrix<double, 3, 3> mdxdX;
-    Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
-    // Eigen::MatrixXd mGeomStiff;
-    Memorize& mMemo;
+    Eigen::Matrix<mfem::real_t, 3, 3> mdxdX;
+    Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic> mB;
+    // Eigen::MatrixXr mGeomStiff;
+    IntegrationPointStorage& mPointStorage;
     // bool mOnlyGeomStiff{ false };
 
     // data for phase field

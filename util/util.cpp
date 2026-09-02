@@ -27,7 +27,7 @@ short Voigt( const short i, const short pos )
     }
 }
 
-void symmetricIdentityTensor( const Eigen::Matrix3d& C, Eigen::Matrix6d& CC )
+void symmetricIdentityTensor( const Eigen::Matrix3r& C, Eigen::Matrix6r& CC )
 {
     CC.setZero();
 
@@ -37,7 +37,7 @@ void symmetricIdentityTensor( const Eigen::Matrix3d& C, Eigen::Matrix6d& CC )
                                 C( Voigt( i, 0 ), Voigt( j, 3 ) ) * C( Voigt( i, 1 ), Voigt( j, 2 ) ) );
 }
 
-void tensorProduct( const Eigen::Matrix3d& A, const Eigen::Matrix3d& B, Eigen::Matrix6d& CC )
+void tensorProduct( const Eigen::Matrix3r& A, const Eigen::Matrix3r& B, Eigen::Matrix6r& CC )
 {
     CC.setZero();
 
@@ -46,9 +46,9 @@ void tensorProduct( const Eigen::Matrix3d& A, const Eigen::Matrix3d& B, Eigen::M
             CC( i, j ) = A( Voigt( i, 0 ), Voigt( i, 1 ) ) * B( Voigt( j, 2 ), Voigt( j, 3 ) );
 }
 
-Eigen::Matrix6d TransformationVoigtForm( const Eigen::Matrix3d& t )
+Eigen::Matrix6r TransformationVoigtForm( const Eigen::Matrix3r& t )
 {
-    Eigen::Matrix6d T;
+    Eigen::Matrix6r T;
     T( 0, 0 ) = t( 0, 0 ) * t( 0, 0 ), T( 0, 1 ) = t( 0, 1 ) * t( 0, 1 ), T( 0, 2 ) = t( 0, 2 ) * t( 0, 2 ),
             T( 0, 3 ) = t( 0, 0 ) * t( 0, 1 ), T( 0, 4 ) = t( 0, 1 ) * t( 0, 2 ), T( 0, 5 ) = t( 0, 0 ) * t( 0, 2 );
     T( 1, 0 ) = t( 1, 0 ) * t( 1, 0 ), T( 1, 1 ) = t( 1, 1 ) * t( 1, 1 ), T( 1, 2 ) = t( 1, 2 ) * t( 1, 2 ),
@@ -113,11 +113,11 @@ double SmallestCircle( const mfem::IntegrationRule& nodes, const int dim )
         return dist( nodes.IntPoint( 0 ), nodes.IntPoint( 1 ) );
     auto formCircle = []( const mfem::IntegrationPoint& a, const mfem::IntegrationPoint& b, const mfem::IntegrationPoint& c )
     {
-        Eigen::Matrix3d m;
+        Eigen::Matrix3r m;
         m << 2 * a.x, 2 * a.y, 1, 2 * b.x, 2 * b.y, 1, 2 * c.x, 2 * c.y, 1;
-        Eigen::Vector3d rhs;
+        Eigen::Vector3r rhs;
         rhs << a.x * a.x + a.y * a.y, b.x * b.x + b.y * b.y, c.x * c.x + c.y * c.y;
-        Eigen::Vector3d sol = m.fullPivLu().solve( rhs );
+        Eigen::Vector3r sol = m.fullPivLu().solve( rhs );
         const double r = std::sqrt( sol( 2 ) + sol( 0 ) * sol( 0 ) + sol( 1 ) * sol( 1 ) );
         return Circle( sol( 0 ), sol( 1 ), r );
     };

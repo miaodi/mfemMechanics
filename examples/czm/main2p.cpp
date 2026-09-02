@@ -150,9 +150,9 @@ int main( int argc, char* argv[] )
 
     IsotropicElasticMaterial iem( E_func, nu_func );
 
-    plugin::Memorize mm( pmesh );
+    plugin::IntegrationPointStorage pointStorage( pmesh );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
+    auto intg = new plugin::NonlinearElasticityIntegrator( iem, pointStorage );
     // intg->setNonlinear( true );
 
     ParNonlinearForm* nlf = new ParNonlinearForm( fespace );
@@ -230,7 +230,7 @@ int main( int argc, char* argv[] )
     mfem::ConstantCoefficient delta_n{4E-7};
     mfem::ConstantCoefficient delta_t{4E-7};
 
-    auto czm_intg = new plugin::ExponentialADCZMIntegrator( mm, sigma_max, tau_max, delta_n, delta_t );
+    auto czm_intg = new plugin::ExponentialADCZMIntegrator( pointStorage, sigma_max, tau_max, delta_n, delta_t );
     nlf->AddInteriorFaceIntegrator( czm_intg );
     // mfem::IntegrationRules GLIntRules( 0, mfem::Quadrature1D::GaussLobatto );
     // czm_intg->SetIntRule( &GLIntRules.Get( mfem::Geometry::SEGMENT, -1 ) );

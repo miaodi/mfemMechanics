@@ -190,9 +190,9 @@ int main( int argc, char* argv[] )
 
     IsotropicElasticMaterial iem( E_func, nu_func );
 
-    plugin::Memorize mm( mesh );
+    plugin::IntegrationPointStorage pointStorage( mesh );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( iem, mm );
+    auto intg = new plugin::NonlinearElasticityIntegrator( iem, pointStorage );
     intg->setNonlinear( true );
 
     NonlinearForm* nlf = new NonlinearForm( fespace );
@@ -225,7 +225,7 @@ int main( int argc, char* argv[] )
 
     // nlf->AddInteriorFaceIntegrator( new plugin::NonlinearInternalPenaltyIntegrator( 1e15 ) );
     nlf->AddInteriorFaceIntegrator(
-        new plugin::ExponentialCZMIntegrator( mm, 324E5, 755.4E5, 0.0001807127079438664, 0.0004213576978754349 ) );
+        new plugin::ExponentialCZMIntegrator( pointStorage, 324E5, 755.4E5, 0.0001807127079438664, 0.0004213576978754349 ) );
     // nlf->AddInteriorFaceIntegrator( new plugin::LinearCZMIntegrator( .257E-3, 1E-6, 48E-6, 324E7 ) );
 
     Vector zero;

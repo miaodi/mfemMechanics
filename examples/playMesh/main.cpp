@@ -180,7 +180,7 @@ int main( int argc, char* argv[] )
 
     autodiff::VectorXdual g; // gradient of f(x) evaluated together with Hessian below
 
-    Eigen::MatrixXd H = hessian( f, wrt( x ), at( x, p ), u,
+    Eigen::MatrixXr H = hessian( f, wrt( x ), at( x, p ), u,
                                  g ); // evaluate the function value u, its gradient vector g, and its Hessian matrix H with respect to (x, p, q)
     std::cout << "u = " << u << std::endl;   // print the evaluated output u
     std::cout << "g =\n" << g << std::endl;  // print the evaluated gradient vector g = [du/dx, du/dp, du/dq]

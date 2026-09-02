@@ -7,9 +7,9 @@
 
 namespace plugin
 {
-Eigen::MatrixXd mapper( const int dim, const int dof )
+Eigen::MatrixXr mapper( const int dim, const int dof )
 {
-    Eigen::MatrixXd res( dim * dof, dim * dof );
+    Eigen::MatrixXr res( dim * dof, dim * dof );
     res.setZero();
     for ( int i = 0; i < dim; i++ )
     {
@@ -21,7 +21,7 @@ Eigen::MatrixXd mapper( const int dim, const int dof )
     return res;
 }
 
-void smallDeformMatrixB( const int dof, const int dim, const Eigen::MatrixXd& gshape, Eigen::Matrix<double, 6, Eigen::Dynamic>& B )
+void smallDeformMatrixB( const int dof, const int dim, const Eigen::MatrixXr& gshape, Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic>& B )
 {
     B.resize( 6, dof * dim );
     B.setZero();
@@ -62,9 +62,9 @@ void smallDeformMatrixB( const int dof, const int dim, const Eigen::MatrixXd& gs
 
 void largeDeformMatrixB( const int dof,
                          const int dim,
-                         const Eigen::MatrixXd& gshape,
-                         const Eigen::MatrixXd& dxdX,
-                         Eigen::Matrix<double, 6, Eigen::Dynamic>& B )
+                         const Eigen::MatrixXr& gshape,
+                         const Eigen::MatrixXr& dxdX,
+                         Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic>& B )
 {
     B.resize( 6, dof * dim );
     B.setZero();
@@ -117,144 +117,316 @@ void largeDeformMatrixB( const int dof,
     }
 }
 
-Memorize::Memorize( mfem::Mesh* m )
+IntegrationPointStorage::IntegrationPointStorage( mfem::Mesh* mesh )
 {
-    Reset( m );
+    Reset( mesh );
 }
 
-void Memorize::Reset( mfem::Mesh* m )
+void IntegrationPointStorage::Reset( mfem::Mesh* mesh )
 {
-    mEleStorage.clear();
+    mElementStorage.clear();
     mFaceStorage.clear();
     mElementNo = 0;
 
-    if ( m == nullptr )
+    if ( mesh == nullptr )
     {
         return;
     }
 
-    mEleStorage.resize( m->GetNE() );
-    mFaceStorage.resize( m->GetNumFaces() );
+    mElementStorage.resize( mesh->GetNE() );
+    mFaceStorage.resize( mesh->GetNumFaces() );
 }
 
-void Memorize::InitializeElement( const mfem::FiniteElement& el, mfem::ElementTransformation& Trans, const mfem::IntegrationRule& ir )
+void IntegrationPointStorage::InitializeElement( const mfem::FiniteElement& el,
+                                                 mfem::ElementTransformation& Trans,
+                                                 const mfem::IntegrationRule& ir )
 {
     mElementNo = Trans.ElementNo;
-    if ( mEleStorage[mElementNo] != nullptr )
-        return;
+    MFEM_VERIFY( mElementNo >= 0 && mElementNo < static_cast<int>( mElementStorage.size() ),
+                 "Element quadrature storage does not match the current mesh. Call Reset after changing the mesh." );
 
+    auto& pointSet = mElementStorage[mElementNo];
+    if ( pointSet.IsInitialized() )
+    {
+        VerifyElementPointSet( pointSet, el, ir, mElementNo );
+        return;
+    }
+
+    pointSet = BuildElementPointSet( el, Trans, ir );
+}
+
+IntegrationPointStorage::ElementPointSet IntegrationPointStorage::BuildElementPointSet( const mfem::FiniteElement& el,
+                                                                                        mfem::ElementTransformation& Trans,
+                                                                                        const mfem::IntegrationRule& ir )
+{
     const int dim = el.GetDim();
     const int numOfNodes = el.GetDof();
     const int numOfGauss = ir.GetNPoints();
-    mDShape1.SetSize( numOfNodes, dim );
-    mEleStorage[mElementNo] = std::make_unique<std::vector<GaussPointStorage>>( numOfGauss );
+
+    ElementPointSet pointSet;
+    pointSet.Element = &el;
+    pointSet.Rule = &ir;
+    pointSet.Dof = numOfNodes;
+    pointSet.Dimension = dim;
+    pointSet.Points.resize( numOfGauss );
+
+    auto& referenceGradient = mBuildWorkspace.ReferenceGradient1;
+    referenceGradient.SetSize( numOfNodes, dim );
     for ( int i = 0; i < numOfGauss; i++ )
     {
-        ( *mEleStorage[mElementNo] )[i].GShape.resize( numOfNodes, dim );
+        auto& point = pointSet.Points[i];
+        point.GShape.resize( numOfNodes, dim );
+        mfem::DenseMatrix physicalGradientView( point.GShape.data(), numOfNodes, dim );
         const mfem::IntegrationPoint& ip = ir.IntPoint( i );
         Trans.SetIntPoint( &ip );
-        el.CalcDShape( ip, mDShape1 );
-        mGShape1.UseExternalData( ( *mEleStorage[mElementNo] )[i].GShape.data(), numOfNodes, dim );
-        Mult( mDShape1, Trans.InverseJacobian(), mGShape1 );
+        el.CalcDShape( ip, referenceGradient );
+        Mult( referenceGradient, Trans.InverseJacobian(), physicalGradientView );
 
-        ( *mEleStorage[mElementNo] )[i].DetdXdXi = Trans.Weight();
+        point.DetdXdXi = Trans.Weight();
     }
+
+    return pointSet;
 }
 
-void Memorize::InitializeFace( const mfem::FiniteElement& el1,
-                               const mfem::FiniteElement& el2,
-                               mfem::FaceElementTransformations& Trans,
-                               const mfem::IntegrationRule& ir )
+void IntegrationPointStorage::InitializeFace( const mfem::FiniteElement& el1,
+                                              const mfem::FiniteElement& el2,
+                                              mfem::FaceElementTransformations& Trans,
+                                              const mfem::IntegrationRule& ir )
 {
     mElementNo = Trans.ElementNo;
-    if ( mFaceStorage[mElementNo] != nullptr )
-        return;
+    MFEM_VERIFY( mElementNo >= 0 && mElementNo < static_cast<int>( mFaceStorage.size() ),
+                 "Face quadrature storage does not match the current mesh. Call Reset after changing the mesh." );
 
+    auto& pointSet = mFaceStorage[mElementNo];
+    if ( pointSet )
+    {
+        VerifyFacePointSet( *pointSet, el1, el2, Trans, ir, mElementNo );
+        return;
+    }
+
+    pointSet = std::make_unique<FacePointSet>( BuildFacePointSet( el1, el2, Trans, ir ) );
+}
+
+IntegrationPointStorage::FacePointSet IntegrationPointStorage::BuildFacePointSet( const mfem::FiniteElement& el1,
+                                                                                  const mfem::FiniteElement& el2,
+                                                                                  mfem::FaceElementTransformations& Trans,
+                                                                                  const mfem::IntegrationRule& ir )
+{
     const int dim = el1.GetDim();
     const int numOfNodes1 = el1.GetDof();
-    mDShape1.SetSize( numOfNodes1, dim );
-    mGShape1.SetSize( numOfNodes1, dim );
     const int numOfNodes2 = el2.GetDof();
-    mDShape2.SetSize( numOfNodes2, dim );
-    mGShape2.SetSize( numOfNodes2, dim );
     const int numOfGauss = ir.GetNPoints();
-    mFaceStorage[mElementNo] = std::make_unique<std::vector<CZMGaussPointStorage>>( numOfGauss );
+
+    auto& referenceGradient1 = mBuildWorkspace.ReferenceGradient1;
+    auto& referenceGradient2 = mBuildWorkspace.ReferenceGradient2;
+    auto& physicalGradient1 = mBuildWorkspace.PhysicalGradient1;
+    auto& physicalGradient2 = mBuildWorkspace.PhysicalGradient2;
+    referenceGradient1.SetSize( numOfNodes1, dim );
+    referenceGradient2.SetSize( numOfNodes2, dim );
+    physicalGradient1.SetSize( numOfNodes1, dim );
+    physicalGradient2.SetSize( numOfNodes2, dim );
+
+    FacePointSet pointSet;
+    pointSet.Element1 = &el1;
+    pointSet.Element2 = &el2;
+    pointSet.Rule = &ir;
+    pointSet.Dof1 = numOfNodes1;
+    pointSet.Dof2 = numOfNodes2;
+    pointSet.Dimension = dim;
+    pointSet.FaceDimension = Trans.GetDimension();
+    pointSet.Points.resize( numOfGauss );
+
     for ( int i = 0; i < numOfGauss; i++ )
     {
-        ( *mFaceStorage[mElementNo] )[i].Shape1.SetSize( el1.GetDof() );
-        ( *mFaceStorage[mElementNo] )[i].Shape2.SetSize( el2.GetDof() );
+        auto& point = pointSet.Points[i];
+        point.Shape1.SetSize( el1.GetDof() );
+        point.Shape2.SetSize( el2.GetDof() );
         const mfem::IntegrationPoint& ip = ir.IntPoint( i );
         Trans.SetAllIntPoints( &ip );
         const mfem::IntegrationPoint& eip1 = Trans.GetElement1IntPoint();
         const mfem::IntegrationPoint& eip2 = Trans.GetElement2IntPoint();
-        el1.CalcShape( eip1, ( *mFaceStorage[mElementNo] )[i].Shape1 );
-        el2.CalcShape( eip2, ( *mFaceStorage[mElementNo] )[i].Shape2 );
+        el1.CalcShape( eip1, point.Shape1 );
+        el2.CalcShape( eip2, point.Shape2 );
 
-        ( *mFaceStorage[mElementNo] )[i].Weight = ip.weight * Trans.Weight();
-        ( *mFaceStorage[mElementNo] )[i].Jacobian = Trans.Jacobian();
+        point.Weight = ip.weight * Trans.Weight();
+        point.Jacobian = Trans.Jacobian();
 
-        el1.CalcDShape( eip1, mDShape1 );
-        el2.CalcDShape( eip2, mDShape2 );
+        el1.CalcDShape( eip1, referenceGradient1 );
+        el2.CalcDShape( eip2, referenceGradient2 );
         auto& Trans1 = Trans.GetElement1Transformation();
         auto& Trans2 = Trans.GetElement2Transformation();
         Trans1.SetIntPoint( &eip1 );
         Trans2.SetIntPoint( &eip2 );
 
-        Mult( mDShape1, Trans1.InverseJacobian(), mGShape1 );
-        Mult( mDShape2, Trans2.InverseJacobian(), mGShape2 );
+        Mult( referenceGradient1, Trans1.InverseJacobian(), physicalGradient1 );
+        Mult( referenceGradient2, Trans2.InverseJacobian(), physicalGradient2 );
 
-        ( *mFaceStorage[mElementNo] )[i].GShapeFace1.SetSize( numOfNodes1, Trans.GetDimension() );
-        ( *mFaceStorage[mElementNo] )[i].GShapeFace2.SetSize( numOfNodes2, Trans.GetDimension() );
-        Mult( mGShape1, ( *mFaceStorage[mElementNo] )[i].Jacobian, ( *mFaceStorage[mElementNo] )[i].GShapeFace1 );
-        Mult( mGShape2, ( *mFaceStorage[mElementNo] )[i].Jacobian, ( *mFaceStorage[mElementNo] )[i].GShapeFace2 );
+        point.GShapeFace1.SetSize( numOfNodes1, Trans.GetDimension() );
+        point.GShapeFace2.SetSize( numOfNodes2, Trans.GetDimension() );
+        Mult( physicalGradient1, point.Jacobian, point.GShapeFace1 );
+        Mult( physicalGradient2, point.Jacobian, point.GShapeFace2 );
     }
+
+    return pointSet;
 }
 
-const mfem::Vector& Memorize::GetFace1Shape( const int gauss ) const
+void IntegrationPointStorage::VerifyElementPointSet( const ElementPointSet& pointSet,
+                                                     const mfem::FiniteElement& el,
+                                                     const mfem::IntegrationRule& ir,
+                                                     const int elementNo )
 {
-    return ( *mFaceStorage[mElementNo] )[gauss].Shape1;
+    MFEM_VERIFY( pointSet.Element == &el, "Element " << elementNo << " was initialized with a different finite element." );
+    MFEM_VERIFY( pointSet.Rule == &ir, "Element " << elementNo << " was initialized with a different integration rule." );
+    MFEM_VERIFY( pointSet.Dof == el.GetDof() && pointSet.Dimension == el.GetDim(),
+                 "Element " << elementNo << " quadrature metadata is incompatible with the requested finite element." );
+    MFEM_VERIFY( static_cast<int>( pointSet.Points.size() ) == ir.GetNPoints(),
+                 "Element " << elementNo << " quadrature-point count is incompatible with the requested integration rule." );
 }
 
-const mfem::Vector& Memorize::GetFace2Shape( const int gauss ) const
+void IntegrationPointStorage::VerifyFacePointSet( const FacePointSet& pointSet,
+                                                  const mfem::FiniteElement& el1,
+                                                  const mfem::FiniteElement& el2,
+                                                  const mfem::FaceElementTransformations& Trans,
+                                                  const mfem::IntegrationRule& ir,
+                                                  const int faceNo )
 {
-    return ( *mFaceStorage[mElementNo] )[gauss].Shape2;
+    MFEM_VERIFY( pointSet.Element1 == &el1 && pointSet.Element2 == &el2,
+                 "Face " << faceNo << " was initialized with different finite elements." );
+    MFEM_VERIFY( pointSet.Rule == &ir, "Face " << faceNo << " was initialized with a different integration rule." );
+    MFEM_VERIFY( pointSet.Dof1 == el1.GetDof() && pointSet.Dof2 == el2.GetDof() && pointSet.Dimension == el1.GetDim() &&
+                     pointSet.FaceDimension == Trans.GetDimension(),
+                 "Face " << faceNo << " quadrature metadata is incompatible with the requested finite elements." );
+    MFEM_VERIFY( static_cast<int>( pointSet.Points.size() ) == ir.GetNPoints(),
+                 "Face " << faceNo << " quadrature-point count is incompatible with the requested integration rule." );
 }
 
-const mfem::DenseMatrix& Memorize::GetFace1GShape( const int gauss ) const
+const IntegrationPointStorage::ElementPointSet& IntegrationPointStorage::CurrentElementPointSet() const
 {
-    return ( *mFaceStorage[mElementNo] )[gauss].GShapeFace1;
+    MFEM_VERIFY( mElementNo >= 0 && mElementNo < static_cast<int>( mElementStorage.size() ),
+                 "No current element quadrature storage is available." );
+    const auto& pointSet = mElementStorage[mElementNo];
+    MFEM_VERIFY( pointSet.IsInitialized(), "Current element quadrature storage has not been initialized." );
+    return pointSet;
 }
 
-const mfem::DenseMatrix& Memorize::GetFace2GShape( const int gauss ) const
+IntegrationPointStorage::ElementPointSet& IntegrationPointStorage::CurrentElementPointSet()
 {
-    return ( *mFaceStorage[mElementNo] )[gauss].GShapeFace2;
+    MFEM_VERIFY( mElementNo >= 0 && mElementNo < static_cast<int>( mElementStorage.size() ),
+                 "No current element quadrature storage is available." );
+    auto& pointSet = mElementStorage[mElementNo];
+    MFEM_VERIFY( pointSet.IsInitialized(), "Current element quadrature storage has not been initialized." );
+    return pointSet;
 }
 
-const Eigen::MatrixXd& Memorize::GetdNdX( const int gauss ) const
+const IntegrationPointStorage::FacePointSet& IntegrationPointStorage::CurrentFacePointSet() const
 {
-    return ( *mEleStorage[mElementNo] )[gauss].GShape;
+    MFEM_VERIFY( mElementNo >= 0 && mElementNo < static_cast<int>( mFaceStorage.size() ),
+                 "No current face quadrature storage is available." );
+    MFEM_VERIFY( mFaceStorage[mElementNo] != nullptr, "Current face quadrature storage has not been initialized." );
+    return *mFaceStorage[mElementNo];
 }
 
-double Memorize::GetDetdXdXi( const int gauss ) const
+IntegrationPointStorage::FacePointSet& IntegrationPointStorage::CurrentFacePointSet()
 {
-    return ( *mEleStorage[mElementNo] )[gauss].DetdXdXi;
+    MFEM_VERIFY( mElementNo >= 0 && mElementNo < static_cast<int>( mFaceStorage.size() ),
+                 "No current face quadrature storage is available." );
+    MFEM_VERIFY( mFaceStorage[mElementNo] != nullptr, "Current face quadrature storage has not been initialized." );
+    return *mFaceStorage[mElementNo];
 }
 
-const mfem::DenseMatrix& Memorize::GetFaceJacobian( const int gauss ) const
+const CZMGaussPointStorage& IntegrationPointStorage::GetFacePointStorage( const int gauss ) const
 {
-    return ( *mFaceStorage[mElementNo] )[gauss].Jacobian;
+    const auto& points = CurrentFacePointSet().Points;
+    MFEM_VERIFY( gauss >= 0 && gauss < static_cast<int>( points.size() ),
+                 "Face quadrature-point index is out of range." );
+    return points[gauss];
 }
 
-double Memorize::GetFaceWeight( const int gauss ) const
+CZMGaussPointStorage& IntegrationPointStorage::GetFacePointStorage( const int gauss )
 {
-    return ( *mFaceStorage[mElementNo] )[gauss].Weight;
+    auto& points = CurrentFacePointSet().Points;
+    MFEM_VERIFY( gauss >= 0 && gauss < static_cast<int>( points.size() ),
+                 "Face quadrature-point index is out of range." );
+    return points[gauss];
+}
+
+const util::AnyMap& IntegrationPointStorage::GetBodyPointData( const int gauss ) const
+{
+    const auto& points = CurrentElementPointSet().Points;
+    MFEM_VERIFY( gauss >= 0 && gauss < static_cast<int>( points.size() ),
+                 "Element quadrature-point index is out of range." );
+    return points[gauss].PointData;
+}
+
+util::AnyMap& IntegrationPointStorage::GetBodyPointData( const int gauss )
+{
+    auto& points = CurrentElementPointSet().Points;
+    MFEM_VERIFY( gauss >= 0 && gauss < static_cast<int>( points.size() ),
+                 "Element quadrature-point index is out of range." );
+    return points[gauss].PointData;
+}
+
+const util::AnyMap& IntegrationPointStorage::GetFacePointData( const int gauss ) const
+{
+    return GetFacePointStorage( gauss ).PointData;
+}
+
+util::AnyMap& IntegrationPointStorage::GetFacePointData( const int gauss )
+{
+    return GetFacePointStorage( gauss ).PointData;
+}
+
+const mfem::Vector& IntegrationPointStorage::GetFace1Shape( const int gauss ) const
+{
+    return GetFacePointStorage( gauss ).Shape1;
+}
+
+const mfem::Vector& IntegrationPointStorage::GetFace2Shape( const int gauss ) const
+{
+    return GetFacePointStorage( gauss ).Shape2;
+}
+
+const mfem::DenseMatrix& IntegrationPointStorage::GetFace1GShape( const int gauss ) const
+{
+    return GetFacePointStorage( gauss ).GShapeFace1;
+}
+
+const mfem::DenseMatrix& IntegrationPointStorage::GetFace2GShape( const int gauss ) const
+{
+    return GetFacePointStorage( gauss ).GShapeFace2;
+}
+
+const Eigen::MatrixXr& IntegrationPointStorage::GetdNdX( const int gauss ) const
+{
+    const auto& points = CurrentElementPointSet().Points;
+    MFEM_VERIFY( gauss >= 0 && gauss < static_cast<int>( points.size() ),
+                 "Element quadrature-point index is out of range." );
+    return points[gauss].GShape;
+}
+
+mfem::real_t IntegrationPointStorage::GetDetdXdXi( const int gauss ) const
+{
+    const auto& points = CurrentElementPointSet().Points;
+    MFEM_VERIFY( gauss >= 0 && gauss < static_cast<int>( points.size() ),
+                 "Element quadrature-point index is out of range." );
+    return points[gauss].DetdXdXi;
+}
+
+const mfem::DenseMatrix& IntegrationPointStorage::GetFaceJacobian( const int gauss ) const
+{
+    return GetFacePointStorage( gauss ).Jacobian;
+}
+
+mfem::real_t IntegrationPointStorage::GetFaceWeight( const int gauss ) const
+{
+    return GetFacePointStorage( gauss ).Weight;
 }
 
 void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el, mfem::ElementTransformation& Trans, mfem::DenseMatrix& elmat )
 {
     int dof = el.GetDof();
     int dim = el.GetDim();
-    double w{ 0 };
+    mfem::real_t w{ 0 };
 
     MFEM_ASSERT( dim == Trans.GetSpaceDim(), "" );
 
@@ -263,8 +435,8 @@ void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el,
 
     elmat.SetSize( dof * dim );
 
-    Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * dim, dof * dim );
-    Eigen::Matrix<double, 6, Eigen::Dynamic> B( 6, dof * dim );
+    Eigen::Map<Eigen::MatrixXr> eigenMat( elmat.Data(), dof * dim, dof * dim );
+    Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic> B( 6, dof * dim );
     B.setZero();
 
     const mfem::IntegrationRule* ir = IntRule;
@@ -298,9 +470,9 @@ void ElasticityIntegrator::AssembleElementMatrix( const mfem::FiniteElement& el,
 void ElasticityIntegrator::matrixB( const int dof,
                                     const int dim,
                                     const mfem::DenseMatrix& gshape,
-                                    Eigen::Matrix<double, 6, Eigen::Dynamic>& B ) const
+                                    Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic>& B ) const
 {
-    smallDeformMatrixB( dof, dim, Eigen::Map<Eigen::MatrixXd>( gshape.Data(), gshape.Height(), gshape.Width() ), B );
+    smallDeformMatrixB( dof, dim, Eigen::Map<Eigen::MatrixXr>( gshape.Data(), gshape.Height(), gshape.Width() ), B );
 }
 
 void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteElement& el,
@@ -313,32 +485,32 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
         mfem::mfem_error( "IterAux is not provided yet.\n" );
     }
 
-    const double ct = mIterAux->GetCurLambda();
+    const mfem::real_t ct = mIterAux->GetCurLambda();
     mMaterialModel->setLambda( ct );
-    double w;
+    mfem::real_t w;
     int dof = el.GetDof(), dim = el.GetDim();
 
     mGeomStiff.resize( dof, dof );
 
-    Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, dim );
+    Eigen::Map<const Eigen::MatrixXr> u( elfun.GetData(), dof, dim );
     elmat.SetSize( dof * dim );
     elmat = 0.0;
 
-    Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * dim, dof * dim );
+    Eigen::Map<Eigen::MatrixXr> eigenMat( elmat.Data(), dof * dim, dof * dim );
 
-    const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
+    const Eigen::Matrix3r identity = Eigen::Matrix3r::Identity();
 
     const mfem::IntegrationRule* ir = IntRule;
     if ( !ir )
     {
         ir = &( mfem::IntRules.Get( el.GetGeomType(), 2 * el.GetOrder() + 1 ) ); // <---
     }
-    mMemo.InitializeElement( el, Ttr, *ir );
+    mPointStorage.InitializeElement( el, Ttr, *ir );
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
         const mfem::IntegrationPoint& ip = ir->IntPoint( i );
         Ttr.SetIntPoint( &ip );
-        const Eigen::MatrixXd& gShape = mMemo.GetdNdX( i );
+        const Eigen::MatrixXr& gShape = mPointStorage.GetdNdX( i );
         mdxdX.setZero();
         mdxdX.block( 0, 0, dim, dim ) = u.transpose() * gShape;
         mdxdX += identity;
@@ -356,7 +528,7 @@ void NonlinearElasticityIntegrator::AssembleElementGrad( const mfem::FiniteEleme
         mMaterialModel->setDeformationGradient( mdxdX );
         mMaterialModel->updateRefModuli();
 
-        w = ip.weight * mMemo.GetDetdXdXi( i );
+        w = ip.weight * mPointStorage.GetDetdXdXi( i );
         if ( !onlyGeomStiff() )
             eigenMat += w * mB.transpose() * mMaterialModel->getRefModuli() * mB;
         if ( isNonlinear() || onlyGeomStiff() )
@@ -380,17 +552,17 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
     {
         mfem::mfem_error( "IterAux is not provided yet.\n" );
     }
-    const double ct = mIterAux->GetCurLambda();
+    const mfem::real_t ct = mIterAux->GetCurLambda();
     mMaterialModel->setLambda( ct );
 
-    double w;
+    mfem::real_t w;
     int dof = el.GetDof(), dim = el.GetDim();
 
-    Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, dim );
+    Eigen::Map<const Eigen::MatrixXr> u( elfun.GetData(), dof, dim );
 
     elvect.SetSize( dof * dim );
     elvect = 0.0;
-    Eigen::Map<Eigen::VectorXd> eigenVec( elvect.GetData(), dof * dim );
+    Eigen::Map<Eigen::VectorXr> eigenVec( elvect.GetData(), dof * dim );
 
     const mfem::IntegrationRule* ir = IntRule;
     if ( !ir )
@@ -398,13 +570,13 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
         ir = &( mfem::IntRules.Get( el.GetGeomType(), 2 * el.GetOrder() + 1 ) ); // <---
     }
 
-    const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
-    mMemo.InitializeElement( el, Ttr, *ir );
+    const Eigen::Matrix3r identity = Eigen::Matrix3r::Identity();
+    mPointStorage.InitializeElement( el, Ttr, *ir );
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
         const mfem::IntegrationPoint& ip = ir->IntPoint( i );
         Ttr.SetIntPoint( &ip );
-        const Eigen::MatrixXd& gShape = mMemo.GetdNdX( i );
+        const Eigen::MatrixXr& gShape = mPointStorage.GetdNdX( i );
 
         mdxdX.setZero();
         mdxdX.block( 0, 0, dim, dim ) = u.transpose() * gShape;
@@ -421,7 +593,7 @@ void NonlinearElasticityIntegrator::AssembleElementVector( const mfem::FiniteEle
         mMaterialModel->setDeformationGradient( mdxdX );
         mMaterialModel->updateRefModuli();
 
-        w = ip.weight * mMemo.GetDetdXdXi( i );
+        w = ip.weight * mPointStorage.GetDetdXdXi( i );
         eigenVec += w * ( mB.transpose() * mMaterialModel->getPK2StressVector() );
     }
     // std::cout<<"Rhs:\n";
@@ -455,7 +627,7 @@ void NonlinearVectorBoundaryLFIntegrator::AssembleFaceVector( const mfem::Finite
         mfem::mfem_error( "IterAux is not provided yet.\n" );
     }
 
-    const double ct = mIterAux->GetCurLambda();
+    const mfem::real_t ct = mIterAux->GetCurLambda();
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
@@ -528,8 +700,8 @@ void NonlinearPressureIntegrator::AssembleFaceVector( const mfem::FiniteElement&
 
     elvect.SetSize( dof * vdim );
     elvect = 0.0;
-    Eigen::Map<Eigen::VectorXd> eigenVec( elvect.GetData(), elvect.Size() );
-    Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, vdim );
+    Eigen::Map<Eigen::VectorXr> eigenVec( elvect.GetData(), elvect.Size() );
+    Eigen::Map<const Eigen::MatrixXr> u( elfun.GetData(), dof, vdim );
 
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
@@ -538,11 +710,11 @@ void NonlinearPressureIntegrator::AssembleFaceVector( const mfem::FiniteElement&
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
 
-    Eigen::Rotation2Dd r( EIGEN_PI / 2 );
+    Eigen::Rotation2D<mfem::real_t> r( EIGEN_PI / 2 );
 
-    const double ct = mIterAux->GetCurLambda();
+    const mfem::real_t ct = mIterAux->GetCurLambda();
 
-    const Eigen::MatrixXd identity = Eigen::MatrixXd::Identity( vdim, vdim );
+    const Eigen::MatrixXr identity = Eigen::MatrixXr::Identity( vdim, vdim );
 
     auto& Ttr = Tr.GetElement1Transformation();
 
@@ -557,18 +729,18 @@ void NonlinearPressureIntegrator::AssembleFaceVector( const mfem::FiniteElement&
         const mfem::IntegrationPoint& eip = Tr.GetElement1IntPoint();
 
         // Use Tr transformation in case Q depends on boundary attribute
-        const double val = Q.Eval( Tr, ip ) * ct;
+        const mfem::real_t val = Q.Eval( Tr, ip ) * ct;
         // vec *= Tr.Weight() * ip.weight;
         el1.CalcShape( eip, shape );
         el1.CalcDShape( eip, mDShape );
         Mult( mDShape, Ttr.InverseJacobian(), mGShape );
-        mdxdX = u.transpose() * Eigen::Map<const Eigen::MatrixXd>( mGShape.Data(), dof, vdim ) + identity;
+        mdxdX = u.transpose() * Eigen::Map<const Eigen::MatrixXr>( mGShape.Data(), dof, vdim ) + identity;
 
-        Eigen::Map<const Eigen::MatrixXd> vec( shape.GetData(), 1, dof );
+        Eigen::Map<const Eigen::MatrixXr> vec( shape.GetData(), 1, dof );
 
-        Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
+        Eigen::Map<const Eigen::MatrixXr> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
 
-        Eigen::VectorXd dxdxi = mdxdX * Jac;
+        Eigen::VectorXr dxdxi = mdxdX * Jac;
 
         eigenVec -= Eigen::kroneckerProduct( identity, vec ).transpose() * r.toRotationMatrix() * dxdxi.normalized() *
                     dxdxi.norm() * ip.weight * val;
@@ -596,11 +768,11 @@ void NonlinearPressureIntegrator::AssembleFaceGrad( const mfem::FiniteElement& e
 
     elmat.SetSize( dof * vdim );
     elmat = 0.0;
-    Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * vdim, dof * vdim );
-    Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, vdim );
+    Eigen::Map<Eigen::MatrixXr> eigenMat( elmat.Data(), dof * vdim, dof * vdim );
+    Eigen::Map<const Eigen::MatrixXr> u( elfun.GetData(), dof, vdim );
 
-    Eigen::VectorXd dxdxi;
-    Eigen::MatrixXd deltau;
+    Eigen::VectorXr dxdxi;
+    Eigen::MatrixXr deltau;
 
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
@@ -609,13 +781,13 @@ void NonlinearPressureIntegrator::AssembleFaceGrad( const mfem::FiniteElement& e
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
 
-    Eigen::Rotation2Dd r( EIGEN_PI / 2 );
+    Eigen::Rotation2D<mfem::real_t> r( EIGEN_PI / 2 );
 
     auto& Ttr = Tr.GetElement1Transformation();
 
-    const Eigen::MatrixXd identity = Eigen::MatrixXd::Identity( vdim, vdim );
+    const Eigen::MatrixXr identity = Eigen::MatrixXr::Identity( vdim, vdim );
 
-    const double ct = mIterAux->GetCurLambda();
+    const mfem::real_t ct = mIterAux->GetCurLambda();
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
@@ -628,17 +800,17 @@ void NonlinearPressureIntegrator::AssembleFaceGrad( const mfem::FiniteElement& e
         const mfem::IntegrationPoint& eip = Tr.GetElement1IntPoint();
 
         // Use Tr transformation in case Q depends on boundary attribute
-        const double val = Q.Eval( Tr, ip ) * ct;
+        const mfem::real_t val = Q.Eval( Tr, ip ) * ct;
         // vec *= Tr.Weight() * ip.weight;
         el1.CalcShape( eip, shape );
         el1.CalcDShape( eip, mDShape );
         Mult( mDShape, Ttr.InverseJacobian(), mGShape );
-        Eigen::Map<const Eigen::MatrixXd> eigenGShape( mGShape.Data(), dof, vdim );
+        Eigen::Map<const Eigen::MatrixXr> eigenGShape( mGShape.Data(), dof, vdim );
         mdxdX = u.transpose() * eigenGShape + identity;
 
-        Eigen::Map<const Eigen::MatrixXd> vec( shape.GetData(), 1, dof );
+        Eigen::Map<const Eigen::MatrixXr> vec( shape.GetData(), 1, dof );
 
-        Eigen::Map<const Eigen::MatrixXd> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
+        Eigen::Map<const Eigen::MatrixXr> Jac( Tr.Jacobian().Data(), Tr.Jacobian().NumRows(), Tr.Jacobian().NumCols() );
 
         dxdxi = mdxdX * Jac;
         deltau = Eigen::kroneckerProduct( identity, eigenGShape * Jac ).transpose();
@@ -661,31 +833,31 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
 
     mMaterialModel->setLambda( mIterAux->GetCurLambda() );
 
-    double w = 0;
+    mfem::real_t w = 0;
     int dof = el.GetDof(), dim = el.GetDim();
 
     MFEM_ASSERT( dim == 3 && dof == 8, "NonlinearCompositeSolidShellIntegrator only support linearHex elements" );
 
-    Eigen::Map<const Eigen::MatrixXd> u( elfun.GetData(), dof, dim );
+    Eigen::Map<const Eigen::MatrixXr> u( elfun.GetData(), dof, dim );
     elmat.SetSize( dof * dim );
     elmat = 0.0;
 
-    Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * dim, dof * dim );
+    Eigen::Map<Eigen::MatrixXr> eigenMat( elmat.Data(), dof * dim, dof * dim );
 
     mfem::DenseMatrix mat;
     mfem::IntegrationPoint ip;
 
     // from [-1, 1] to [0, 1]
-    auto convert = []( double& x ) { x = ( x + 1 ) / 2.; };
-    double pt[3];
+    auto convert = []( mfem::real_t& x ) { x = ( x + 1 ) / 2.; };
+    mfem::real_t pt[3];
     pt[0] = .5, pt[1] = .5, pt[2] = .5;
     Ttr.SetIntPoint( &ip );
     mMaterialModel->at( Ttr, ip );
     mMaterialModel->updateRefModuli();
     mStiffModuli = mMaterialModel->getRefModuli();
-    const Eigen::Matrix3d orthonormalBasis = Eigen::Matrix3d::Identity();
+    const Eigen::Matrix3r orthonormalBasis = Eigen::Matrix3r::Identity();
 
-    auto preprocessColl = [&]( Eigen::Matrix<double, 3, 3>& g, Eigen::Matrix<double, 8, 3>& DShape )
+    auto preprocessColl = [&]( Eigen::Matrix<mfem::real_t, 3, 3>& g, Eigen::Matrix<mfem::real_t, 8, 3>& DShape )
     {
         mat.UseExternalData( mGCovariant.data(), mGCovariant.rows(), mGCovariant.cols() );
         mat = Ttr.Jacobian();
@@ -788,7 +960,7 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
 
         w = ip.weight * Ttr.Weight();
         mGContravariant = mGCovariant.inverse();
-        Eigen::Matrix3d T = orthonormalBasis.transpose() * mGContravariant;
+        Eigen::Matrix3r T = orthonormalBasis.transpose() * mGContravariant;
         mTransform = util::TransformationVoigtForm( T );
         matrixB( dof, dim, ip );
         // mGeomStiff =
@@ -804,8 +976,8 @@ void NonlinearCompositeSolidShellIntegrator::AssembleElementGrad( const mfem::Fi
 void NonlinearCompositeSolidShellIntegrator::matrixB( const int dof, const int dim, const mfem::IntegrationPoint& ip )
 {
     // from [0, 1] to [-1, 1]
-    auto convert = []( double& x ) { x = 2 * x - 1; };
-    double pt[3];
+    auto convert = []( mfem::real_t& x ) { x = 2 * x - 1; };
+    mfem::real_t pt[3];
     ip.Get( pt, 3 );
     convert( pt[0] );
     convert( pt[1] );
@@ -882,10 +1054,10 @@ void NonlinearDirichletPenaltyIntegrator::AssembleFaceVector( const mfem::Finite
     elvect.SetSize( dof * vdim );
     elvect = 0.0;
 
-    Eigen::Map<const Eigen::VectorXd> u( elfun.GetData(), elfun.Size() );
-    Eigen::Map<Eigen::VectorXd> eigenVec( elvect.GetData(), elvect.Size() );
-    Eigen::Map<const Eigen::VectorXd> dispEvalEigen( dispEval.GetData(), dispEval.Size() );
-    Eigen::Map<const Eigen::VectorXd> penalEvalEigen( penalEval.GetData(), penalEval.Size() );
+    Eigen::Map<const Eigen::VectorXr> u( elfun.GetData(), elfun.Size() );
+    Eigen::Map<Eigen::VectorXr> eigenVec( elvect.GetData(), elvect.Size() );
+    Eigen::Map<const Eigen::VectorXr> dispEvalEigen( dispEval.GetData(), dispEval.Size() );
+    Eigen::Map<const Eigen::VectorXr> penalEvalEigen( penalEval.GetData(), penalEval.Size() );
 
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
@@ -894,7 +1066,7 @@ void NonlinearDirichletPenaltyIntegrator::AssembleFaceVector( const mfem::Finite
         ir = &mfem::IntRules.Get( Tr.GetGeometryType(), intorder );
     }
 
-    const double ct = mIterAux->GetCurLambda();
+    const mfem::real_t ct = mIterAux->GetCurLambda();
 
     for ( int i = 0; i < ir->GetNPoints(); i++ )
     {
@@ -939,8 +1111,8 @@ void NonlinearDirichletPenaltyIntegrator::AssembleFaceGrad( const mfem::FiniteEl
     elmat.SetSize( dof * vdim );
     elmat = 0.0;
 
-    Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * vdim, dof * vdim );
-    Eigen::Map<const Eigen::VectorXd> penalEvalEigen( penalEval.GetData(), penalEval.Size() );
+    Eigen::Map<Eigen::MatrixXr> eigenMat( elmat.Data(), dof * vdim, dof * vdim );
+    Eigen::Map<const Eigen::VectorXr> penalEvalEigen( penalEval.GetData(), penalEval.Size() );
 
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
@@ -979,8 +1151,8 @@ void NonlinearInternalPenaltyIntegrator::AssembleFaceVector( const mfem::FiniteE
     shape2.SetSize( dof2 );
     elvect.SetSize( dof * vdim );
     elvect = 0.0;
-    Eigen::Map<Eigen::VectorXd> eigenVec( elvect.GetData(), elvect.Size() );
-    Eigen::Map<const Eigen::VectorXd> u( elfun.GetData(), elfun.Size() );
+    Eigen::Map<Eigen::VectorXr> eigenVec( elvect.GetData(), elvect.Size() );
+    Eigen::Map<const Eigen::VectorXr> u( elfun.GetData(), elfun.Size() );
 
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )
@@ -1008,7 +1180,7 @@ void NonlinearInternalPenaltyIntegrator::AssembleFaceVector( const mfem::FiniteE
         el2.CalcShape( eip2, shape2 );
 
         matrixB( dof1, dof2, vdim );
-        Eigen::VectorXd Delta = mB * u;
+        Eigen::VectorXr Delta = mB * u;
         eigenVec += p * mB.transpose() * Delta * ip.weight * Tr.Weight();
     }
 }
@@ -1029,8 +1201,8 @@ void NonlinearInternalPenaltyIntegrator::AssembleFaceGrad( const mfem::FiniteEle
 
     elmat.SetSize( dof * vdim );
     elmat = 0.0;
-    Eigen::Map<Eigen::MatrixXd> eigenMat( elmat.Data(), dof * vdim, dof * vdim );
-    Eigen::Map<const Eigen::VectorXd> u( elfun.GetData(), elfun.Size() );
+    Eigen::Map<Eigen::MatrixXr> eigenMat( elmat.Data(), dof * vdim, dof * vdim );
+    Eigen::Map<const Eigen::VectorXr> u( elfun.GetData(), elfun.Size() );
 
     const mfem::IntegrationRule* ir = IntRule;
     if ( ir == NULL )

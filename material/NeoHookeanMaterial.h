@@ -18,7 +18,7 @@ public:
         setLargeDeformation( true );
     }
 
-    virtual Eigen::Matrix3d getPK2StressTensor() const;
+    virtual Eigen::Matrix3r getPK2StressTensor() const;
 
     double Mu() const
     {
@@ -38,6 +38,6 @@ protected:
     mfem::Coefficient* mMu{ nullptr };
     mfem::Coefficient* mLambda{ nullptr };
 
-    Eigen::Matrix6d mTempModuli;
+    Eigen::Matrix6r mTempModuli;
     NeoHookeanType mNH;
 };

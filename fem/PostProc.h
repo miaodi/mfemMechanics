@@ -13,7 +13,7 @@ protected:
     mfem::DenseMatrix grad; // auxiliary matrix, used in Eval
     ElasticMaterial* materialModel{ nullptr };
     int dim;
-    Eigen::Matrix3d F;
+    Eigen::Matrix3r F;
 
 public:
     StressCoefficient( int dim, ElasticMaterial& mat );

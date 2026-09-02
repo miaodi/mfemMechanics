@@ -10,11 +10,11 @@
 // compare the difference between using dual as constant and using double as constant
 TEST( eigen_decomp, decomp1 )
 {
-    Eigen::Vector6d strain{ 2., 1., 1., 0., 0., 0. };
+    Eigen::Vector6r strain{ 2., 1., 1., 0., 0., 0. };
 
-    Eigen::Vector3d eval;
-    Eigen::Matrix3d evec;
-    gte::NISymmetricEigensolver3x3<double> eig;
+    Eigen::Vector3r eval;
+    Eigen::Matrix3r evec;
+    gte::NISymmetricEigensolver3x3<mfem::real_t> eig;
 
     eig( strain( 0 ), strain( 3 ) / 2, strain( 5 ) / 2, strain( 1 ), strain( 4 ) / 2, strain( 2 ), 1, eval, evec );
 

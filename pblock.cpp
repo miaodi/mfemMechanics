@@ -233,9 +233,9 @@ int main( int argc, char* argv[] )
 
     NeoHookeanMaterial nh( mu_func, lambda_func, NeoHookeanType::Poly1 );
 
-    plugin::Memorize mm( pmesh );
+    plugin::IntegrationPointStorage pointStorage( pmesh );
 
-    auto intg = new plugin::NonlinearElasticityIntegrator( nh, mm );
+    auto intg = new plugin::NonlinearElasticityIntegrator( nh, pointStorage );
 
     ParNonlinearForm* nlf = new ParNonlinearForm( fespace );
     // {

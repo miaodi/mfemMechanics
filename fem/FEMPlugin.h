@@ -13,22 +13,22 @@ namespace plugin
 {
 class IterAuxilliary;
 
-Eigen::MatrixXd mapper( const int dim, const int dof );
+Eigen::MatrixXr mapper( const int dim, const int dof );
 
-void smallDeformMatrixB( const int, const int, const Eigen::MatrixXd&, Eigen::Matrix<double, 6, Eigen::Dynamic>& );
+void smallDeformMatrixB( const int, const int, const Eigen::MatrixXr&, Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic>& );
 
-void largeDeformMatrixB( const int, const int, const Eigen::MatrixXd&, const Eigen::MatrixXd&, Eigen::Matrix<double, 6, Eigen::Dynamic>& );
+void largeDeformMatrixB( const int, const int, const Eigen::MatrixXr&, const Eigen::MatrixXr&, Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic>& );
 
 struct GaussPointStorage
 {
-    Eigen::MatrixXd GShape;
-    double DetdXdXi;
+    Eigen::MatrixXr GShape;
+    mfem::real_t DetdXdXi{ 0. };
     util::AnyMap PointData;
 };
 
 struct CZMGaussPointStorage
 {
-    double Weight{ 0. };
+    mfem::real_t Weight{ 0. };
 
     mfem::Vector Shape1, Shape2;
     mfem::DenseMatrix GShapeFace1, GShapeFace2;
@@ -36,17 +36,50 @@ struct CZMGaussPointStorage
     util::AnyMap PointData;
 };
 
-// TODO: should rewrite Memorize class so that Initialize can be registered by integrators.
-class Memorize
+// TODO: should rewrite IntegrationPointStorage class so that Initialize can be registered by integrators.
+class IntegrationPointStorage
 {
+    struct ElementPointSet
+    {
+        const mfem::FiniteElement* Element{ nullptr };
+        const mfem::IntegrationRule* Rule{ nullptr };
+        std::vector<GaussPointStorage> Points;
+        int Dof{ 0 };
+        int Dimension{ 0 };
+
+        bool IsInitialized() const noexcept
+        {
+            return Element != nullptr;
+        }
+    };
+
+    struct FacePointSet
+    {
+        const mfem::FiniteElement* Element1{ nullptr };
+        const mfem::FiniteElement* Element2{ nullptr };
+        const mfem::IntegrationRule* Rule{ nullptr };
+        std::vector<CZMGaussPointStorage> Points;
+        int Dof1{ 0 };
+        int Dof2{ 0 };
+        int Dimension{ 0 };
+        int FaceDimension{ 0 };
+    };
+
+    struct PointSetBuildWorkspace
+    {
+        // These matrices must remain owning. Use scoped views for point-storage output.
+        mfem::DenseMatrix ReferenceGradient1, ReferenceGradient2;
+        mfem::DenseMatrix PhysicalGradient1, PhysicalGradient2;
+    };
+
 public:
-    Memorize( mfem::Mesh* );
+    IntegrationPointStorage( mfem::Mesh* );
 
     void InitializeElement( const mfem::FiniteElement&, mfem::ElementTransformation&, const mfem::IntegrationRule& );
 
     void InitializeFace( const mfem::FiniteElement&, const mfem::FiniteElement&, mfem::FaceElementTransformations&, const mfem::IntegrationRule& );
 
-    const Eigen::MatrixXd& GetdNdX( const int gauss ) const;
+    const Eigen::MatrixXr& GetdNdX( const int gauss ) const;
 
     const mfem::Vector& GetFace1Shape( const int gauss ) const;
 
@@ -56,9 +89,9 @@ public:
 
     const mfem::DenseMatrix& GetFace2GShape( const int gauss ) const;
 
-    double GetDetdXdXi( const int gauss ) const;
+    mfem::real_t GetDetdXdXi( const int gauss ) const;
 
-    double GetFaceWeight( const int gauss ) const;
+    mfem::real_t GetFaceWeight( const int gauss ) const;
 
     const mfem::DenseMatrix& GetFaceJacobian( const int gauss ) const;
 
@@ -74,47 +107,48 @@ public:
                 continue;
             }
 
-            for ( auto& point : *face )
+            for ( auto& point : face->Points )
             {
                 visitor( point.PointData );
             }
         }
     }
 
-    const CZMGaussPointStorage& GetFacePointStorage( const int gauss ) const
-    {
-        return ( *mFaceStorage[mElementNo] )[gauss];
-    }
+    const CZMGaussPointStorage& GetFacePointStorage( const int gauss ) const;
 
-    CZMGaussPointStorage& GetFacePointStorage( const int gauss )
-    {
-        return ( *mFaceStorage[mElementNo] )[gauss];
-    }
+    CZMGaussPointStorage& GetFacePointStorage( const int gauss );
 
-    const util::AnyMap& GetBodyPointData( const int gauss ) const
-    {
-        return ( *mEleStorage[mElementNo] )[gauss].PointData;
-    }
+    const util::AnyMap& GetBodyPointData( const int gauss ) const;
 
-    util::AnyMap& GetBodyPointData( const int gauss )
-    {
-        return ( *mEleStorage[mElementNo] )[gauss].PointData;
-    }
+    util::AnyMap& GetBodyPointData( const int gauss );
 
-    const util::AnyMap& GetFacePointData( const int gauss ) const
-    {
-        return ( *mFaceStorage[mElementNo] )[gauss].PointData;
-    }
+    const util::AnyMap& GetFacePointData( const int gauss ) const;
 
-    util::AnyMap& GetFacePointData( const int gauss )
-    {
-        return ( *mFaceStorage[mElementNo] )[gauss].PointData;
-    }
+    util::AnyMap& GetFacePointData( const int gauss );
 
 private:
-    std::vector<std::unique_ptr<std::vector<GaussPointStorage>>> mEleStorage;
-    std::vector<std::unique_ptr<std::vector<CZMGaussPointStorage>>> mFaceStorage;
-    mfem::DenseMatrix mDShape1, mDShape2, mGShape1, mGShape2;
+    ElementPointSet BuildElementPointSet( const mfem::FiniteElement&, mfem::ElementTransformation&, const mfem::IntegrationRule& );
+    FacePointSet BuildFacePointSet( const mfem::FiniteElement&,
+                                    const mfem::FiniteElement&,
+                                    mfem::FaceElementTransformations&,
+                                    const mfem::IntegrationRule& );
+
+    static void VerifyElementPointSet( const ElementPointSet&, const mfem::FiniteElement&, const mfem::IntegrationRule&, int );
+    static void VerifyFacePointSet( const FacePointSet&,
+                                    const mfem::FiniteElement&,
+                                    const mfem::FiniteElement&,
+                                    const mfem::FaceElementTransformations&,
+                                    const mfem::IntegrationRule&,
+                                    int );
+
+    const ElementPointSet& CurrentElementPointSet() const;
+    ElementPointSet& CurrentElementPointSet();
+    const FacePointSet& CurrentFacePointSet() const;
+    FacePointSet& CurrentFacePointSet();
+
+    std::vector<ElementPointSet> mElementStorage;
+    std::vector<std::unique_ptr<FacePointSet>> mFaceStorage;
+    PointSetBuildWorkspace mBuildWorkspace;
     int mElementNo{ 0 };
 };
 
@@ -127,7 +161,7 @@ public:
     }
     void AssembleElementMatrix( const mfem::FiniteElement& el, mfem::ElementTransformation& Trans, mfem::DenseMatrix& elmat );
 
-    void matrixB( const int dof, const int dim, const mfem::DenseMatrix& gshape, Eigen::Matrix<double, 6, Eigen::Dynamic>& B ) const;
+    void matrixB( const int dof, const int dim, const mfem::DenseMatrix& gshape, Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic>& B ) const;
 
 protected:
     mfem::DenseMatrix mDShape, mGShape;
@@ -190,7 +224,8 @@ protected:
 class NonlinearElasticityIntegrator : public NonlinearFormIntegratorLambda
 {
 public:
-    NonlinearElasticityIntegrator( ElasticMaterial& m, Memorize& memo ) : mMaterialModel( &m ), mMemo{ memo }
+    NonlinearElasticityIntegrator( ElasticMaterial& m, IntegrationPointStorage& pointStorage )
+        : mMaterialModel( &m ), mPointStorage{ pointStorage }
     {
     }
 
@@ -198,7 +233,7 @@ public:
         @param[in] el     Type of FiniteElement.
         @param[in] Ttr    Represents ref->target coordinates transformation.
         @param[in] elfun  Physical coordinates of the zone. */
-    virtual double GetElementEnergy( const mfem::FiniteElement& el, mfem::ElementTransformation& Ttr, const mfem::Vector& elfun )
+    mfem::real_t GetElementEnergy( const mfem::FiniteElement& el, mfem::ElementTransformation& Ttr, const mfem::Vector& elfun ) override
     {
         return 0;
     }
@@ -235,11 +270,11 @@ public:
     }
 
 protected:
-    Eigen::Matrix<double, 3, 3> mdxdX;
-    Eigen::Matrix<double, 6, Eigen::Dynamic> mB;
-    Eigen::MatrixXd mGeomStiff;
+    Eigen::Matrix<mfem::real_t, 3, 3> mdxdX;
+    Eigen::Matrix<mfem::real_t, 6, Eigen::Dynamic> mB;
+    Eigen::MatrixXr mGeomStiff;
     ElasticMaterial* mMaterialModel{ nullptr };
-    Memorize& mMemo;
+    IntegrationPointStorage& mPointStorage;
     bool mOnlyGeomStiff{ false };
     bool mNonlinear{ true };
 };
@@ -289,17 +324,16 @@ public:
 
 protected:
     mfem::Vector shape;
-    Eigen::MatrixXd mdxdX;
+    Eigen::MatrixXr mdxdX;
     mfem::DenseMatrix mDShape, mGShape;
-    Eigen::MatrixXd mB;
+    Eigen::MatrixXr mB;
     mfem::Coefficient& Q;
 };
 
 class NonlinearCompositeSolidShellIntegrator : public NonlinearFormIntegratorLambda
 {
 public:
-    NonlinearCompositeSolidShellIntegrator( ElasticMaterial& m )
-        : NonlinearFormIntegratorLambda(), mMaterialModel{ &m }
+    NonlinearCompositeSolidShellIntegrator( ElasticMaterial& m ) : NonlinearFormIntegratorLambda(), mMaterialModel{ &m }
     {
         mL.resize( 5, 24 );
         mH.resize( 5, 5 );
@@ -323,7 +357,7 @@ public:
         @param[in] el     Type of FiniteElement.
         @param[in] Ttr    Represents ref->target coordinates transformation.
         @param[in] elfun  Physical coordinates of the zone. */
-    virtual double GetElementEnergy( const mfem::FiniteElement& el, mfem::ElementTransformation& Ttr, const mfem::Vector& elfun )
+    mfem::real_t GetElementEnergy( const mfem::FiniteElement& el, mfem::ElementTransformation& Ttr, const mfem::Vector& elfun ) override
     {
         return 0;
     }
@@ -341,13 +375,13 @@ public:
 
 protected:
     ElasticMaterial* mMaterialModel{ nullptr };
-    Eigen::Matrix<double, 3, 3> mg, mGCovariant, mGContravariant, mgA, mgB, mgC, mgD, mgA1, mgA2, mgA3, mgA4;
-    Eigen::Matrix<double, 6, 24> mB;
-    Eigen::MatrixXd mGeomStiff;
-    Eigen::Matrix<double, 8, 3> mDShape, mDShapeA, mDShapeB, mDShapeC, mDShapeD, mDShapeA1, mDShapeA2, mDShapeA3, mDShapeA4;
-    Eigen::Matrix6d mStiffModuli, mTransform;
-    Eigen::MatrixXd mL, mH;
-    Eigen::VectorXd mAlpha;
+    Eigen::Matrix<mfem::real_t, 3, 3> mg, mGCovariant, mGContravariant, mgA, mgB, mgC, mgD, mgA1, mgA2, mgA3, mgA4;
+    Eigen::Matrix<mfem::real_t, 6, 24> mB;
+    Eigen::MatrixXr mGeomStiff;
+    Eigen::Matrix<mfem::real_t, 8, 3> mDShape, mDShapeA, mDShapeB, mDShapeC, mDShapeD, mDShapeA1, mDShapeA2, mDShapeA3, mDShapeA4;
+    Eigen::Matrix6r mStiffModuli, mTransform;
+    Eigen::MatrixXr mL, mH;
+    Eigen::VectorXr mAlpha;
     bool mNonlinear{ true };
 };
 
@@ -387,8 +421,8 @@ public:
 
 protected:
     mfem::Vector shape, dispEval, penalEval;
-    Eigen::MatrixXd mB;
-    Eigen::VectorXd mU;
+    Eigen::MatrixXr mB;
+    Eigen::VectorXr mU;
     mfem::VectorCoefficient& Q;
     mfem::VectorCoefficient& H;
 };
@@ -396,7 +430,8 @@ protected:
 class NonlinearInternalPenaltyIntegrator : public mfem::NonlinearFormIntegrator
 {
 public:
-    NonlinearInternalPenaltyIntegrator( const double penalty = 1e10 ) : mfem::NonlinearFormIntegrator(), p{ penalty }
+    NonlinearInternalPenaltyIntegrator( const mfem::real_t penalty = 1e10 )
+        : mfem::NonlinearFormIntegrator(), p{ penalty }
     {
     }
 
@@ -436,9 +471,9 @@ public:
 protected:
     mfem::Vector shape1, shape2;
 
-    Eigen::MatrixXd mB;
-    Eigen::VectorXd u;
-    double p;
+    Eigen::MatrixXr mB;
+    Eigen::VectorXr u;
+    mfem::real_t p;
 };
 
 class BlockNonlinearFormIntegratorLambda : public mfem::BlockNonlinearFormIntegrator
@@ -499,8 +534,8 @@ private:
     const mfem::Array2D<mfem::DenseMatrix*>* mElmats;
 
 public:
-    TempDependentNonlinearElasticityIntegrator( ElasticMaterial& m, Memorize& memo )
-        : BlockNonlinearFormIntegratorLambda(), NonlinearElasticityIntegrator( m, memo )
+    TempDependentNonlinearElasticityIntegrator( ElasticMaterial& m, IntegrationPointStorage& pointStorage )
+        : BlockNonlinearFormIntegratorLambda(), NonlinearElasticityIntegrator( m, pointStorage )
     {
     }
 

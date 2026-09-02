@@ -13,10 +13,10 @@ void StressCoefficient::Eval( mfem::Vector& V, mfem::ElementTransformation& T, c
     MFEM_ASSERT( u != NULL, "displacement field is not set" );
     u->GetVectorGradient( T, grad );
 
-    Eigen::Map<Eigen::MatrixXd> dudX( grad.Data(), dim, dim );
+    Eigen::Map<Eigen::MatrixXr> dudX( grad.Data(), dim, dim );
     F.setZero();
     F.block( 0, 0, dim, dim ) = dudX;
-    F += Eigen::Matrix3d::Identity();
+    F += Eigen::Matrix3r::Identity();
 
     materialModel->at( T, ip );
     materialModel->setDeformationGradient( F );
