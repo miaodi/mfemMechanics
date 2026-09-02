@@ -630,6 +630,10 @@ NonlinearElasticityIntegrator::AssemblyKinematics NonlinearElasticityIntegrator:
         return { std::cref( shapeGradient ), std::cref( deformationGradient ), 1. };
     }
 
+    // Multiplicative thermoelastic decomposition: F = F_e F_0. Therefore
+    // F_e = F F_0^{-1}, grad_stress-free(N) = F_0^{-T} grad_initial(N), and
+    // dV_stress-free = det(F_0) dV_initial. See Vujosevic and Lubarda (2002),
+    // equations 37, 45, and 59: https://doi.org/10.2298/TAM0229379V.
     mStressFreeDeformationGradient = mStressFreeDeformations.EvalDeformationGradient( transformation, integrationPoint, loadFactor );
     if ( dimension < 3 )
     {

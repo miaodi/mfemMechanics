@@ -14,6 +14,11 @@ namespace plugin
  * and a stress-free deformation gradient for finite-deformation integrators.
  * The latter use the multiplicative split F = F_e F_0 and evaluate the
  * constitutive law with F_e = F F_0^{-1}.
+ *
+ * @see L. Vujosevic and V. A. Lubarda, "Finite-strain thermoelasticity
+ * based on multiplicative decomposition of deformation gradient,"
+ * Theoretical and Applied Mechanics 28-29 (2002), equations 37, 41, 45, 50,
+ * and 59, https://doi.org/10.2298/TAM0229379V.
  */
 class StressFreeDeformation
 {
