@@ -50,7 +50,7 @@ void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector&
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/DCB.msh";
+    const char* mesh_file = "../../../data/DCB.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;

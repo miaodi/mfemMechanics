@@ -24,12 +24,12 @@ int main( int argc, char* argv[] )
     Hypre::Init();
 
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/crack_square2d_quad.msh";
+    const char* mesh_file = "../../../data/crack_square2d_quad.msh";
     int order = 1;
     bool static_cond = false;
     int ser_ref_levels = -1, par_ref_levels = -1;
     int localRefineLvl = 0;
-    const char* petscrc_file = "../../data/petscSetting";
+    const char* petscrc_file = "../../../data/petscSetting";
 
     OptionsParser args( argc, argv );
     args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
@@ -214,20 +214,20 @@ int main( int argc, char* argv[] )
     // PetscLinearSolver* petsc = new PetscLinearSolver( MPI_COMM_WORLD );
 
     mfem::Solver* lin_solver{ nullptr };
-    // {
-    //     auto gmres  = new mfem::GMRESSolver( MPI_COMM_WORLD );
-    //     lin_solver = gmres;
-    //     // gmres->SetPrintLevel( -1 );
-    //     gmres->SetRelTol( 1e-13 );
-    //     gmres->SetMaxIter( 2000 );
-    //     gmres->SetKDim( 50 );
-    //     gmres->SetPrintLevel(0);
+    {
+        auto gmres  = new mfem::GMRESSolver( MPI_COMM_WORLD );
+        lin_solver = gmres;
+        // gmres->SetPrintLevel( -1 );
+        gmres->SetRelTol( 1e-13 );
+        gmres->SetMaxIter( 2000 );
+        gmres->SetKDim( 50 );
+        gmres->SetPrintLevel(0);
 
-    //     mfem::HypreBoomerAMG* prec = new mfem::HypreBoomerAMG();
-    //     prec->SetSystemsOptions( dim );
-    //     prec->SetPrintLevel(0);
-    //     gmres->SetPreconditioner( *prec );
-    // }
+        mfem::HypreBoomerAMG* prec = new mfem::HypreBoomerAMG();
+        prec->SetSystemsOptions( dim );
+        prec->SetPrintLevel(0);
+        gmres->SetPreconditioner( *prec );
+    }
     // {
     //     auto cg  = new mfem::CGSolver( MPI_COMM_WORLD );
     //     lin_solver = cg;
@@ -240,20 +240,20 @@ int main( int argc, char* argv[] )
     //     prec->SetPrintLevel(0);
     //     cg->SetPreconditioner( *prec );
     // }
-    {
-        auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
-        mumps->SetMatrixSymType( MUMPSSolver::MatType::SYMMETRIC_INDEFINITE );
-        // mumps->SetReorderingStrategy( MUMPSSolver::ReorderingStrategy::PARMETIS );
-        mumps->SetPrintLevel( -1 );
-        lin_solver = mumps;
-    }
+    // {
+    //     auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
+    //     mumps->SetMatrixSymType( MUMPSSolver::MatType::UNSYMMETRIC );
+    //     // mumps->SetReorderingStrategy( MUMPSSolver::ReorderingStrategy::PARMETIS );
+    //     mumps->SetPrintLevel( -1 );
+    //     lin_solver = mumps;
+    // }
 
     auto newton_solver = new plugin::MultiNewtonAdaptive<plugin::NewtonForPhaseField>( MPI_COMM_WORLD );
 
     // Set the newton solve parameters
     newton_solver->iterative_mode = true;
     newton_solver->SetMaxDelta( 1e-4 );
-    newton_solver->SetMinDelta( 1e-14 );
+    newton_solver->SetMinDelta( 1e-20 );
     newton_solver->SetDelta( 1e-6 );    
     newton_solver->SetOperator( *nlf );
     newton_solver->SetSolver( *lin_solver );

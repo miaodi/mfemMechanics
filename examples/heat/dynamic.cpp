@@ -87,7 +87,7 @@ mfem::real_t InitialTemperature( const Vector& x );
 int main( int argc, char* argv[] )
 {
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/thermal.msh";
+    const char* mesh_file = "../../../data/thermal.msh";
     int ref_levels = 0;
     int order = 1;
     mfem::real_t t_final = 0.5;

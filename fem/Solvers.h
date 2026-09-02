@@ -343,6 +343,6 @@ protected:
     mutable mfem::IterativeSolver* prec{ nullptr };
     const mfem::Operator* oper{ nullptr };
     mutable mfem::Vector cur;
-    mutable mfem::real_t max_delta{ 1. }, min_delta{ 1. };
+    mutable mfem::real_t max_delta{ 1. }, min_delta{ 0. };
 };
 } // namespace plugin

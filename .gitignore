@@ -3,5 +3,10 @@
 /build-*
 /release
 /CMakeUserPresets.json
-/.vscode
+/.cache/
+/compile_commands.json
+/.vscode/*
+!/.vscode/extensions.json
+!/.vscode/settings.json
 .DS_Store
+._*

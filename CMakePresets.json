@@ -14,6 +14,7 @@
       "cacheVariables": {
         "BUILD_TESTING": "ON",
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_PREFIX_PATH": "${sourceDir}/../mfem/install/debug;${sourceDir}/../libcudss-linux-x86_64-0.8.0.10_cuda13-archive",
         "CUDAToolkit_ROOT": "$env{HOME}/.local/cuda-13.2.1"
       }
@@ -26,6 +27,7 @@
       "cacheVariables": {
         "BUILD_TESTING": "ON",
         "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_PREFIX_PATH": "${sourceDir}/../mfem/install/release;${sourceDir}/../libcudss-linux-x86_64-0.8.0.10_cuda13-archive",
         "CUDAToolkit_ROOT": "$env{HOME}/.local/cuda-13.2.1"
       }

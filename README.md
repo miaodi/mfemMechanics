@@ -14,7 +14,7 @@ thermal, buckling, and large-deformation experiments.
   and 3D.
 - Irreversible cohesive history with accepted-step commit, failed-step rollback,
   nested-solver handling, and arc-length state rewind.
-- Serial and MPI examples with optional OpenMP, PETSc, and SLEPc targets.
+- Serial and MPI examples with optional OpenMP, MUMPS, PETSc, and SLEPc targets.
 
 ## Requirements
 
@@ -61,7 +61,8 @@ written to `build/<configuration>/bin`.
 | Always available | `test2`, `test3`, `exec`, `ex2`, `beam`, `block`, `postBuckling2D`, `heat_dynamic`, `heat_static`, `playMesh` |
 | MFEM with MPI | `ex2p`, `pblock`, `pPhaseField_shear` |
 | OpenMP C++ | `PhaseField_shear`, `czm`, `czm2` |
-| MFEM with MPI and PETSc | `petchbuckle`, `beamParallel`, `postBuckling3D1`, `postBuckling3D2`, `thermalStrain`, `czm2p` |
+| MFEM with MPI and MUMPS | `beamParallel` |
+| MFEM with MPI and PETSc | `petchbuckle`, `postBuckling3D1`, `postBuckling3D2`, `thermalStrain`, `czm2p` |
 | MFEM with MPI, PETSc, and SLEPc | `eigenbuckling` |
 
 CMake reports why any capability-gated target is skipped.

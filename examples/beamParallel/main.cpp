@@ -1,245 +1,226 @@
-
+/**
+ * @file
+ * @brief Parallel finite-strain cantilever-beam example.
+ *
+ * This executable exercises the nonlinear elasticity integrator, integration-
+ * point storage, adaptive load stepping, and a distributed direct solve. The
+ * 10 x 1 x 0.1 beam is clamped on boundary attribute 1 (x = 0) and loaded by a
+ * uniform +z traction on boundary attribute 2 (x = 10). The load factor is
+ * advanced from zero to one, and every accepted state is written as a ParaView
+ * time series.
+ */
 
 #include "Plugin.h"
 #include "mfem.hpp"
-#include <fstream>
+
+#include <iomanip>
 #include <iostream>
+#include <string>
 
-using namespace std;
-using namespace mfem;
+namespace
+{
+constexpr int fixed_boundary_attribute = 1;
+constexpr int loaded_boundary_attribute = 2;
+constexpr int traction_component = 2;
+constexpr mfem::real_t youngs_modulus = 1.2e6;
+constexpr mfem::real_t poisson_ratio = 0.0;
+constexpr mfem::real_t applied_traction = 40.0;
 
-class GeneralResidualMonitor : public IterativeSolverMonitor
+class RankZeroResidualMonitor final : public mfem::IterativeSolverMonitor
 {
 public:
-    GeneralResidualMonitor( MPI_Comm comm, const std::string& prefix_, int print_lvl ) : prefix( prefix_ )
+    RankZeroResidualMonitor( MPI_Comm comm, const std::string& prefix, int requested_print_level ) : prefix_( prefix )
     {
-#ifndef MFEM_USE_MPI
-        print_level = print_lvl;
-#else
-        int rank;
+        int rank = 0;
         MPI_Comm_rank( comm, &rank );
-        if ( rank == 0 )
-        {
-            print_level = print_lvl;
-        }
-        else
-        {
-            print_level = -1;
-        }
-#endif
+        print_level_ = rank == 0 ? requested_print_level : -1;
     }
 
-    virtual void MonitorResidual( int it, double norm, const Vector& r, bool final );
-
-private:
-    const std::string prefix;
-    int print_level;
-    mutable double norm0;
-};
-
-void GeneralResidualMonitor::MonitorResidual( int it, double norm, const Vector& r, bool final )
-{
-    if ( print_level == 1 || ( print_level == 3 && ( final || it == 0 ) ) )
+    void MonitorResidual( int iteration,
+                          mfem::real_t norm,
+                          const mfem::Vector&,
+                          bool final ) override
     {
-        mfem::out << prefix << " iteration " << setw( 2 ) << it << " : ||r|| = " << norm;
-        if ( it > 0 )
+        const bool should_print = print_level_ == 1 || ( print_level_ == 3 && ( final || iteration == 0 ) );
+        if ( !should_print )
         {
-            mfem::out << ",  ||r||/||r_0|| = " << norm / norm0;
+            return;
         }
-        else
+
+        mfem::out << prefix_ << " iteration " << std::setw( 2 ) << iteration << " : ||r|| = " << norm;
+        if ( iteration == 0 )
         {
-            norm0 = norm;
+            initial_norm_ = norm;
+        }
+        else if ( initial_norm_ > 0.0 )
+        {
+            mfem::out << ",  ||r||/||r_0|| = " << norm / initial_norm_;
         }
         mfem::out << '\n';
     }
-}
 
-void ReferenceConfiguration( const Vector& x, Vector& y )
+private:
+    std::string prefix_;
+    int print_level_ = -1;
+    mfem::real_t initial_norm_ = 0.0;
+};
+
+int RunBeamExample( int argc, char* argv[], MPI_Comm comm )
 {
-    // Set the reference, stress free, configuration
-    y = x;
-}
+    int rank = 0;
+    MPI_Comm_rank( comm, &rank );
 
-int main( int argc, char* argv[] )
-{
-    // 1. Initialize MPI.
-    int num_procs, myid;
-    MPI_Init( &argc, &argv );
-    MPI_Comm_size( MPI_COMM_WORLD, &num_procs );
-    MPI_Comm_rank( MPI_COMM_WORLD, &myid );
-
-    // 1. Parse command-line options.
-    const char* mesh_file = "../../data/gmshBeam.msh";
+    const char* mesh_file = "../../../data/gmshBeam.msh";
+    const char* output_directory = "ParaView";
     int order = 1;
-    bool static_cond = false;
-    bool visualization = 1;
-    int ser_ref_levels = -1, par_ref_levels = -1;
-    const char* petscrc_file = "../../data/petscSetting";
+    int serial_refinement_levels = 0;
+    int parallel_refinement_levels = 0;
 
-    OptionsParser args( argc, argv );
-    args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
-    args.AddOption( &order, "-o", "--order", "Finite element order (polynomial degree)." );
-    args.AddOption( &static_cond, "-sc", "--static-condensation", "-no-sc", "--no-static-condensation",
-                    "Enable static condensation." );
-    args.AddOption( &visualization, "-vis", "--visualization", "-no-vis", "--no-visualization",
-                    "Enable or disable GLVis visualization." );
-    args.AddOption( &ser_ref_levels, "-rs", "--refine-serial",
-                    "Number of times to refine the mesh uniformly in serial." );
-    args.AddOption( &par_ref_levels, "-rp", "--refine-parallel",
-                    "Number of times to refine the mesh uniformly in parallel." );
-    args.AddOption( &petscrc_file, "-petscopts", "--petscopts", "PetscOptions file to use." );
+    mfem::OptionsParser args( argc, argv );
+    args.AddOption( &mesh_file, "-m", "--mesh", "Beam mesh file." );
+    args.AddOption( &order, "-o", "--order", "H1 finite element polynomial order." );
+    args.AddOption( &serial_refinement_levels,
+                    "-rs",
+                    "--refine-serial",
+                    "Number of uniform refinements before mesh partitioning." );
+    args.AddOption( &parallel_refinement_levels,
+                    "-rp",
+                    "--refine-parallel",
+                    "Number of uniform refinements after mesh partitioning." );
+    args.AddOption( &output_directory,
+                    "-od",
+                    "--output-directory",
+                    "Root directory for the ParaView time series." );
     args.Parse();
     if ( !args.Good() )
     {
-        if ( myid == 0 )
+        if ( rank == 0 )
         {
-            args.PrintUsage( cout );
+            args.PrintUsage( std::cout );
         }
-        MPI_Finalize();
         return 1;
     }
-    if ( myid == 0 )
+    if ( rank == 0 )
     {
-        args.PrintOptions( cout );
+        args.PrintOptions( std::cout );
     }
 
-    MFEMInitializePetsc( NULL, NULL, petscrc_file, NULL );
-
-    // 2. Read the mesh from the given mesh file. We can handle triangular,
-    //    quadrilateral, tetrahedral or hexahedral elements with the same code.
-    Mesh* mesh = new Mesh( mesh_file, 1, 1 );
-    int dim = mesh->Dimension();
-
-    if ( mesh->bdr_attributes.Max() < 2 )
+    mfem::Mesh serial_mesh( mesh_file, 1, 1 );
+    const int dimension = serial_mesh.Dimension();
+    const bool has_required_boundaries = serial_mesh.bdr_attributes.Size() > 0 &&
+                                         serial_mesh.bdr_attributes.Max() >= loaded_boundary_attribute;
+    if ( dimension != 3 || !has_required_boundaries )
     {
-        if ( myid == 0 )
-            cerr << "\nInput mesh should have at least "
-                 << "two boundary attributes! (See schematic in ex2.cpp)\n"
-                 << endl;
-        MPI_Finalize();
-        return 3;
-    }
-
-    // {
-    //     int ref_levels = ser_ref_levels >= 0 ? ser_ref_levels : (int)floor( log( 1000. / mesh->GetNE() ) / log( 2. )
-    //     / dim ); for ( int l = 0; l < ref_levels; l++ )
-    //     {
-    //         mesh->UniformRefinement();
-    //     }
-    // }
-
-    // 6. Define a parallel mesh by a partitioning of the serial mesh. Refine
-    //    this mesh further in parallel to increase the resolution. Once the
-    //    parallel mesh is defined, the serial mesh can be deleted.
-    ParMesh* pmesh = new ParMesh( MPI_COMM_WORLD, *mesh );
-    delete mesh;
-    {
-        for ( int l = 0; l < par_ref_levels; l++ )
+        if ( rank == 0 )
         {
-            pmesh->UniformRefinement();
+            std::cerr << "beamParallel requires a three-dimensional mesh with boundary attributes "
+                      << fixed_boundary_attribute << " and " << loaded_boundary_attribute << ".\n";
         }
+        return 2;
     }
 
-    // 5. Define a finite element space on the mesh. Here we use vector finite
-    //    elements, i.e. dim copies of a scalar finite element space. The vector
-    //    dimension is specified by the last argument of the FiniteElementSpace
-    //    constructor. For NURBS meshes, we use the (degree elevated) NURBS space
-    //    associated with the mesh nodes.
-    FiniteElementCollection* fec;
-    ParFiniteElementSpace* fespace;
-    fec = new H1_FECollection( order, dim );
-    fespace = new ParFiniteElementSpace( pmesh, fec, dim, Ordering::byVDIM );
-    HYPRE_BigInt size = fespace->GlobalTrueVSize();
-    if ( myid == 0 )
+    for ( int level = 0; level < serial_refinement_levels; ++level )
     {
-        cout << "Number of finite element unknowns: " << size << endl << "Assembling: " << flush;
+        serial_mesh.UniformRefinement();
     }
 
-    // 6. Determine the list of true (i.e. conforming) essential boundary dofs.
-    //    In this example, the boundary conditions are defined by marking only
-    //    boundary attribute 1 from the mesh as essential and converting it to a
-    //    list of true dofs.
-    Array<int> ess_tdof_list, ess_bdr( pmesh->bdr_attributes.Max() );
-    ess_bdr = 0;
-    ess_bdr[0] = 1;
-    fespace->GetEssentialTrueDofs( ess_bdr, ess_tdof_list );
-
-    Vector Nu( pmesh->attributes.Max() );
-    Nu = .0;
-    PWConstCoefficient nu_func( Nu );
-
-    Vector E( pmesh->attributes.Max() );
-    E = 1.2e6;
-    PWConstCoefficient E_func( E );
-
-    IsotropicElasticMaterial iem( E_func, nu_func );
-    iem.setLargeDeformation( true );
-
-    plugin::IntegrationPointStorage pointStorage( pmesh );
-
-    auto intg = new plugin::NonlinearElasticityIntegrator( iem, pointStorage );
-
-    auto* nlf = new ParNonlinearForm( fespace );
-    nlf->AddDomainIntegrator( intg );
-    nlf->SetEssentialBC( ess_bdr );
-    nlf->SetGradientType( Operator::Type::PETSC_MATAIJ );
-
-    GeneralResidualMonitor newton_monitor( fespace->GetComm(), "Newton", 1 );
-    GeneralResidualMonitor j_monitor( fespace->GetComm(), "GMRES", 3 );
-
-    // Set up the Jacobian solver
-    PetscLinearSolver* petsc = new PetscLinearSolver( fespace->GetComm() );
-
-    auto newton_solver = new plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch>( fespace->GetComm() );
-
-    // Set the newton solve parameters
-    newton_solver->iterative_mode = true;
-    newton_solver->SetSolver( *petsc );
-    newton_solver->SetOperator( *nlf );
-    newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetMonitor( newton_monitor );
-    newton_solver->SetRelTol( 1e-7 );
-    newton_solver->SetAbsTol( 1e-8 );
-    newton_solver->SetMaxIter( 6 );
-    newton_solver->SetDelta( .1 );
-
-    VectorArrayCoefficient f( dim );
-    for ( int i = 0; i < dim; i++ )
+    mfem::ParMesh mesh( comm, serial_mesh );
+    for ( int level = 0; level < parallel_refinement_levels; ++level )
     {
-        f.Set( i, new ConstantCoefficient( 0.0 ) );
+        mesh.UniformRefinement();
     }
 
-    nlf->AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( f ) );
-    Vector pull_force( pmesh->bdr_attributes.Max() );
-    pull_force = 0.0;
-    pull_force( 1 ) = 40;
-    f.Set( 2, new PWConstCoefficient( pull_force ) );
-
-    ParGridFunction u( fespace );
-    u = 0.;
-    Vector zero;
-    newton_solver->Mult( zero, u );
-
-    // 15. Save data in the ParaView format
-    // ParaViewDataCollection paraview_dc( "beamParallel", pmesh );
-    // paraview_dc.SetPrefixPath( "ParaView" );
-    // paraview_dc.SetLevelsOfDetail( order );
-    // paraview_dc.SetCycle( 0 );
-    // paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    // paraview_dc.SetHighOrderOutput( true );
-    // paraview_dc.SetTime( 0.0 ); // set the time
-    // paraview_dc.RegisterField( "Displace", &u );
-    // paraview_dc.Save();
-    if ( fec )
+    mfem::H1_FECollection finite_elements( order, dimension );
+    mfem::ParFiniteElementSpace space( &mesh, &finite_elements, dimension, mfem::Ordering::byVDIM );
+    const HYPRE_BigInt global_true_dofs = space.GlobalTrueVSize();
+    if ( rank == 0 )
     {
-        delete fespace;
-        delete fec;
+        std::cout << "Number of finite element unknowns: " << global_true_dofs << '\n';
     }
-    delete newton_solver;
-    delete pmesh;
 
-    MFEMFinalizePetsc();
+    mfem::Array<int> essential_boundary( mesh.bdr_attributes.Max() );
+    essential_boundary = 0;
+    essential_boundary[fixed_boundary_attribute - 1] = 1;
 
-    MPI_Finalize();
+    mfem::ConstantCoefficient elastic_modulus( youngs_modulus );
+    mfem::ConstantCoefficient transverse_contraction( poisson_ratio );
+    IsotropicElasticMaterial material( elastic_modulus, transverse_contraction );
+    material.setLargeDeformation( true );
+
+    mfem::Vector traction_by_boundary( mesh.bdr_attributes.Max() );
+    traction_by_boundary = 0.0;
+    traction_by_boundary( loaded_boundary_attribute - 1 ) = applied_traction;
+    mfem::VectorArrayCoefficient traction( dimension );
+    traction.Set( traction_component, new mfem::PWConstCoefficient( traction_by_boundary ) );
+
+    plugin::IntegrationPointStorage point_storage( &mesh );
+    mfem::ParNonlinearForm residual( &space );
+    // ParNonlinearForm owns the integrators registered with it.
+    residual.AddDomainIntegrator( new plugin::NonlinearElasticityIntegrator( material, point_storage ) );
+    residual.AddBdrFaceIntegrator( new plugin::NonlinearVectorBoundaryLFIntegrator( traction ) );
+    residual.SetEssentialBC( essential_boundary );
+    residual.SetGradientType( mfem::Operator::Type::Hypre_ParCSR );
+
+    mfem::MUMPSSolver tangent_solver( comm );
+    tangent_solver.SetMatrixSymType( mfem::MUMPSSolver::MatType::SYMMETRIC_POSITIVE_DEFINITE );
+    tangent_solver.SetPrintLevel( -1 );
+
+    RankZeroResidualMonitor newton_monitor( comm, "Newton", 1 );
+    mfem::ParGridFunction displacement( &space );
+    displacement = 0.0;
+    mfem::Vector true_dofs;
+    displacement.GetTrueDofs( true_dofs );
+
+    mfem::ParaViewDataCollection paraview( "beamParallel", &mesh );
+    paraview.SetPrefixPath( output_directory );
+    paraview.SetLevelsOfDetail( order );
+    paraview.SetDataFormat( mfem::VTKFormat::BINARY );
+    paraview.SetHighOrderOutput( true );
+    paraview.RegisterField( "displacement", &displacement );
+    paraview.SetCycle( 0 );
+    paraview.SetTime( 0.0 );
+    paraview.Save();
+
+    plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch> nonlinear_solver( comm );
+    nonlinear_solver.iterative_mode = true;
+    nonlinear_solver.SetSolver( tangent_solver );
+    nonlinear_solver.SetOperator( residual );
+    nonlinear_solver.SetPrintLevel( -1 );
+    nonlinear_solver.SetMonitor( newton_monitor );
+    nonlinear_solver.SetRelTol( 1e-7 );
+    nonlinear_solver.SetAbsTol( 1e-8 );
+    nonlinear_solver.SetMaxIter( 6 );
+    nonlinear_solver.SetDelta( 0.1 );
+    nonlinear_solver.SetMinDelta( 1e-15 );
+
+    int output_cycle = 0;
+    nonlinear_solver.SetDataCollectionFunc(
+        [&]( int, int, mfem::real_t load_factor )
+        {
+            displacement.SetFromTrueDofs( true_dofs );
+            paraview.SetCycle( ++output_cycle );
+            paraview.SetTime( load_factor );
+            paraview.Save();
+        } );
+
+    // An empty right-hand side selects the zero vector; loading is assembled by
+    // the boundary integrator and scaled by the adaptive solver's load factor.
+    mfem::Vector zero_rhs;
+    nonlinear_solver.Mult( zero_rhs, true_dofs );
+    displacement.SetFromTrueDofs( true_dofs );
+
+    if ( rank == 0 )
+    {
+        std::cout << "ParaView time series: " << output_directory << "/beamParallel/beamParallel.pvd\n";
+    }
     return 0;
+}
+} // namespace
+
+int main( int argc, char* argv[] )
+{
+    MPI_Init( &argc, &argv );
+    const int status = RunBeamExample( argc, argv, MPI_COMM_WORLD );
+    MPI_Finalize();
+    return status;
 }

@@ -1,4 +1,4 @@
-if(MFEM_USE_MPI AND MFEM_USE_PETSC)
+if(MFEM_USE_MPI AND MFEM_USE_MUMPS)
     mfem_mechanics_add_executable(
         beamParallel
         main.cpp
@@ -7,7 +7,7 @@ if(MFEM_USE_MPI AND MFEM_USE_PETSC)
     )
 else()
     message(STATUS
-        "Skipping beamParallel: requires MFEM_USE_MPI=ON and MFEM_USE_PETSC=ON "
-        "(found MPI=${MFEM_USE_MPI}, PETSc=${MFEM_USE_PETSC})"
+        "Skipping beamParallel: requires MFEM_USE_MPI=ON and MFEM_USE_MUMPS=ON "
+        "(found MPI=${MFEM_USE_MPI}, MUMPS=${MFEM_USE_MUMPS})"
     )
 endif()

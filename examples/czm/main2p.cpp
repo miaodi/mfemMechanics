@@ -17,12 +17,12 @@ int main( int argc, char* argv[] )
     Hypre::Init();
 
     // 1. Parse command-line options.
-    const char* mesh_file = "../../data/crack_square3d.msh";
+    const char* mesh_file = "../../../data/crack_square3d.msh";
     int order = 1;
     bool static_cond = false;
     bool visualization = 1;
     int ser_ref_levels = -1, par_ref_levels = -1;
-    const char* petscrc_file = "../../data/petscSetting";
+    const char* petscrc_file = "../../../data/petscSetting";
     std::string problem_type = "tensile";
     int localRefineLvl = 0;
 

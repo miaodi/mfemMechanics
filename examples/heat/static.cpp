@@ -22,7 +22,7 @@ using namespace mfem;
 int main( int argc, char* argv[] )
 {
     // 1. Parse command line options.
-    const char* mesh_file = "../../data/mesh.msh";
+    const char* mesh_file = "../../../data/mesh.msh";
     int order = 1;
 
     OptionsParser args( argc, argv );
