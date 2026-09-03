@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace plugin
@@ -40,10 +41,21 @@ public:
 
     mfem::real_t GetCurLambda() const
     {
-        return lambda + Delta_lambda;
+        return GetCurrentPseudoTime();
     }
 
     mfem::real_t GetDeltaLambda() const
+    {
+        return GetPseudoTimeIncrement();
+    }
+
+    /// Current trial pseudo-time. This is a continuation coordinate, not physical time.
+    mfem::real_t GetCurrentPseudoTime() const
+    {
+        return lambda + Delta_lambda;
+    }
+
+    mfem::real_t GetPseudoTimeIncrement() const
     {
         return Delta_lambda;
     }
@@ -55,13 +67,18 @@ public:
 
     void SetPrevLambda( const mfem::real_t _lambda ) const
     {
-        lambda = _lambda;
+        SetPreviousPseudoTime( _lambda );
+    }
+
+    void SetPreviousPseudoTime( const mfem::real_t pseudoTime ) const
+    {
+        lambda = pseudoTime;
     }
 
     void RegisterToIntegrators( const mfem::Operator* oper ) const;
 
     void BeginStep( const mfem::Operator* oper ) const;
-    void CommitStep( const mfem::Operator* oper ) const;
+    bool CommitStep( const mfem::Operator* oper ) const;
     void RollbackStep( const mfem::Operator* oper ) const;
 
 protected:
@@ -69,6 +86,8 @@ protected:
 
     mutable int step = 0; // step #
 
+    // Historical names retained for source compatibility. They represent
+    // accepted pseudo-time and the current trial pseudo-time increment.
     mutable mfem::real_t lambda = 0., Delta_lambda = 0;
 
     mutable std::function<void( int, int, mfem::real_t )> data_collect_func{ nullptr };
@@ -328,6 +347,25 @@ public:
     virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;
     virtual void SetOperator( const mfem::Operator& op );
 
+    void SetDelta( const mfem::real_t delta ) override
+    {
+        initial_pseudo_time_increment = delta;
+        Newton::SetDelta( delta );
+    }
+
+    void SetPseudoTimeInterval( const mfem::real_t initialPseudoTime, const mfem::real_t finalPseudoTime )
+    {
+        MFEM_VERIFY( mfem::IsFinite( initialPseudoTime ) && mfem::IsFinite( finalPseudoTime ) && finalPseudoTime > initialPseudoTime,
+                     "The adaptive Newton pseudo-time interval must be finite and increasing." );
+        initial_pseudo_time = initialPseudoTime;
+        final_pseudo_time = finalPseudoTime;
+    }
+
+    void SetTrialStateFunc( std::function<void( mfem::real_t, mfem::Vector& )> func )
+    {
+        trial_state_func = std::move( func );
+    }
+
     void SetMaxDelta( const mfem::real_t delta )
     {
         max_delta = delta;
@@ -340,9 +378,10 @@ public:
 
 protected:
     int max_steps{ 100 };
-    mutable mfem::IterativeSolver* prec{ nullptr };
-    const mfem::Operator* oper{ nullptr };
     mutable mfem::Vector cur;
     mutable mfem::real_t max_delta{ 1. }, min_delta{ 0. };
+    mfem::real_t initial_pseudo_time_increment{ 0. };
+    mfem::real_t initial_pseudo_time{ 0. }, final_pseudo_time{ 1. };
+    std::function<void( mfem::real_t, mfem::Vector& )> trial_state_func;
 };
 } // namespace plugin

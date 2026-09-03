@@ -55,12 +55,23 @@ add_subdirectory(util)
 add_subdirectory(material)
 add_subdirectory(fem)
 
+set(MFEM_MECHANICS_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+file(MAKE_DIRECTORY "${MFEM_MECHANICS_RUNTIME_OUTPUT_DIRECTORY}")
+file(
+    CREATE_LINK "${PROJECT_SOURCE_DIR}/data" "${MFEM_MECHANICS_RUNTIME_OUTPUT_DIRECTORY}/data"
+    SYMBOLIC
+    RESULT data_link_result
+)
+if(NOT data_link_result STREQUAL "0")
+    message(FATAL_ERROR "Failed to create the runtime data symlink: ${data_link_result}")
+endif()
+
 function(mfem_mechanics_add_executable target source)
     add_executable("${target}" "${source}")
     target_compile_features("${target}" PRIVATE cxx_std_17)
     target_include_directories("${target}" PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries("${target}" PRIVATE ${ARGN})
-    set_target_properties("${target}" PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    set_target_properties("${target}" PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${MFEM_MECHANICS_RUNTIME_OUTPUT_DIRECTORY}")
 endfunction()
 
 mfem_mechanics_add_executable(test3 test3.cpp mfemMechanics::femplugin)

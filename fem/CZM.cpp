@@ -110,17 +110,17 @@ autodiff::dual2nd ExponentialCZMPotential( const ExponentialCZMConst& law, const
 }
 } // namespace
 
-void CZMHistory::BeginStep()
+void CZMHistory::BeginStep() noexcept
 {
     mTrial = mCommitted;
 }
 
-void CZMHistory::CommitStep()
+void CZMHistory::CommitStep() noexcept
 {
     mCommitted = mTrial;
 }
 
-void CZMHistory::RollbackStep()
+void CZMHistory::RollbackStep() noexcept
 {
     mTrial = mCommitted;
 }
@@ -427,7 +427,7 @@ CZMEvaluation CZMIntegrator::EvaluateIrreversibleLocalLaw( const ExponentialCZMC
                                                mStepContext->GetDeltaLambda() );
 }
 
-void CZMIntegrator::BeginStep()
+void CZMIntegrator::BeginStep() noexcept
 {
     StepAwareNonlinearFormIntegrator::BeginStep();
     if ( mStepDepth > 0 )
@@ -436,20 +436,12 @@ void CZMIntegrator::BeginStep()
         return;
     }
 
-    try
-    {
-        VisitHistory( []( CZMHistory& history ) { history.BeginStep(); } );
-        mStepDepth = 1;
-        mStepRejected = false;
-    }
-    catch ( ... )
-    {
-        StepAwareNonlinearFormIntegrator::RollbackStep();
-        throw;
-    }
+    VisitHistory( []( CZMHistory& history ) { history.BeginStep(); } );
+    mStepDepth = 1;
+    mStepRejected = false;
 }
 
-void CZMIntegrator::CommitStep()
+void CZMIntegrator::CommitStep() noexcept
 {
     MFEM_VERIFY( mStepDepth > 0, "CZM commit requires a matching BeginStep." );
     if ( mStepDepth > 1 )
@@ -472,7 +464,7 @@ void CZMIntegrator::CommitStep()
     StepAwareNonlinearFormIntegrator::CommitStep();
 }
 
-void CZMIntegrator::RollbackStep()
+void CZMIntegrator::RollbackStep() noexcept
 {
     MFEM_VERIFY( mStepDepth > 0, "CZM rollback requires a matching BeginStep." );
     mStepRejected = true;

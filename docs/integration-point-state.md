@@ -99,9 +99,31 @@ also roll back and must not advance the accepted solution. Phase-field history u
 $H_{\mathrm{trial}}=\max(H_{\mathrm{committed}},\psi^+_{\mathrm{current}})$;
 it does not accumulate maxima over Newton iterates that may later be rejected.
 
+All lifecycle callbacks are `noexcept`. `CanCommitStep()` provides the
+nonmutating first phase of a transaction: the solver preflights every integrator
+before invoking any `CommitStep()`. This prevents a rejected integrator or a C++
+exception from leaving only part of a multi-integrator transaction committed.
+Errors inside a lifecycle callback are programming-contract violations and
+terminate rather than returning with partially updated state.
+
+This strengthens the source-level interface for custom step-aware integrators:
+overrides of `BeginStep`, `CommitStep`, and `RollbackStep` must also declare
+`noexcept`, and `NonlinearStepContext::CommitStep()` now returns whether the
+transaction was accepted. Custom `IntegrationPointStorageBase` implementations
+may override `GetMesh()` to participate in output-mesh compatibility checks;
+its default implementation returns null.
+
 The solver may retry a rejected increment with a smaller step size, but it does
 not return to an older accepted solution. Integration-point histories therefore
 retain only committed and trial state, not a sequence of accepted states.
+
+`MultiNewtonAdaptive` calls its trial-state function before every Newton attempt,
+including retries after a cutback. The callback argument is global pseudo-time:
+a dimensionless continuation coordinate, not physical time. Historical solver
+APIs call this coordinate `lambda`; `GetCurrentPseudoTime()` and
+`GetPseudoTimeIncrement()` make the intended meaning explicit in new code.
+Adaptive continuation requires `iterative_mode=true` so Newton preserves the
+trial boundary values and starts from the last accepted solution.
 
 ## Invalidation and limitations
 
@@ -123,4 +145,6 @@ MFEM and Eigen containers and do not provide a device assembly path.
 `tests/czm_history_test.cpp` checks empty-state size, element and face state
 reuse, reset behavior, material-state composition, typed cohesive history,
 deterministic repeated phase-field assembly, nested lifecycle behavior, and
-failed-step rollback.
+failed-step rollback. `tests/j2_plasticity_test.cpp` checks typed element
+history under constitutive and finite-element assembly, transaction-wide
+rejection, and restoration of a rejected Newton solution.

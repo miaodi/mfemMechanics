@@ -9,7 +9,7 @@ void PhaseFieldIntegrator<PointStorage>::UpdateHistory( PhaseFieldHistory& histo
 }
 
 template <typename PointStorage>
-void PhaseFieldIntegrator<PointStorage>::BeginStep()
+void PhaseFieldIntegrator<PointStorage>::BeginStep() noexcept
 {
     BlockStepAwareNonlinearFormIntegrator::BeginStep();
     if ( mStepDepth > 0 )
@@ -18,21 +18,13 @@ void PhaseFieldIntegrator<PointStorage>::BeginStep()
         return;
     }
 
-    try
-    {
-        VisitHistory( []( PhaseFieldHistory& history ) { history.BeginStep(); } );
-        mStepDepth = 1;
-        mStepRejected = false;
-    }
-    catch ( ... )
-    {
-        BlockStepAwareNonlinearFormIntegrator::RollbackStep();
-        throw;
-    }
+    VisitHistory( []( PhaseFieldHistory& history ) { history.BeginStep(); } );
+    mStepDepth = 1;
+    mStepRejected = false;
 }
 
 template <typename PointStorage>
-void PhaseFieldIntegrator<PointStorage>::CommitStep()
+void PhaseFieldIntegrator<PointStorage>::CommitStep() noexcept
 {
     MFEM_VERIFY( mStepDepth > 0, "Phase-field commit requires a matching BeginStep." );
     if ( mStepDepth > 1 )
@@ -56,7 +48,7 @@ void PhaseFieldIntegrator<PointStorage>::CommitStep()
 }
 
 template <typename PointStorage>
-void PhaseFieldIntegrator<PointStorage>::RollbackStep()
+void PhaseFieldIntegrator<PointStorage>::RollbackStep() noexcept
 {
     MFEM_VERIFY( mStepDepth > 0, "Phase-field rollback requires a matching BeginStep." );
     mStepRejected = true;

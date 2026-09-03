@@ -1,6 +1,7 @@
 #pragma once
 
 #include <tuple>
+#include <type_traits>
 
 namespace plugin
 {
@@ -25,9 +26,23 @@ struct MaterialPointStateSlot
     MaterialPointState<Material> Value{};
 };
 
+template <typename... Types>
+struct UniqueMaterialPointTypes : std::true_type
+{
+};
+
+template <typename Type, typename... Rest>
+struct UniqueMaterialPointTypes<Type, Rest...>
+    : std::bool_constant<( !std::is_same_v<Type, Rest> && ... ) && UniqueMaterialPointTypes<Rest...>::value>
+{
+};
+
 template <typename... Materials>
 class MaterialPointStateBundle
 {
+    static_assert( UniqueMaterialPointTypes<Materials...>::value,
+                   "Each material type may appear at most once in a MaterialPointStateBundle." );
+
 public:
     template <typename Material>
     MaterialPointState<Material>& Get()

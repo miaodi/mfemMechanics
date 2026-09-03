@@ -1,4 +1,5 @@
 #pragma once
+#include "J2PlasticityIntegrator.h"
 #include "Material.h"
 #include "StressFreeDeformation.h"
 #include "mfem.hpp"
@@ -6,6 +7,8 @@
 
 namespace plugin
 {
+void ProjectCommittedEquivalentPlasticStrain( const J2PlasticityPointStorage& pointStorage, mfem::GridFunction& field );
+
 // A Coefficient for computing the components of the stress.
 class StressCoefficient : public mfem::VectorCoefficient
 {

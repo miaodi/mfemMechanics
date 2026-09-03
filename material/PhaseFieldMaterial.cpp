@@ -117,17 +117,17 @@ mfem::real_t plugin::PhaseFieldHistory::EvaluateTrial( const mfem::real_t positi
     return mTrial;
 }
 
-void plugin::PhaseFieldHistory::BeginStep()
+void plugin::PhaseFieldHistory::BeginStep() noexcept
 {
     mTrial = mCommitted;
 }
 
-void plugin::PhaseFieldHistory::CommitStep()
+void plugin::PhaseFieldHistory::CommitStep() noexcept
 {
     mCommitted = mTrial;
 }
 
-void plugin::PhaseFieldHistory::RollbackStep()
+void plugin::PhaseFieldHistory::RollbackStep() noexcept
 {
     mTrial = mCommitted;
 }

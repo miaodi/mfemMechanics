@@ -1,4 +1,4 @@
-add_library(matlib Material.cpp NeoHookeanMaterial.cpp PhaseFieldMaterial.cpp)
+add_library(matlib J2Plasticity.cpp Material.cpp NeoHookeanMaterial.cpp PhaseFieldMaterial.cpp)
 add_library(mfemMechanics::matlib ALIAS matlib)
 
 target_compile_features(matlib PUBLIC cxx_std_17)

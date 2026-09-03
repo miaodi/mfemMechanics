@@ -36,9 +36,13 @@ public:
                               const mfem::Array<const mfem::Vector*>& elfun,
                               const mfem::Array2D<mfem::DenseMatrix*>& elmats ) override;
 
-    void BeginStep() override;
-    void CommitStep() override;
-    void RollbackStep() override;
+    void BeginStep() noexcept override;
+    void CommitStep() noexcept override;
+    void RollbackStep() noexcept override;
+    bool CanCommitStep() const noexcept override
+    {
+        return !mStepRejected;
+    }
 
 protected:
     template <typename Visitor>

@@ -15,6 +15,7 @@ struct ElementIntegrationPointGeometry
 {
     Eigen::MatrixXr GShape;
     mfem::real_t DetdXdXi{ 0. };
+    mfem::real_t Weight{ 0. };
 };
 
 /// Geometry cached at one interior-face integration point.
@@ -69,6 +70,10 @@ public:
     virtual const ElementIntegrationPointGeometry& GetElementPoint( int gauss ) const = 0;
     virtual const FaceIntegrationPointGeometry& GetFacePoint( int gauss ) const = 0;
     virtual void Reset( mfem::Mesh* mesh ) = 0;
+    virtual const mfem::Mesh* GetMesh() const noexcept
+    {
+        return nullptr;
+    }
 
     const Eigen::MatrixXr& GetdNdX( const int gauss ) const
     {
@@ -78,6 +83,11 @@ public:
     mfem::real_t GetDetdXdXi( const int gauss ) const
     {
         return GetElementPoint( gauss ).DetdXdXi;
+    }
+
+    mfem::real_t GetElementWeight( const int gauss ) const
+    {
+        return GetElementPoint( gauss ).Weight;
     }
 
     const mfem::Vector& GetFace1Shape( const int gauss ) const
@@ -218,6 +228,42 @@ public:
     }
 
     template <typename Visitor>
+    void VisitElementPoints( Visitor&& visitor )
+    {
+        for ( int elementNumber = 0; elementNumber < static_cast<int>( mElementStorage.size() ); elementNumber++ )
+        {
+            auto& element = mElementStorage[elementNumber];
+            if ( !element.IsInitialized() )
+            {
+                continue;
+            }
+
+            for ( int pointNumber = 0; pointNumber < static_cast<int>( element.Points.size() ); pointNumber++ )
+            {
+                visitor( elementNumber, pointNumber, element.Points[pointNumber] );
+            }
+        }
+    }
+
+    template <typename Visitor>
+    void VisitElementPoints( Visitor&& visitor ) const
+    {
+        for ( int elementNumber = 0; elementNumber < static_cast<int>( mElementStorage.size() ); elementNumber++ )
+        {
+            const auto& element = mElementStorage[elementNumber];
+            if ( !element.IsInitialized() )
+            {
+                continue;
+            }
+
+            for ( int pointNumber = 0; pointNumber < static_cast<int>( element.Points.size() ); pointNumber++ )
+            {
+                visitor( elementNumber, pointNumber, element.Points[pointNumber] );
+            }
+        }
+    }
+
+    template <typename Visitor>
     void VisitFaceStates( Visitor&& visitor )
     {
         static_assert( !std::is_same_v<FaceState, NoIntegrationPointState>,
@@ -244,6 +290,7 @@ public:
         mFaceStorage.clear();
         mCurrentElement = -1;
         mCurrentFace = -1;
+        mMesh = mesh;
 
         if ( mesh == nullptr )
         {
@@ -252,6 +299,11 @@ public:
 
         mElementStorage.resize( mesh->GetNE() );
         mFaceStorage.resize( mesh->GetNumFacesWithGhost() );
+    }
+
+    const mfem::Mesh* GetMesh() const noexcept override
+    {
+        return mMesh;
     }
 
 private:
@@ -316,6 +368,7 @@ private:
             Mult( referenceGradient, transformation.InverseJacobian(), physicalGradientView );
 
             point.DetdXdXi = transformation.Weight();
+            point.Weight = integrationPoint.weight * point.DetdXdXi;
         }
 
         return pointSet;
@@ -453,6 +506,7 @@ private:
     std::vector<ElementPointSet> mElementStorage;
     std::vector<std::unique_ptr<FacePointSet>> mFaceStorage;
     PointSetBuildWorkspace mBuildWorkspace;
+    mfem::Mesh* mMesh{ nullptr };
     int mCurrentElement{ -1 };
     int mCurrentFace{ -1 };
 };

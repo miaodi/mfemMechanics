@@ -87,9 +87,9 @@ class PhaseFieldHistory
 {
 public:
     mfem::real_t EvaluateTrial( mfem::real_t positiveEnergy );
-    void BeginStep();
-    void CommitStep();
-    void RollbackStep();
+    void BeginStep() noexcept;
+    void CommitStep() noexcept;
+    void RollbackStep() noexcept;
 
     mfem::real_t CommittedValue() const noexcept
     {

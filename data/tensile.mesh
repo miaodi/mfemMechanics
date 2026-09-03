@@ -10,6 +10,24 @@ MFEM mesh v1.0
 # TETRAHEDRON = 4
 # CUBE        = 5
 #
+# Geometry and j2_tensile boundary conditions (not to scale):
+#
+#                    boundary 2: prescribed u_y
+#                  7---------8---------9
+#                  |         |         |
+# boundary 3: free |         |         | boundary 4: free
+#                  6\        |         |
+# boundary 6: free   \       |         |
+#                     4------5
+# boundary 5: free   /|      |         |
+#                  3/ |      |         |
+#                  |  |      |         |
+#                  0--1------2
+#                       boundary 1: u_x = u_y = 0
+#
+# Boundaries 5 and 6 are the lower and upper notch faces, respectively;
+# vertex 4 is the notch tip. Boundary-condition labels describe the
+# j2_tensile example, not constraints stored by the mesh format.
 
 dimension
 2

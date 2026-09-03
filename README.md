@@ -3,7 +3,7 @@
 `mfemMechanics` is a research-oriented collection of solid-mechanics materials,
 finite element integrators, nonlinear solvers, and examples built on
 [MFEM](https://mfem.org/). The repository includes cohesive-zone, phase-field,
-thermal, buckling, and large-deformation experiments.
+thermal, plasticity, buckling, and large-deformation experiments.
 
 ## Capabilities
 
@@ -14,6 +14,8 @@ thermal, buckling, and large-deformation experiments.
   and 3D.
 - Irreversible cohesive history with accepted-step commit, failed-step rollback,
   step-size cutback, and nested-solver handling.
+- Infinitesimal associative J2 plasticity with linear isotropic hardening, an
+  analytic consistent tangent, and accepted/trial integration-point history.
 - Serial and MPI examples with optional OpenMP, MUMPS, PETSc, and SLEPc targets.
 
 ## Requirements
@@ -58,14 +60,31 @@ written to `build/<configuration>/bin`.
 
 | Requirement | Targets |
 | --- | --- |
-| Always available | `test2`, `test3`, `exec`, `ex2`, `beam`, `block`, `postBuckling2D`, `heat_dynamic`, `heat_static`, `playMesh` |
+| Always available | `test3`, `ex2`, `heat_dynamic`, `heat_static`, `playMesh`, `j2_tensile` |
+| MFEM with SuiteSparse | `test2`, `exec`, `beam`, `block`, `postBuckling2D` |
 | MFEM with MPI | `ex2p`, `pblock`, `pPhaseField_shear` |
-| OpenMP C++ | `PhaseField_shear`, `czm`, `czm2` |
+| OpenMP C++ and MFEM with SuiteSparse | `PhaseField_shear`, `czm`, `czm2` |
 | MFEM with MPI and MUMPS | `beamParallel` |
 | MFEM with MPI and PETSc | `petchbuckle`, `postBuckling3D1`, `postBuckling3D2`, `thermalStrain`, `czm2p` |
 | MFEM with MPI, PETSc, and SLEPc | `eigenbuckling` |
 
 CMake reports why any capability-gated target is skipped.
+
+## J2 Plasticity
+
+`j2_tensile` prescribes vertical displacement on the top of a plane-strain
+rectangular bar while fixing its bottom, reporting displacement and committed
+equivalent plastic strain and optionally writing ParaView output:
+
+```bash
+(cd build/debug/bin && ./j2_tensile -r 1 -lr 1 -steps 20 -disp 0.01 -no-output)
+```
+
+`-r` applies uniform refinement and `-lr` further refines elements touching the
+horizontal centerline.
+
+See [Infinitesimal J2 plasticity](docs/j2-plasticity.md) for equations, Voigt
+conventions, state lifecycle, limitations, verification, and references.
 
 ## Cohesive History
 

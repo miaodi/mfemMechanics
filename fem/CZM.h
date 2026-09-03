@@ -60,9 +60,9 @@ public:
         return mTrial;
     }
 
-    void BeginStep();
-    void CommitStep();
-    void RollbackStep();
+    void BeginStep() noexcept;
+    void CommitStep() noexcept;
+    void RollbackStep() noexcept;
 
     CZMEvaluation EvaluateTrial( const Eigen::VectorXr& local_separation,
                                  const CZMEvaluation& envelope,
@@ -136,9 +136,13 @@ public:
         return true;
     }
 
-    virtual void BeginStep() override;
-    virtual void CommitStep() override;
-    virtual void RollbackStep() override;
+    virtual void BeginStep() noexcept override;
+    virtual void CommitStep() noexcept override;
+    virtual void RollbackStep() noexcept override;
+    bool CanCommitStep() const noexcept override
+    {
+        return !mStepRejected;
+    }
 
 protected:
     CZMHistory& GetHistory( const int gauss ) const;

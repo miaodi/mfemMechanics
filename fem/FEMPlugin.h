@@ -54,25 +54,31 @@ public:
         mStepContext = ptr;
     }
 
-    virtual void BeginStep()
+    /// Lifecycle callbacks must not throw so a multi-integrator transaction cannot commit partially.
+    virtual void BeginStep() noexcept
     {
         MFEM_VERIFY( mStepContextStackSize < mStepContextStack.size(),
                      "Integrator nesting exceeds the supported depth." );
         mStepContextStack[mStepContextStackSize++] = mStepContext;
     }
 
-    virtual void CommitStep()
+    virtual void CommitStep() noexcept
     {
         RestoreStepContext();
     }
 
-    virtual void RollbackStep()
+    virtual void RollbackStep() noexcept
     {
         RestoreStepContext();
+    }
+
+    virtual bool CanCommitStep() const noexcept
+    {
+        return true;
     }
 
 protected:
-    void RestoreStepContext()
+    void RestoreStepContext() noexcept
     {
         MFEM_VERIFY( mStepContextStackSize > 0, "Integrator step completion requires a matching BeginStep." );
         mStepContextStackSize--;
@@ -390,25 +396,31 @@ public:
         mStepContext = ptr;
     }
 
-    virtual void BeginStep()
+    /// Lifecycle callbacks must not throw so a multi-integrator transaction cannot commit partially.
+    virtual void BeginStep() noexcept
     {
         MFEM_VERIFY( mStepContextStackSize < mStepContextStack.size(),
                      "Integrator nesting exceeds the supported depth." );
         mStepContextStack[mStepContextStackSize++] = mStepContext;
     }
 
-    virtual void CommitStep()
+    virtual void CommitStep() noexcept
     {
         RestoreStepContext();
     }
 
-    virtual void RollbackStep()
+    virtual void RollbackStep() noexcept
     {
         RestoreStepContext();
+    }
+
+    virtual bool CanCommitStep() const noexcept
+    {
+        return true;
     }
 
 protected:
-    void RestoreStepContext()
+    void RestoreStepContext() noexcept
     {
         MFEM_VERIFY( mStepContextStackSize > 0, "Integrator step completion requires a matching BeginStep." );
         mStepContextStackSize--;

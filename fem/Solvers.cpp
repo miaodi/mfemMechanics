@@ -3,6 +3,7 @@
 #include "PrettyPrint.h"
 #include "util.h"
 #include <Eigen/Dense>
+#include <algorithm>
 #include <deque>
 #include <limits>
 #include <mfem.hpp>
@@ -100,6 +101,15 @@ IntegratorLifecycle CollectIntegratorLifecycle( const mfem::Operator* oper )
     return result;
 }
 
+bool CanCommitIntegratorLifecycle( const mfem::Operator* oper )
+{
+    const IntegratorLifecycle integrators = CollectIntegratorLifecycle( oper );
+    return std::all_of( integrators.nonlinear.begin(), integrators.nonlinear.end(),
+                        []( const auto* integrator ) { return integrator->CanCommitStep(); } ) &&
+           std::all_of( integrators.block.begin(), integrators.block.end(),
+                        []( const auto* integrator ) { return integrator->CanCommitStep(); } );
+}
+
 void BeginIntegratorLifecycle( const mfem::Operator* oper )
 {
     const IntegratorLifecycle integrators = CollectIntegratorLifecycle( oper );
@@ -191,10 +201,11 @@ public:
         }
     }
 
-    void Commit()
+    bool Commit()
     {
-        mStepContext.CommitStep( mOperator );
+        const bool accepted = mStepContext.CommitStep( mOperator );
         mActive = false;
+        return accepted;
     }
 
     void Rollback()
@@ -207,6 +218,32 @@ private:
     const NonlinearStepContext& mStepContext;
     const mfem::Operator* mOperator;
     bool mActive{ false };
+};
+
+class SolutionSnapshot
+{
+public:
+    explicit SolutionSnapshot( mfem::Vector& solution ) : mSolution( solution ), mAccepted( solution )
+    {
+    }
+
+    ~SolutionSnapshot()
+    {
+        if ( mActive )
+        {
+            mSolution = mAccepted;
+        }
+    }
+
+    void Accept() noexcept
+    {
+        mActive = false;
+    }
+
+private:
+    mfem::Vector& mSolution;
+    mfem::Vector mAccepted;
+    bool mActive{ true };
 };
 
 #ifdef MFEM_USE_SUITESPARSE
@@ -284,9 +321,17 @@ void NonlinearStepContext::BeginStep( const mfem::Operator* oper ) const
     BeginIntegratorLifecycle( oper );
 }
 
-void NonlinearStepContext::CommitStep( const mfem::Operator* oper ) const
+bool NonlinearStepContext::CommitStep( const mfem::Operator* oper ) const
 {
+    if ( !CanCommitIntegratorLifecycle( oper ) )
+    {
+        ApplyIntegratorLifecycle( oper, &StepAwareNonlinearFormIntegrator::RollbackStep,
+                                  &BlockStepAwareNonlinearFormIntegrator::RollbackStep );
+        return false;
+    }
+
     ApplyIntegratorLifecycle( oper, &StepAwareNonlinearFormIntegrator::CommitStep, &BlockStepAwareNonlinearFormIntegrator::CommitStep );
+    return true;
 }
 
 void NonlinearStepContext::RollbackStep( const mfem::Operator* oper ) const
@@ -346,6 +391,12 @@ mfem::real_t NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, cons
     const mfem::real_t s0 = sL;
 
     sR = CalcS( etaR );
+    const auto acceptable = [s0, this]( const mfem::real_t value ) { return std::abs( value ) <= tol * std::abs( s0 ); };
+    // Keep the full Newton step, and its local quadratic convergence, when it already satisfies the search.
+    if ( s0 == 0. || acceptable( sR ) )
+    {
+        return etaR;
+    }
 
     // first find the right span
     while ( sL * sR > 0 && etaR < max_eta )
@@ -353,6 +404,10 @@ mfem::real_t NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, cons
         etaR *= eta_coef;
 
         sR = CalcS( etaR );
+        if ( acceptable( sR ) )
+        {
+            return etaR;
+        }
     }
 
     int iter = 0;
@@ -376,7 +431,6 @@ mfem::real_t NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, cons
     {
         eta = 1.;
     }
-    std::cout << "eta: " << eta << std::endl;
     return eta;
 }
 
@@ -386,6 +440,7 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
     MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
 
+    SolutionSnapshot solution_snapshot( x );
     IntegratorStep integrator_step( *this, oper );
 
     mfem::real_t norm0, norm, norm_goal;
@@ -489,7 +544,11 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
     if ( converged )
     {
-        integrator_step.Commit();
+        converged = integrator_step.Commit();
+        if ( converged )
+        {
+            solution_snapshot.Accept();
+        }
     }
     else
     {
@@ -515,6 +574,7 @@ void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
     MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
 
+    SolutionSnapshot solution_snapshot( x );
     IntegratorStep integrator_step( *this, oper );
 
     mfem::real_t norm0_u, norm_u, norm_goal_u;
@@ -608,7 +668,11 @@ void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
     if ( converged )
     {
-        integrator_step.Commit();
+        converged = integrator_step.Commit();
+        if ( converged )
+        {
+            solution_snapshot.Accept();
+        }
     }
     else
     {
@@ -892,13 +956,21 @@ void ALMBase::Mult( const mfem::Vector& b, mfem::Vector& x ) const
                 // }
             }
 
+            if ( !integrator_step.Commit() )
+            {
+                converged = false;
+                delta_u = 0.;
+                Delta_u = 0.;
+                delta_lambda = 0.;
+                Delta_lambda = 0.;
+                continue;
+            }
+
             lambda += Delta_lambda;
             *u += Delta_u;
             step++;
             final_iter = it;
             final_norm = norm;
-
-            integrator_step.Commit();
 
             if ( adaptive_l )
                 phi = std::abs( Norm( Delta_u ) / Delta_lambda );
@@ -1091,65 +1163,92 @@ template <typename Newton>
 void MultiNewtonAdaptive<Newton>::SetOperator( const mfem::Operator& op )
 {
     Newton::SetOperator( op );
-    oper = &op;
     cur.SetSize( Newton::width );
 }
 
 template <typename Newton>
 void MultiNewtonAdaptive<Newton>::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 {
-    Newton::lambda = 0.;
+    MFEM_VERIFY( this->iterative_mode,
+                 "MultiNewtonAdaptive requires iterative_mode=true to preserve trial state and accepted solutions." );
+    MFEM_VERIFY( initial_pseudo_time_increment > 0., "The initial pseudo-time increment must be positive." );
+    MFEM_VERIFY( max_delta > 0. && min_delta >= 0. && min_delta < max_delta,
+                 "Adaptive pseudo-time bounds must satisfy 0 <= minimum < maximum." );
 
-    mfem::Vector* u;
-    u = &x;
+    Newton::lambda = initial_pseudo_time;
+    mfem::real_t step_size = std::min( initial_pseudo_time_increment, max_delta );
+    Newton::Delta_lambda = 0.;
+    Newton::step = 0;
+    Newton::converged = false;
+    cur = x;
 
-    cur = *u;
-    for ( int count = 0; true; count++ )
+    int count = 0;
+    for ( ; count < max_steps && Newton::lambda < final_pseudo_time; count++ )
     {
-        if ( count == max_steps )
+        const mfem::real_t remaining = final_pseudo_time - Newton::lambda;
+        const bool reaches_target = step_size >= remaining;
+        const mfem::real_t trial_increment = reaches_target ? remaining : step_size;
+        MFEM_VERIFY( trial_increment > min_delta || reaches_target,
+                     "Required pseudo-time increment is smaller than the minimum bound." );
+
+        Newton::Delta_lambda = trial_increment;
+        x = cur;
+        try
         {
-            break;
-        }
-        if ( Newton::lambda >= 1. )
-        {
-            break;
-        }
-        if ( count )
-        {
-            if ( !Newton::GetConverged() )
-                Newton::Delta_lambda /= 2;
-            else
+            if ( trial_state_func )
             {
-                Newton::Delta_lambda *= std::min( 1.2, std::pow( this->max_iter * .8 / Newton::GetNumIterations(), .5 ) );
-                Newton::Delta_lambda = std::min( Newton::Delta_lambda, max_delta );
+                trial_state_func( Newton::GetCurrentPseudoTime(), x );
             }
+
+            util::mfemOut( "pseudo-time increment: ", trial_increment, "\n", util::Color::RESET );
+            Newton::Mult( b, x );
         }
-        MFEM_VERIFY( Newton::Delta_lambda > min_delta, "Required step size is smaller than the minimal bound." );
+        catch ( ... )
+        {
+            x = cur;
+            Newton::Delta_lambda = 0.;
+            Newton::converged = false;
+            throw;
+        }
 
-        util::mfemOut( "L: ", Newton::Delta_lambda, "\n", util::Color::RESET );
-        Newton::Delta_lambda = std::min( Newton::Delta_lambda, mfem::real_t{ 1 } - Newton::lambda );
-
-        IntegratorStep integrator_step( *this, oper );
-        Newton::Mult( b, *u );
         if ( Newton::GetConverged() )
         {
-            Newton::lambda += Newton::Delta_lambda;
-            cur = *u;
-
-            integrator_step.Commit();
-
-            if ( Newton::data_collect_func )
-            {
-                ( Newton::data_collect_func )( count, count, Newton::lambda );
-            }
+            Newton::lambda = reaches_target ? final_pseudo_time : Newton::lambda + trial_increment;
+            Newton::Delta_lambda = 0.;
+            cur = x;
             Newton::step++;
+
+            try
+            {
+                if ( Newton::data_collect_func )
+                {
+                    ( Newton::data_collect_func )( count, count, Newton::lambda );
+                }
+            }
+            catch ( ... )
+            {
+                Newton::converged = false;
+                throw;
+            }
+
+            const int iterations = std::max( 1, Newton::GetNumIterations() );
+            step_size *= std::min( 1.2, std::sqrt( this->max_iter * .8 / iterations ) );
+            step_size = std::min( step_size, max_delta );
         }
         else
         {
-            *u = cur;
-            integrator_step.Rollback();
+            x = cur;
+            Newton::Delta_lambda = 0.;
+            step_size = .5 * trial_increment;
         }
-        util::mfemOut( util::ProgressBar( Newton::lambda, Newton::GetConverged() ), '\n' );
+        const mfem::real_t progress = ( Newton::lambda - initial_pseudo_time ) / ( final_pseudo_time - initial_pseudo_time );
+        util::mfemOut( util::ProgressBar( progress, Newton::GetConverged() ), '\n' );
+    }
+
+    Newton::Delta_lambda = 0.;
+    if ( Newton::lambda < final_pseudo_time )
+    {
+        Newton::converged = false;
     }
 }
 
