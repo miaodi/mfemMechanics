@@ -197,15 +197,15 @@ J2PlasticityMaterial::J2PlasticityMaterial( mfem::Coefficient& youngsModulus,
 {
 }
 
-plugin::J2PlasticityResponse J2PlasticityMaterial::Evaluate( const Eigen::Matrix3r& mechanicalStrain,
-                                                             const plugin::J2PlasticityState& committedState,
-                                                             mfem::ElementTransformation& transformation,
-                                                             const mfem::IntegrationPoint& integrationPoint ) const
+plugin::J2PlasticityResponse J2PlasticityMaterial::Evaluate( const plugin::SmallStrainMaterialPoint& materialPoint,
+                                                             const plugin::J2PlasticityState& committedState ) const
 {
+    auto& transformation = materialPoint.Context.Transformation;
+    const auto& integrationPoint = materialPoint.Context.IntegrationPoint;
     plugin::J2PlasticityParameters parameters;
     parameters.YoungsModulus = mYoungsModulus.Eval( transformation, integrationPoint );
     parameters.PoissonRatio = mPoissonRatio.Eval( transformation, integrationPoint );
     parameters.Hardening.InitialYieldStress = mInitialYieldStress.Eval( transformation, integrationPoint );
     parameters.Hardening.HardeningModulus = mHardeningModulus.Eval( transformation, integrationPoint );
-    return plugin::EvaluateJ2Plasticity( mechanicalStrain, committedState, parameters );
+    return plugin::EvaluateJ2Plasticity( materialPoint.MechanicalStrain, committedState, parameters );
 }

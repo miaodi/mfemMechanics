@@ -1,6 +1,6 @@
 #include "J2Plasticity.h"
-#include "J2PlasticityIntegrator.h"
 #include "PostProc.h"
+#include "SolidMechanicsIntegrator.h"
 #include "Solvers.h"
 #include "util.h"
 
@@ -19,11 +19,151 @@
 #include <type_traits>
 #include <vector>
 
+struct TransactionCheckingState
+{
+    int Evaluations{ 0 };
+};
+
+class TransactionCheckingHistory
+{
+public:
+    const TransactionCheckingState& CommittedState() const noexcept
+    {
+        return mCommitted;
+    }
+
+    const TransactionCheckingState& TrialState() const noexcept
+    {
+        return mTrial;
+    }
+
+    void SetTrialState( const TransactionCheckingState& state )
+    {
+        MFEM_VERIFY( mActive, "Trial state requires an active material-point transaction." );
+        mTrial = state;
+    }
+
+    void BeginStep() noexcept
+    {
+        MFEM_VERIFY( !mActive, "Material-point history was begun more than once." );
+        mActive = true;
+        mTrial = mCommitted;
+        mBeginCalls++;
+    }
+
+    void CommitStep() noexcept
+    {
+        MFEM_VERIFY( mActive, "Material-point history commit requires BeginStep." );
+        mCommitted = mTrial;
+        mActive = false;
+        mCommitCalls++;
+    }
+
+    void RollbackStep() noexcept
+    {
+        MFEM_VERIFY( mActive, "Material-point history rollback requires BeginStep." );
+        mTrial = mCommitted;
+        mActive = false;
+        mRollbackCalls++;
+    }
+
+    int BeginCalls() const noexcept
+    {
+        return mBeginCalls;
+    }
+
+    int CommitCalls() const noexcept
+    {
+        return mCommitCalls;
+    }
+
+    int RollbackCalls() const noexcept
+    {
+        return mRollbackCalls;
+    }
+
+private:
+    TransactionCheckingState mCommitted;
+    TransactionCheckingState mTrial;
+    int mBeginCalls{ 0 };
+    int mCommitCalls{ 0 };
+    int mRollbackCalls{ 0 };
+    bool mActive{ false };
+};
+
+class TransactionCheckingMaterial
+{
+public:
+    static constexpr plugin::SolidKinematics Kinematics = plugin::SolidKinematics::SmallStrain;
+
+    struct Response : plugin::SolidMaterialResponse
+    {
+        TransactionCheckingState TrialState;
+    };
+
+    Response Evaluate( const plugin::SmallStrainMaterialPoint& materialPoint, const TransactionCheckingState& committedState ) const
+    {
+        Response response;
+        response.Stress = materialPoint.MechanicalStrain;
+        response.ConsistentTangent.diagonal() << 1., 1., 1., .5, .5, .5;
+        response.TrialState = committedState;
+        response.TrialState.Evaluations++;
+        return response;
+    }
+};
+
+namespace plugin
+{
+template <>
+struct MaterialPointTraits<TransactionCheckingMaterial>
+{
+    using State = TransactionCheckingHistory;
+};
+} // namespace plugin
+
 namespace
 {
 constexpr bool kSinglePrecision = std::is_same_v<mfem::real_t, float>;
 constexpr mfem::real_t kTightTolerance = kSinglePrecision ? 2e-5f : 2e-12;
 constexpr mfem::real_t kDerivativeTolerance = kSinglePrecision ? 2e-2f : 2e-6;
+
+using J2PointStorage = plugin::SolidMechanicsPointStorage<J2PlasticityMaterial>;
+
+class IdentitySmallStrainMaterial
+{
+public:
+    static constexpr plugin::SolidKinematics Kinematics = plugin::SolidKinematics::SmallStrain;
+
+    plugin::SolidMaterialResponse Evaluate( const plugin::SmallStrainMaterialPoint& materialPoint ) const
+    {
+        plugin::SolidMaterialResponse response;
+        response.Stress = materialPoint.MechanicalStrain;
+        response.ConsistentTangent.diagonal() << 1., 1., 1., .5, .5, .5;
+        return response;
+    }
+};
+
+class IdentityFiniteStrainMaterial
+{
+public:
+    static constexpr plugin::SolidKinematics Kinematics = plugin::SolidKinematics::FiniteStrain;
+
+    plugin::SolidMaterialResponse Evaluate( const plugin::FiniteStrainMaterialPoint& materialPoint ) const
+    {
+        plugin::SolidMaterialResponse response;
+        response.Stress = .5 * ( materialPoint.DeformationGradient.transpose() * materialPoint.DeformationGradient -
+                                 Eigen::Matrix3r::Identity() );
+        response.ConsistentTangent.diagonal() << 1., 1., 1., .5, .5, .5;
+        return response;
+    }
+};
+
+using IdentityPointStorage = plugin::SolidMechanicsPointStorage<IdentitySmallStrainMaterial>;
+using IdentityIntegrator = plugin::SolidMechanicsIntegrator<IdentitySmallStrainMaterial>;
+static_assert( std::is_same_v<typename IdentityPointStorage::ElementStateType, plugin::NoIntegrationPointState>,
+               "A stateless solid material should use geometry-only point storage." );
+static_assert( !std::is_constructible_v<IdentityIntegrator, IdentitySmallStrainMaterial&&, IdentityPointStorage&>,
+               "A solid mechanics integrator must not borrow a temporary material." );
 
 plugin::J2PlasticityParameters Parameters()
 {
@@ -109,6 +249,49 @@ mfem::Vector AffineDisplacement( const mfem::FiniteElement& element,
     return displacement;
 }
 
+template <typename Material, int Dimension>
+void ExpectStatelessMaterialJacobianMatchesDirectionalDifference( mfem::Mesh& mesh,
+                                                                  const Material& material,
+                                                                  const Eigen::Matrix<mfem::real_t, Dimension, Dimension>& gradient )
+{
+    mfem::H1_FECollection collection( 1, mesh.Dimension() );
+    mfem::FiniteElementSpace space( &mesh, &collection, mesh.Dimension(), mfem::Ordering::byVDIM );
+    const auto* element = space.GetFE( 0 );
+    auto* transformation = mesh.GetElementTransformation( 0 );
+    ASSERT_NE( element, nullptr );
+    ASSERT_NE( transformation, nullptr );
+
+    plugin::SolidMechanicsPointStorage<Material> pointStorage( &mesh );
+    plugin::SolidMechanicsIntegrator<Material> integrator( material, pointStorage );
+    FixedStepContext context;
+    integrator.SetStepContext( &context );
+
+    const mfem::Vector displacement = AffineDisplacement( *element, *transformation, gradient );
+    mfem::DenseMatrix tangent;
+    integrator.AssembleElementGrad( *element, *transformation, displacement, tangent );
+
+    mfem::Vector direction( displacement.Size() );
+    for ( int i = 0; i < direction.Size(); i++ )
+    {
+        direction( i ) = static_cast<mfem::real_t>( ( i % 5 ) - 2 );
+    }
+    direction /= direction.Norml2();
+    const mfem::real_t step = kSinglePrecision ? 2e-4f : 1e-7;
+    mfem::Vector plus( displacement ), minus( displacement );
+    plus.Add( step, direction );
+    minus.Add( -step, direction );
+    mfem::Vector plusResidual, minusResidual;
+    integrator.AssembleElementVector( *element, *transformation, plus, plusResidual );
+    integrator.AssembleElementVector( *element, *transformation, minus, minusResidual );
+    plusResidual -= minusResidual;
+    plusResidual /= 2. * step;
+
+    mfem::Vector analytic( direction.Size() );
+    tangent.Mult( direction, analytic );
+    analytic -= plusResidual;
+    EXPECT_LE( analytic.Norml2(), kDerivativeTolerance * ( 1. + plusResidual.Norml2() ) );
+}
+
 template <int Dimension>
 void ExpectElementJacobianMatchesDirectionalDifference( mfem::Mesh& mesh,
                                                         const Eigen::Matrix<mfem::real_t, Dimension, Dimension>& gradient )
@@ -125,8 +308,8 @@ void ExpectElementJacobianMatchesDirectionalDifference( mfem::Mesh& mesh,
     mfem::ConstantCoefficient initialYieldStress( 1. );
     mfem::ConstantCoefficient hardeningModulus( 10. );
     J2PlasticityMaterial material( youngsModulus, poissonRatio, initialYieldStress, hardeningModulus );
-    plugin::J2PlasticityPointStorage pointStorage( &mesh );
-    plugin::J2PlasticityIntegrator<plugin::J2PlasticityPointStorage> integrator( material, pointStorage );
+    J2PointStorage pointStorage( &mesh );
+    plugin::SolidMechanicsIntegrator<J2PlasticityMaterial> integrator( material, pointStorage );
     FixedStepContext context;
     integrator.SetStepContext( &context );
 
@@ -584,7 +767,68 @@ TEST( J2Plasticity, ConsistentTangentMatchesCenteredDifferenceAfterPlasticHistor
     EXPECT_LE( ( secondResponse.ConsistentTangent - numerical ).norm(), kDerivativeTolerance * ( 1. + numerical.norm() ) );
 }
 
-TEST( J2PlasticityIntegrator, TwoDimensionalElementJacobianMatchesResidualDirectionalDifference )
+TEST( SolidMechanicsIntegrator, AcceptsStatelessSmallStrainMaterial )
+{
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL, true, 1., 1. );
+    Eigen::Matrix2r gradient;
+    gradient << .018, .006, .002, -.003;
+    ExpectStatelessMaterialJacobianMatchesDirectionalDifference( mesh, IdentitySmallStrainMaterial{}, gradient );
+}
+
+TEST( SolidMechanicsIntegrator, DispatchesFiniteStrainKinematicsFromMaterial )
+{
+    mfem::Mesh mesh2d = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL, true, 1., 1. );
+    Eigen::Matrix2r gradient2d;
+    gradient2d << .12, .04, -.02, -.03;
+    ExpectStatelessMaterialJacobianMatchesDirectionalDifference( mesh2d, IdentityFiniteStrainMaterial{}, gradient2d );
+
+    mfem::Mesh mesh3d = mfem::Mesh::MakeCartesian3D( 1, 1, 1, mfem::Element::HEXAHEDRON, 1., 1., 1. );
+    Eigen::Matrix3r gradient3d;
+    gradient3d << .08, .04, -.03, -.02, -.05, .06, .03, -.01, .02;
+    ExpectStatelessMaterialJacobianMatchesDirectionalDifference( mesh3d, IdentityFiniteStrainMaterial{}, gradient3d );
+}
+
+TEST( SolidMechanicsIntegrator, InitializesLazilyCreatedHistoryOncePerTransaction )
+{
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL, true, 1., 1. );
+    mfem::H1_FECollection collection( 1, mesh.Dimension() );
+    mfem::FiniteElementSpace space( &mesh, &collection, mesh.Dimension(), mfem::Ordering::byVDIM );
+    const auto* element = space.GetFE( 0 );
+    auto* transformation = mesh.GetElementTransformation( 0 );
+    ASSERT_NE( element, nullptr );
+    ASSERT_NE( transformation, nullptr );
+
+    TransactionCheckingMaterial material;
+    plugin::SolidMechanicsPointStorage<TransactionCheckingMaterial> pointStorage( &mesh );
+    plugin::SolidMechanicsIntegrator<TransactionCheckingMaterial> integrator( material, pointStorage );
+    FixedStepContext context;
+    integrator.SetStepContext( &context );
+    mfem::Vector displacement( element->GetDof() * mesh.Dimension() );
+    displacement = 0.;
+    mfem::Vector residual;
+
+    integrator.BeginStep();
+    integrator.AssembleElementVector( *element, *transformation, displacement, residual );
+    integrator.AssembleElementVector( *element, *transformation, displacement, residual );
+    auto& history = pointStorage.GetElementPoint( 0 ).State.template Get<TransactionCheckingMaterial>();
+    EXPECT_EQ( history.BeginCalls(), 1 );
+    EXPECT_EQ( history.TrialState().Evaluations, 1 );
+    integrator.CommitStep();
+    EXPECT_EQ( history.CommitCalls(), 1 );
+    EXPECT_EQ( history.CommittedState().Evaluations, 1 );
+
+    integrator.BeginStep();
+    integrator.BeginStep();
+    integrator.AssembleElementVector( *element, *transformation, displacement, residual );
+    EXPECT_EQ( history.BeginCalls(), 2 );
+    integrator.RollbackStep();
+    EXPECT_FALSE( integrator.CanCommitStep() );
+    integrator.CommitStep();
+    EXPECT_EQ( history.RollbackCalls(), 1 );
+    EXPECT_EQ( history.TrialState().Evaluations, history.CommittedState().Evaluations );
+}
+
+TEST( SolidMechanicsIntegrator, J2TwoDimensionalElementJacobianMatchesResidualDirectionalDifference )
 {
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL, true, 1., 1. );
     Eigen::Matrix2r gradient;
@@ -592,7 +836,7 @@ TEST( J2PlasticityIntegrator, TwoDimensionalElementJacobianMatchesResidualDirect
     ExpectElementJacobianMatchesDirectionalDifference( mesh, gradient );
 }
 
-TEST( J2PlasticityIntegrator, ThreeDimensionalElementJacobianMatchesResidualDirectionalDifference )
+TEST( SolidMechanicsIntegrator, J2ThreeDimensionalElementJacobianMatchesResidualDirectionalDifference )
 {
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D( 1, 1, 1, mfem::Element::HEXAHEDRON, 1., 1., 1. );
     Eigen::Matrix3r gradient;
@@ -600,7 +844,7 @@ TEST( J2PlasticityIntegrator, ThreeDimensionalElementJacobianMatchesResidualDire
     ExpectElementJacobianMatchesDirectionalDifference( mesh, gradient );
 }
 
-TEST( J2PlasticityIntegrator, CommitsRollsBackAndProjectsElementHistory )
+TEST( SolidMechanicsIntegrator, CommitsRollsBackAndProjectsJ2ElementHistory )
 {
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL, true, 1., 1. );
     mfem::H1_FECollection displacementCollection( 1, mesh.Dimension() );
@@ -615,8 +859,8 @@ TEST( J2PlasticityIntegrator, CommitsRollsBackAndProjectsElementHistory )
     mfem::ConstantCoefficient initialYieldStress( 1. );
     mfem::ConstantCoefficient hardeningModulus( 10. );
     J2PlasticityMaterial material( youngsModulus, poissonRatio, initialYieldStress, hardeningModulus );
-    plugin::J2PlasticityPointStorage pointStorage( &mesh );
-    plugin::J2PlasticityIntegrator<plugin::J2PlasticityPointStorage> integrator( material, pointStorage );
+    J2PointStorage pointStorage( &mesh );
+    plugin::SolidMechanicsIntegrator<J2PlasticityMaterial> integrator( material, pointStorage );
     FixedStepContext context;
     integrator.SetStepContext( &context );
 
@@ -650,7 +894,7 @@ TEST( J2PlasticityIntegrator, CommitsRollsBackAndProjectsElementHistory )
                   "point-storage mesh" );
 }
 
-TEST( J2PlasticityIntegrator, GlobalVectorOrderingsProduceTheSameResidual )
+TEST( SolidMechanicsIntegrator, J2GlobalVectorOrderingsProduceTheSameResidual )
 {
     mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL, true, 1., 1. );
     mfem::H1_FECollection collection( 1, mesh.Dimension() );
@@ -662,12 +906,12 @@ TEST( J2PlasticityIntegrator, GlobalVectorOrderingsProduceTheSameResidual )
     mfem::ConstantCoefficient initialYieldStress( 1. );
     mfem::ConstantCoefficient hardeningModulus( 10. );
     J2PlasticityMaterial material( youngsModulus, poissonRatio, initialYieldStress, hardeningModulus );
-    plugin::J2PlasticityPointStorage byNodesStorage( &mesh );
-    plugin::J2PlasticityPointStorage byVdimStorage( &mesh );
+    J2PointStorage byNodesStorage( &mesh );
+    J2PointStorage byVdimStorage( &mesh );
     mfem::NonlinearForm byNodesForm( &byNodesSpace );
     mfem::NonlinearForm byVdimForm( &byVdimSpace );
-    auto* byNodesIntegrator = new plugin::J2PlasticityIntegrator<plugin::J2PlasticityPointStorage>( material, byNodesStorage );
-    auto* byVdimIntegrator = new plugin::J2PlasticityIntegrator<plugin::J2PlasticityPointStorage>( material, byVdimStorage );
+    auto* byNodesIntegrator = new plugin::SolidMechanicsIntegrator<J2PlasticityMaterial>( material, byNodesStorage );
+    auto* byVdimIntegrator = new plugin::SolidMechanicsIntegrator<J2PlasticityMaterial>( material, byVdimStorage );
     byNodesForm.AddDomainIntegrator( byNodesIntegrator );
     byVdimForm.AddDomainIntegrator( byVdimIntegrator );
     FixedStepContext context;

@@ -51,8 +51,8 @@ G=\frac{E}{2(1+\nu)},
 K=\frac{E}{3(1-2\nu)}.
 $$
 
-If stress-free strains are registered with the integrator, its mechanical
-strain input is
+If stress-free strains are registered with `SolidMechanicsIntegrator`, the
+material-point mechanical strain is
 
 $$
 \boldsymbol\varepsilon_m
@@ -202,8 +202,9 @@ overrides it for both paths.
 
 MFEM passes local vector element DOFs to nonlinear integrators in component
 blocks even when the global finite-element space uses `Ordering::byNODES`.
-The integrator's `dofs`-by-`dimension` Eigen map therefore supports both global
-MFEM orderings; a regression test compares their assembled residuals DOF by DOF.
+The generic solid-mechanics integrator's `dofs`-by-`dimension` Eigen map
+therefore supports both global MFEM orderings; a regression test compares their
+assembled residuals DOF by DOF.
 
 ## State lifecycle
 
@@ -212,12 +213,15 @@ Each integration point stores committed and trial
 of the committed state and current trial strain. Residual or Jacobian assembly
 replaces trial state but never commits it.
 
-`BeginStep`, `CommitStep`, and `RollbackStep` are driven by the nonlinear solver.
-A converged outermost transaction commits the latest trial state. A failed
-Newton solve or rejected nested transaction restores both the last accepted
-unknown vector and every material history. No general AMR transfer or restart
-format exists; changing the mesh and calling `IntegrationPointStorage::Reset`
-would discard plastic history, so AMR must remain disabled for this model.
+`J2PlasticityMaterial` declares `SolidKinematics::SmallStrain`; the generic
+`SolidMechanicsIntegrator` consequently supplies `SmallStrainMaterialPoint` and
+assembles no geometric stiffness. Its `BeginStep`, `CommitStep`, and
+`RollbackStep` callbacks are driven by the nonlinear solver. A converged
+outermost transaction commits the latest trial state. A failed Newton solve or
+rejected nested transaction restores both the last accepted unknown vector and
+every material history. No general AMR transfer or restart format exists;
+changing the mesh and calling `IntegrationPointStorage::Reset` would discard
+plastic history, so AMR must remain disabled for this model.
 
 The postprocessing function `ProjectCommittedEquivalentPlasticStrain` writes a physical-volume-weighted
 cell average to a discontinuous piecewise-constant scalar field. The material,
@@ -297,7 +301,8 @@ consistent tangent is symmetric.
 - the analytic tangent against centered differences and an independent
   `autodiff` differentiation of the plastic update;
 - deterministic trial evaluation, commit, and rollback behavior;
-- two- and three-dimensional element residual/Jacobian directional derivatives;
+- generic stateless small- and finite-strain material dispatch;
+- two- and three-dimensional J2 element residual/Jacobian directional derivatives;
 - committed-history projection and incompatible-mesh rejection;
 - equivalent residuals for global `byNODES` and `byVDIM` orderings;
 - transaction-wide rejection and failed-Newton solution restoration.

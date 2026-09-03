@@ -50,6 +50,55 @@ plugin::IntegrationPointStorage<ElementState> pointStorage( &mesh );
 material type may appear at most once in a bundle. Independent instances of the
 same stateful model should use separate storage objects.
 
+## Static solid-material protocol
+
+`SolidMechanicsIntegrator<Material>` keeps MFEM's run-time integrator interface
+at the form boundary and uses static dispatch for constitutive evaluation inside
+the quadrature loop. A material declares its kinematic model without accepting
+a mutable mode flag:
+
+```cpp
+class MyMaterial
+{
+public:
+    static constexpr plugin::SolidKinematics Kinematics =
+        plugin::SolidKinematics::SmallStrain;
+
+    plugin::SolidMaterialResponse Evaluate(
+        const plugin::SmallStrainMaterialPoint& point) const;
+};
+```
+
+`SmallStrainMaterialPoint` supplies mechanical strain and
+`FiniteStrainMaterialPoint` supplies the elastic deformation gradient. Both
+contain a narrow `MaterialPointContext` with the transformation, integration
+point, and load factor. They deliberately do not expose the integrator,
+residual, Jacobian, quadrature storage, or solver lifecycle to the material.
+
+For small strain, `SolidMaterialResponse::Stress` is Cauchy stress and
+`ConsistentTangent` is $\partial\boldsymbol\sigma/
+\partial\boldsymbol\varepsilon$. For finite strain they are second
+Piola--Kirchhoff stress and $\partial\mathbf S/\partial\mathbf E$. Tangents use
+the repository engineering-strain Voigt convention. A material-specific
+response may derive from `SolidMaterialResponse` to return diagnostics or a
+trial state that the generic integrator does not otherwise interpret.
+
+The default `MaterialPointTraits` state is stateless, in which case the
+integrator calls `Evaluate(point)` and the default
+`SolidMechanicsPointStorage` contains geometry only. A stateful material
+specializes the trait with a history object and supplies
+`Evaluate(point, committedState)`. Its response must contain `TrialState`, and
+its history implements
+`CommittedState`, `SetTrialState`, `BeginStep`, `CommitStep`, and
+`RollbackStep`. This keeps constitutive evaluation deterministic while the
+integrator coordinates transactions.
+
+`SolidMechanicsPointStorage<Material>` is the convenient one-material storage
+type. A caller can instead pass an `IntegrationPointStorage` with a composed
+`SolidMechanicsMaterialPointState<Materials...>` when several distinct material
+state types share the same integration points. This wrapper keeps exactly-once
+transaction tags out of unrelated integration-point state bundles.
+
 Irreversible cohesive laws use their dedicated face-state specialization:
 
 ```cpp
@@ -98,6 +147,13 @@ finishes. A nested rollback poisons its outer transaction; the outer driver must
 also roll back and must not advance the accepted solution. Phase-field history uses
 $H_{\mathrm{trial}}=\max(H_{\mathrm{committed}},\psi^+_{\mathrm{current}})$;
 it does not accumulate maxima over Newton iterates that may later be rejected.
+`SolidMechanicsIntegrator` tags each material-state slot with its active
+transaction. This ensures that histories created lazily during the first
+assembly receive exactly one `BeginStep` before evaluation, while histories
+that already exist are prepared when the outer transaction starts.
+Assembly outside a `BeginStep`/completion transaction evaluates from committed
+state without changing trial state; this supports residual and tangent checks
+without creating an implicit transaction.
 
 All lifecycle callbacks are `noexcept`. `CanCommitStep()` provides the
 nonmutating first phase of a transaction: the solver preflights every integrator

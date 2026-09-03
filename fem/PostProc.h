@@ -1,13 +1,47 @@
 #pragma once
-#include "J2PlasticityIntegrator.h"
+#include "IntegrationPointStorage.h"
+#include "J2Plasticity.h"
 #include "Material.h"
 #include "StressFreeDeformation.h"
 #include "mfem.hpp"
 #include <Eigen/Dense>
+#include <vector>
 
 namespace plugin
 {
-void ProjectCommittedEquivalentPlasticStrain( const J2PlasticityPointStorage& pointStorage, mfem::GridFunction& field );
+template <typename PointStorage>
+void ProjectCommittedEquivalentPlasticStrain( const PointStorage& pointStorage, mfem::GridFunction& field )
+{
+    MFEM_VERIFY( field.FESpace() != nullptr && field.FESpace()->GetVDim() == 1,
+                 "Equivalent plastic strain output requires a scalar finite-element space." );
+    MFEM_VERIFY( field.FESpace()->GetMesh() == pointStorage.GetMesh(),
+                 "Equivalent plastic strain output must use the point-storage mesh." );
+    const int numberOfElements = field.FESpace()->GetMesh()->GetNE();
+    MFEM_VERIFY( field.FESpace()->GetVSize() == numberOfElements,
+                 "Equivalent plastic strain output requires a discontinuous piecewise-constant space." );
+    std::vector<mfem::real_t> sums( numberOfElements, 0. );
+    std::vector<mfem::real_t> weights( numberOfElements, 0. );
+    pointStorage.VisitElementPoints(
+        [&sums, &weights]( const int elementNumber, const int, const auto& point )
+        {
+            sums[elementNumber] +=
+                point.Weight * point.State.template Get<J2PlasticityMaterial>().CommittedState().EquivalentPlasticStrain;
+            weights[elementNumber] += point.Weight;
+        } );
+
+    field = 0.;
+    mfem::Array<int> elementDofs;
+    for ( int elementNumber = 0; elementNumber < numberOfElements; elementNumber++ )
+    {
+        if ( weights[elementNumber] == 0. )
+        {
+            continue;
+        }
+        field.FESpace()->GetElementDofs( elementNumber, elementDofs );
+        MFEM_ASSERT( elementDofs.Size() == 1, "Piecewise-constant output must have one DOF per element." );
+        field( elementDofs[0] ) = sums[elementNumber] / weights[elementNumber];
+    }
+}
 
 // A Coefficient for computing the components of the stress.
 class StressCoefficient : public mfem::VectorCoefficient

@@ -1,5 +1,6 @@
-#include "J2PlasticityIntegrator.h"
+#include "J2Plasticity.h"
 #include "PostProc.h"
+#include "SolidMechanicsIntegrator.h"
 #include "Solvers.h"
 
 #include <algorithm>
@@ -146,10 +147,10 @@ int RunExample( int argc, char* argv[] )
     mfem::ConstantCoefficient hardeningModulusCoefficient( hardeningModulus );
     J2PlasticityMaterial material( youngsModulusCoefficient, poissonRatioCoefficient, initialYieldStressCoefficient,
                                    hardeningModulusCoefficient );
-    plugin::J2PlasticityPointStorage pointStorage( &mesh );
+    plugin::SolidMechanicsPointStorage<J2PlasticityMaterial> pointStorage( &mesh );
 
     mfem::NonlinearForm residual( &displacementSpace );
-    auto* plasticityIntegrator = new plugin::J2PlasticityIntegrator<plugin::J2PlasticityPointStorage>( material, pointStorage );
+    auto* plasticityIntegrator = new plugin::SolidMechanicsIntegrator<J2PlasticityMaterial>( material, pointStorage );
     residual.AddDomainIntegrator( plasticityIntegrator );
     residual.SetEssentialTrueDofs( essentialTrueDofs );
 

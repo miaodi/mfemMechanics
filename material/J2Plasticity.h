@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MaterialPointState.h"
+#include "SolidMaterial.h"
 #include "typeDef.h"
 
 #include <Eigen/Dense>
@@ -51,10 +52,8 @@ enum class J2PlasticityBranch
     Plastic
 };
 
-struct J2PlasticityResponse
+struct J2PlasticityResponse : SolidMaterialResponse
 {
-    Eigen::Matrix3r Stress{ Eigen::Matrix3r::Zero() };
-    Eigen::Matrix6r ConsistentTangent{ Eigen::Matrix6r::Zero() };
     J2PlasticityState TrialState;
     mfem::real_t PlasticIncrement{ 0. };
     J2PlasticityBranch Branch{ J2PlasticityBranch::Elastic };
@@ -70,22 +69,21 @@ struct MaterialPointTraits<J2PlasticityMaterial>
     using State = J2PlasticityHistory;
 };
 
-using J2PlasticityIntegrationPointState = MaterialPointStateBundle<J2PlasticityMaterial>;
 } // namespace plugin
 
 /// Spatially varying parameters for infinitesimal, rate-independent J2 plasticity.
 class J2PlasticityMaterial
 {
 public:
+    static constexpr plugin::SolidKinematics Kinematics = plugin::SolidKinematics::SmallStrain;
+
     J2PlasticityMaterial( mfem::Coefficient& youngsModulus,
                           mfem::Coefficient& poissonRatio,
                           mfem::Coefficient& initialYieldStress,
                           mfem::Coefficient& hardeningModulus );
 
-    plugin::J2PlasticityResponse Evaluate( const Eigen::Matrix3r& mechanicalStrain,
-                                           const plugin::J2PlasticityState& committedState,
-                                           mfem::ElementTransformation& transformation,
-                                           const mfem::IntegrationPoint& integrationPoint ) const;
+    plugin::J2PlasticityResponse Evaluate( const plugin::SmallStrainMaterialPoint& materialPoint,
+                                           const plugin::J2PlasticityState& committedState ) const;
 
 private:
     mfem::Coefficient& mYoungsModulus;

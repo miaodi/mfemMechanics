@@ -7,7 +7,6 @@ add_library(
     CZM.cpp
     AMR.cpp
     PhaseField.cpp
-    J2PlasticityIntegrator.cpp
 )
 add_library(mfemMechanics::femplugin ALIAS femplugin)
 
