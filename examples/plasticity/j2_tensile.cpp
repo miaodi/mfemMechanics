@@ -190,6 +190,7 @@ int RunExample( int argc, char* argv[] )
     mfem::GridFunction equivalentPlasticStrain( &plasticitySpace );
     displacement = 0.;
     equivalentPlasticStrain = 0.;
+    plugin::ParaView2DVectorCoefficient paraviewDisplacement( displacement );
     mfem::Vector trueDisplacement;
     displacement.GetTrueDofs( trueDisplacement );
 
@@ -201,7 +202,7 @@ int RunExample( int argc, char* argv[] )
         paraview->SetLevelsOfDetail( order );
         paraview->SetDataFormat( mfem::VTKFormat::BINARY );
         paraview->SetHighOrderOutput( true );
-        paraview->RegisterField( "displacement", &displacement );
+        paraview->RegisterVCoeffField( "displacement", &paraviewDisplacement );
         paraview->RegisterField( "equivalent_plastic_strain", &equivalentPlasticStrain );
         paraview->SetCycle( 0 );
         paraview->SetTime( 0. );

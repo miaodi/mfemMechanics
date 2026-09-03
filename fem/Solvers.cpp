@@ -380,7 +380,7 @@ mfem::real_t NewtonLineSearch::ComputeScalingFactor( const mfem::Vector& x, cons
         {
             this->r -= b;
         }
-        return this->r * this->c;
+        return Dot( this->r, this->c );
     };
     oper->Mult( x, r );
     if ( have_b )

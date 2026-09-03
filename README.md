@@ -64,7 +64,7 @@ written to `build/<configuration>/bin`.
 | MFEM with SuiteSparse | `test2`, `exec`, `beam`, `block`, `postBuckling2D` |
 | MFEM with MPI | `ex2p`, `pblock`, `pPhaseField_shear` |
 | OpenMP C++ and MFEM with SuiteSparse | `PhaseField_shear`, `czm`, `czm2` |
-| MFEM with MPI and MUMPS | `beamParallel` |
+| MFEM with MPI and MUMPS | `beamParallel`, `pCuProtrusion` |
 | MFEM with MPI and PETSc | `petchbuckle`, `postBuckling3D1`, `postBuckling3D2`, `thermalStrain`, `czm2p` |
 | MFEM with MPI, PETSc, and SLEPc | `eigenbuckling` |
 
@@ -85,6 +85,18 @@ horizontal centerline.
 
 See [Infinitesimal J2 plasticity](docs/j2-plasticity.md) for equations, Voigt
 conventions, state lifecycle, limitations, verification, and references.
+
+`pCuProtrusion` uses MUMPS on an MPI-partitioned dished copper mesh. It clamps
+the bottom and both sides and applies a prescribed uniform temperature ramp
+through isotropic CTE and the J2 material:
+
+```bash
+mpirun -np 2 build/debug/bin/pCuProtrusion -steps 20 -no-output
+```
+
+The default Cu inputs are illustrative CLI values, not a calibrated material
+database. See [Copper thermal protrusion](docs/cu-protrusion.md) for boundary
+attributes, units, assumptions, outputs, and model limitations.
 
 ## Cohesive History
 

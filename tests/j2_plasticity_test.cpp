@@ -19,6 +19,40 @@
 #include <type_traits>
 #include <vector>
 
+TEST( ParaView2DVectorCoefficient, PadsPlanarGridFunctionWithZeroZComponent )
+{
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL );
+    mfem::H1_FECollection collection( 1, mesh.Dimension() );
+    mfem::FiniteElementSpace space( &mesh, &collection, 2, mfem::Ordering::byVDIM );
+    mfem::GridFunction displacement( &space );
+    mfem::VectorFunctionCoefficient prescribedDisplacement( 2,
+                                                            []( const mfem::Vector& position, mfem::Vector& value )
+                                                            {
+                                                                value( 0 ) = 2. * position( 0 ) + position( 1 );
+                                                                value( 1 ) = -position( 0 ) + 3. * position( 1 );
+                                                            } );
+    displacement.ProjectCoefficient( prescribedDisplacement );
+
+    plugin::ParaView2DVectorCoefficient outputDisplacement( displacement );
+    mfem::IntegrationPoint integrationPoint;
+    integrationPoint.Set2( .25, .75 );
+    mfem::ElementTransformation& transformation = *mesh.GetElementTransformation( 0 );
+    transformation.SetIntPoint( &integrationPoint );
+    mfem::Vector value;
+    outputDisplacement.Eval( value, transformation, integrationPoint );
+
+    ASSERT_EQ( value.Size(), 3 );
+    const mfem::real_t tolerance = 100. * std::numeric_limits<mfem::real_t>::epsilon();
+    EXPECT_NEAR( value( 0 ), 1.25, tolerance );
+    EXPECT_NEAR( value( 1 ), 2., tolerance );
+    EXPECT_DOUBLE_EQ( value( 2 ), 0. );
+
+    mfem::ParaViewDataCollection paraview( "paraview_vector_test", &mesh );
+    paraview.RegisterVCoeffField( "displacement", &outputDisplacement );
+    ASSERT_EQ( paraview.GetVCoeffFieldMap().count( "displacement" ), 1 );
+    EXPECT_EQ( paraview.GetVCoeffFieldMap().at( "displacement" )->GetVDim(), 3 );
+}
+
 struct TransactionCheckingState
 {
     int Evaluations{ 0 };

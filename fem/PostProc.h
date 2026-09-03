@@ -9,6 +9,25 @@
 
 namespace plugin
 {
+/**
+ * Exposes a planar Cartesian GridFunction as (x, y, 0) for ParaView.
+ *
+ * Register this object with ParaViewDataCollection::RegisterVCoeffField so
+ * filters such as Warp By Vector recognize the result as a vector. The source
+ * GridFunction is borrowed and must outlive this coefficient and all saves.
+ */
+class ParaView2DVectorCoefficient : public mfem::VectorCoefficient
+{
+public:
+    explicit ParaView2DVectorCoefficient( const mfem::GridFunction& field );
+
+    void Eval( mfem::Vector& value, mfem::ElementTransformation& transformation, const mfem::IntegrationPoint& integrationPoint ) override;
+
+private:
+    const mfem::GridFunction& mField;
+    mfem::Vector mPlanarValue;
+};
+
 template <typename PointStorage>
 void ProjectCommittedEquivalentPlasticStrain( const PointStorage& pointStorage, mfem::GridFunction& field )
 {

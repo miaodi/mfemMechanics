@@ -2,6 +2,23 @@
 
 namespace plugin
 {
+ParaView2DVectorCoefficient::ParaView2DVectorCoefficient( const mfem::GridFunction& field )
+    : mfem::VectorCoefficient( 3 ), mField( field ), mPlanarValue( 2 )
+{
+    MFEM_VERIFY( field.FESpace() != nullptr && field.VectorDim() == 2,
+                 "ParaView planar-vector output requires a two-component GridFunction." );
+}
+
+void ParaView2DVectorCoefficient::Eval( mfem::Vector& value, mfem::ElementTransformation& transformation, const mfem::IntegrationPoint& integrationPoint )
+{
+    mField.GetVectorValue( transformation, integrationPoint, mPlanarValue );
+    MFEM_ASSERT( mPlanarValue.Size() == 2, "The planar GridFunction returned an unexpected vector dimension." );
+    value.SetSize( 3 );
+    value( 0 ) = mPlanarValue( 0 );
+    value( 1 ) = mPlanarValue( 1 );
+    value( 2 ) = 0.;
+}
+
 StressCoefficient::StressCoefficient( int d, ElasticMaterial& mat )
     : mfem::VectorCoefficient( 7 ), u( NULL ), materialModel( &mat ), dim( d )
 {
