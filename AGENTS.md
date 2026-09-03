@@ -122,9 +122,9 @@ Target availability is configuration-dependent:
 - SuiteSparse gates `test2`, `exec`, `beam`, `block`, and `postBuckling2D`.
 - MFEM MPI gates `ex2p`, `pblock`, and `pPhaseField_shear`; OpenMP plus
   SuiteSparse gates `PhaseField_shear`, `czm`, and `czm2`.
-- MPI plus MUMPS gates `beamParallel`; MPI plus PETSc gates `petchbuckle`,
-  `postBuckling3D1`, `postBuckling3D2`, `thermalStrain`, and `czm2p`; SLEPc is
-  additionally required for `eigenbuckling`.
+- MPI plus MUMPS gates `beamParallel` and `pCuProtrusion`; MPI plus PETSc gates
+  `petchbuckle`, `postBuckling3D1`, `postBuckling3D2`, `thermalStrain`, and
+  `czm2p`; SLEPc is additionally required for `eigenbuckling`.
 
 Read configuration skip messages rather than assuming a missing target is a
 source failure. There is no repository lint, install, or benchmark target.
@@ -267,6 +267,15 @@ source failure. There is no repository lint, install, or benchmark target.
   is accepted. The current thermal expansion path is one-way coupling; a
   monolithic temperature solve also needs displacement--temperature tangent
   blocks. Uncoupled diffusion may remain a scalar MFEM form.
+- For every MPI/parallel example or serial-to-parallel conversion, explicitly
+  report meaningful differences from the serial path: `Mesh`/`ParMesh`,
+  `FiniteElementSpace`/`ParFiniteElementSpace`,
+  `GridFunction`/`ParGridFunction`, `NonlinearForm`/`ParNonlinearForm`,
+  local/true/global DOF distinctions and ownership, and compatible distributed
+  operator and solver types. Avoid global gathers; make output rank-aware; and
+  keep every collective on control flow entered by all ranks, never inside a
+  rank-zero-only branch. State the MFEM/CMake capability gates and report both
+  one-rank and multi-rank verification.
 - Add new sources to the owning CMake target and expose a header through
   `Plugin.h` only when it is intended as public repository API. Gate optional
   solver code exactly as MFEM reports capabilities.
@@ -354,10 +363,8 @@ transitions separately. Use scaled absolute-plus-relative tolerances based on
   loop conventions consistently, avoid implicit host/device synchronization,
   avoid capturing host-only Eigen/virtual/coefficient objects in kernels, and
   retain a verified host fallback.
-- For MPI changes, keep local versus true-DOF ownership explicit, avoid global
-  gathers, make reductions collective and output rank-aware, and test one and
-  multiple ranks. For threading, eliminate races in material scratch and
-  quadrature history before measuring scalability.
+- For threading, eliminate races in material scratch and quadrature history
+  before measuring scalability.
 - There is no benchmark harness or fixed regression threshold. For a claimed
   optimization, provide reproducible before/after measurements on at least one
   representative case; include a second size or rank count when claiming
