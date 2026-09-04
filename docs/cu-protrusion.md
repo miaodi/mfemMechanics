@@ -122,6 +122,9 @@ The command-line defaults are deliberately an illustrative solver dataset:
 | `--reference-temperature` | 25 | temperature |
 | `--target-temperature` | 300 | temperature |
 
+`pCuProtrusion` uses this value as the linear isotropic modulus $H$ and selects
+zero kinematic modulus $C$.
+
 These values are not a calibrated material card and must not be used as
 evidence for a manufacturing process. Copper yield and hardening depend
 strongly on deposition, grain size, annealing, strain rate, and temperature.

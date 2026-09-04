@@ -117,8 +117,8 @@ are not part of the change.
 Target availability is configuration-dependent:
 
 - Baseline application targets are `test3`, `ex2`, `heat_dynamic`,
-  `heat_static`, `playMesh`, and `j2_tensile`; the test executables are added when
-  `BUILD_TESTING=ON`.
+  `heat_static`, `playMesh`, `j2_tensile`, and `j2_bauschinger`; the test
+  executables are added when `BUILD_TESTING=ON`.
 - SuiteSparse gates `test2`, `exec`, `beam`, `block`, and `postBuckling2D`.
 - MFEM MPI gates `ex2p`, `pblock`, and `pPhaseField_shear`; OpenMP plus
   SuiteSparse gates `PhaseField_shear`, `czm`, and `czm2`.

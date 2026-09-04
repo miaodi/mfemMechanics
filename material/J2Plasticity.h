@@ -17,16 +17,24 @@ struct LinearIsotropicHardening
     mfem::real_t HardeningModulus{ 0. };
 };
 
+struct LinearKinematicHardening
+{
+    /// Prager law: beta_dot = (2/3) Modulus * plastic_strain_dot.
+    mfem::real_t Modulus{ 0. };
+};
+
 struct J2PlasticityParameters
 {
     mfem::real_t YoungsModulus{ 0. };
     mfem::real_t PoissonRatio{ 0. };
     LinearIsotropicHardening Hardening;
+    LinearKinematicHardening KinematicHardening;
 };
 
 struct J2PlasticityState
 {
     Eigen::Matrix3r PlasticStrain{ Eigen::Matrix3r::Zero() };
+    Eigen::Matrix3r BackStress{ Eigen::Matrix3r::Zero() };
     mfem::real_t EquivalentPlasticStrain{ 0. };
 };
 
@@ -81,6 +89,11 @@ public:
                           mfem::Coefficient& poissonRatio,
                           mfem::Coefficient& initialYieldStress,
                           mfem::Coefficient& hardeningModulus );
+    J2PlasticityMaterial( mfem::Coefficient& youngsModulus,
+                          mfem::Coefficient& poissonRatio,
+                          mfem::Coefficient& initialYieldStress,
+                          mfem::Coefficient& hardeningModulus,
+                          mfem::Coefficient& kinematicHardeningModulus );
 
     plugin::J2PlasticityResponse Evaluate( const plugin::SmallStrainMaterialPoint& materialPoint,
                                            const plugin::J2PlasticityState& committedState ) const;
@@ -90,4 +103,5 @@ private:
     mfem::Coefficient& mPoissonRatio;
     mfem::Coefficient& mInitialYieldStress;
     mfem::Coefficient& mHardeningModulus;
+    mfem::Coefficient* mKinematicHardeningModulus{ nullptr };
 };

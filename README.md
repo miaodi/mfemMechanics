@@ -14,8 +14,9 @@ thermal, plasticity, buckling, and large-deformation experiments.
   and 3D.
 - Irreversible cohesive history with accepted-step commit, failed-step rollback,
   step-size cutback, and nested-solver handling.
-- Infinitesimal associative J2 plasticity with linear isotropic hardening, an
-  analytic consistent tangent, and accepted/trial integration-point history.
+- Infinitesimal associative J2 plasticity with linear isotropic and Prager
+  kinematic hardening, an analytic consistent tangent, and accepted/trial
+  integration-point history.
 - Serial and MPI examples with optional OpenMP, MUMPS, PETSc, and SLEPc targets.
 
 ## Requirements
@@ -60,7 +61,7 @@ written to `build/<configuration>/bin`.
 
 | Requirement | Targets |
 | --- | --- |
-| Always available | `test3`, `ex2`, `heat_dynamic`, `heat_static`, `playMesh`, `j2_tensile` |
+| Always available | `test3`, `ex2`, `heat_dynamic`, `heat_static`, `playMesh`, `j2_tensile`, `j2_bauschinger` |
 | MFEM with SuiteSparse | `test2`, `exec`, `beam`, `block`, `postBuckling2D` |
 | MFEM with MPI | `ex2p`, `pblock`, `pPhaseField_shear` |
 | OpenMP C++ and MFEM with SuiteSparse | `PhaseField_shear`, `czm`, `czm2` |
@@ -85,6 +86,18 @@ horizontal centerline.
 
 See [Infinitesimal J2 plasticity](docs/j2-plasticity.md) for equations, Voigt
 conventions, state lifecycle, limitations, verification, and references.
+
+`j2_bauschinger` compares matched isotropic and linear kinematic hardening at a
+uniaxial-stress material point. It loads in tension and then reverses into
+compression, reports both reverse yield stresses, and writes plot-ready CSV:
+
+```bash
+build/debug/bin/j2_bauschinger --output-file bauschinger.csv
+```
+
+Plot `axial_strain` against `isotropic_axial_stress` and
+`kinematic_axial_stress` to see the earlier reverse yielding caused by the
+translated kinematic yield surface.
 
 `pCuProtrusion` uses MUMPS on an MPI-partitioned dished copper mesh. It clamps
 the bottom and both sides and applies a prescribed uniform temperature ramp

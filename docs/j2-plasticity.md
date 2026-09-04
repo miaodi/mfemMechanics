@@ -3,29 +3,37 @@
 ## Scope
 
 `J2PlasticityMaterial` implements associative, rate-independent von Mises
-plasticity at infinitesimal strain with optional linear isotropic hardening. It
-uses a three-dimensional constitutive state in both two- and three-dimensional
-finite-element analyses. A two-dimensional analysis is therefore plane strain:
+plasticity at infinitesimal strain with optional linear isotropic and linear
+Prager kinematic hardening. Either mechanism can be used alone or in
+combination. The model uses a three-dimensional constitutive state in both two-
+and three-dimensional finite-element analyses. A two-dimensional analysis is
+therefore plane strain:
 $\varepsilon_{zz}=\varepsilon_{xz}=\varepsilon_{yz}=0$, while
 $\sigma_{zz}$ and $\varepsilon^p_{zz}$ generally remain nonzero.
 
 The model assumes isotropic elasticity, isothermal response, no rate effects,
 and a strain history divided into accepted load or time increments. It does not
-implement finite-strain plasticity, plane stress, kinematic or nonlinear
-hardening, viscosity, damage, plastic heating, contact, AMR state transfer, or
-restart serialization. Infinitesimal kinematics cannot represent geometric
-necking.
+implement finite-strain plasticity, plane stress, nonlinear or saturating
+kinematic hardening, viscosity, damage, plastic heating, contact, AMR state
+transfer, or restart serialization. Linear kinematic hardening demonstrates
+yield-surface translation and the Bauschinger effect, but it does not reproduce
+the saturation, ratcheting, or mean-stress relaxation of general cyclic metal
+response. Infinitesimal kinematics cannot represent geometric necking.
 
 All stress-like inputs must use one consistent unit. Young's modulus $E$,
-initial yield stress $\sigma_{y0}$, and hardening modulus $H$ have that unit;
-Poisson's ratio $\nu$, strain, plastic strain, and accumulated equivalent
-plastic strain $\alpha$ are dimensionless. Admissible parameters are
+initial yield stress $\sigma_{y0}$, isotropic hardening modulus $H$, kinematic
+hardening modulus $C$, stress, and backstress have that unit; Poisson's ratio
+$\nu$, strain, plastic strain, and accumulated equivalent plastic strain
+$\alpha$ are dimensionless. Admissible parameters are
 
 $$
-E>0,\qquad -1<\nu<\tfrac12,\qquad \sigma_{y0}\geq0,\qquad H\geq0.
+E>0,\qquad -1<\nu<\tfrac12,\qquad \sigma_{y0}\geq0,
+\qquad H\geq0,\qquad C\geq0.
 $$
 
-$H=0$ selects perfect plasticity. The incompressible elastic limit
+$H=C=0$ selects perfect plasticity. Setting $C=0$ recovers the original
+isotropic-hardening model, while $H=0$ and $C>0$ selects pure linear kinematic
+hardening. The incompressible elastic limit
 $\nu\rightarrow1/2$ is excluded because the bulk modulus becomes singular and
 the displacement-only discretization becomes poorly conditioned before that
 limit.
@@ -59,35 +67,43 @@ $$
   = \operatorname{sym}(\nabla\mathbf u)-\boldsymbol\varepsilon_0.
 $$
 
-For the deviatoric stress $\mathbf s=\operatorname{dev}(\boldsymbol\sigma)$,
-the equivalent stress, yield function, and linear hardening law are
+For the deviatoric stress $\mathbf s=\operatorname{dev}(\boldsymbol\sigma)$
+and deviatoric backstress $\boldsymbol\beta$, define the relative stress
+$\boldsymbol\xi=\mathbf s-\boldsymbol\beta$. The equivalent stress, yield
+function, and linear isotropic hardening law are
 
 $$
-q=\sqrt{\tfrac32\,\mathbf s:\mathbf s},
+q=\sqrt{\tfrac32\,\boldsymbol\xi:\boldsymbol\xi},
 \qquad
 f=q-(\sigma_{y0}+H\alpha),
 \qquad
 Y(\alpha)=\sigma_{y0}+H\alpha.
 $$
 
-Associative flow and accumulated plastic strain satisfy
+Associative flow, accumulated plastic strain, and the Prager backstress law
+satisfy
 
 $$
 \dot{\boldsymbol\varepsilon}^p
-  = \dot\gamma\frac{3}{2}\frac{\mathbf s}{q},
+  = \dot\gamma\frac{3}{2}\frac{\boldsymbol\xi}{q},
 \qquad
 \dot\alpha=\dot\gamma,
+\qquad
+\dot{\boldsymbol\beta}=\frac23 C\dot{\boldsymbol\varepsilon}^p,
 \qquad
 \dot\gamma\geq0,\quad f\leq0,\quad \dot\gamma f=0.
 $$
 
-The flow is deviatoric, so plastic incompressibility is preserved. The stored
-plastic-strain tensor is required to be symmetric and trace-free.
+The factor $2/3$ defines the repository's convention for $C$; changing that
+factor changes the parameter meaning and consistency denominator. The flow is
+deviatoric, so plastic incompressibility is preserved. Stored plastic strain
+and backstress tensors are required to be finite, symmetric, and trace-free.
 
 ## Radial return
 
 At an evaluation in increment $n+1$, trial quantities are computed only from
-the committed state $(\boldsymbol\varepsilon^p_n,\alpha_n)$ and the current
+the committed state
+$(\boldsymbol\varepsilon^p_n,\boldsymbol\beta_n,\alpha_n)$ and the current
 mechanical strain:
 
 $$
@@ -97,39 +113,56 @@ $$
 \qquad
 \mathbf s^{\mathrm{tr}}=2G\mathbf e_e^{\mathrm{tr}},
 \qquad
-q^{\mathrm{tr}}=\sqrt{\tfrac32\,\mathbf s^{\mathrm{tr}}:
-                                      \mathbf s^{\mathrm{tr}}}.
+\boldsymbol\xi^{\mathrm{tr}}
+  =\mathbf s^{\mathrm{tr}}-\boldsymbol\beta_n,
+\qquad
+q^{\mathrm{tr}}=\sqrt{\tfrac32\,\boldsymbol\xi^{\mathrm{tr}}:
+                                      \boldsymbol\xi^{\mathrm{tr}}}.
 $$
 
 If $f^{\mathrm{tr}}=q^{\mathrm{tr}}-Y(\alpha_n)$ is nonpositive within a
 precision-scaled tolerance, the step is elastic. Otherwise the closed-form
-consistency increment for linear hardening is
+consistency increment for combined linear hardening is
 
 $$
-\Delta\gamma=\frac{f^{\mathrm{tr}}}{3G+H}.
+\Delta\gamma=\frac{f^{\mathrm{tr}}}{3G+H+C}.
 $$
 
 Defining
 
 $$
-\mathbf m=\frac{\mathbf s^{\mathrm{tr}}}
-                 {\|\mathbf s^{\mathrm{tr}}\|},
+\mathbf m=\frac{\boldsymbol\xi^{\mathrm{tr}}}
+                 {\|\boldsymbol\xi^{\mathrm{tr}}\|},
 \qquad
-a=1-\frac{3G\Delta\gamma}{q^{\mathrm{tr}}},
+\mathbf n=\frac32\frac{\boldsymbol\xi^{\mathrm{tr}}}{q^{\mathrm{tr}}},
+\qquad
+a_\sigma=1-\frac{3G\Delta\gamma}{q^{\mathrm{tr}}},
 $$
 
-the radial update is
+the radial return in relative-stress space is
 
 $$
-\mathbf s_{n+1}=a\mathbf s^{\mathrm{tr}},
+\mathbf s_{n+1}=\mathbf s^{\mathrm{tr}}-2G\Delta\gamma\mathbf n,
 \qquad
 \boldsymbol\varepsilon^p_{n+1}
   =\boldsymbol\varepsilon^p_n
-   +\Delta\gamma\frac32
-      \frac{\mathbf s^{\mathrm{tr}}}{q^{\mathrm{tr}}},
+   +\Delta\gamma\mathbf n,
 \qquad
-\alpha_{n+1}=\alpha_n+\Delta\gamma.
+\alpha_{n+1}=\alpha_n+\Delta\gamma,
 $$
+
+$$
+\boldsymbol\beta_{n+1}
+  =\boldsymbol\beta_n+\frac23 C\Delta\gamma\mathbf n,
+\qquad
+\boldsymbol\xi_{n+1}
+  =\left(1-\frac{(3G+C)\Delta\gamma}{q^{\mathrm{tr}}}\right)
+     \boldsymbol\xi^{\mathrm{tr}}.
+$$
+
+For nonzero committed backstress,
+$\mathbf s_{n+1}\ne a_\sigma\mathbf s^{\mathrm{tr}}$; applying a radial
+scale directly to the trial deviatoric stress would be incorrect.
 
 The pressure remains elastic:
 
@@ -140,9 +173,11 @@ p_{n+1}=K\operatorname{tr}(\boldsymbol\varepsilon_m
 \boldsymbol\sigma_{n+1}=p_{n+1}\mathbf I+\mathbf s_{n+1}.
 $$
 
-These formulas are specialized to linear hardening. A general hardening law
-would require solving a scalar nonlinear consistency equation rather than
-silently reusing this denominator.
+These formulas are specialized to linear isotropic hardening and linear Prager
+kinematic hardening. A nonlinear isotropic law, Armstrong--Frederick recovery,
+or a multi-backstress Chaboche law requires a different state update and,
+generally, a nonlinear consistency solve rather than silently reusing this
+denominator.
 
 ## Consistent tangent
 
@@ -159,13 +194,15 @@ On the plastic branch, the repository-specific derivation gives
 $$
 \mathbb C_{\mathrm{ep}}
   =K\mathbf I\otimes\mathbf I
-   +2Ga\mathbb P_{\mathrm{dev}}
-   -6G^2\left(\frac{1}{3G+H}
-        -\frac{\Delta\gamma}{q^{\mathrm{tr}}}\right)
-       \mathbf m\otimes\mathbf m.
+   +2Ga_\sigma\mathbb P_{\mathrm{dev}}
+   -6G^2\left(\frac{1}{3G+H+C}
+         -\frac{\Delta\gamma}{q^{\mathrm{tr}}}\right)
+        \mathbf m\otimes\mathbf m.
 $$
 
-This tangent is symmetric for associative J2 flow with isotropic hardening.
+The backstress modulus enters the consistency denominator, while the stress
+correction retains the $6G^2$ coefficient. This tangent is symmetric for the
+associative J2 flow with combined linear isotropic--kinematic hardening.
 The code stores it as a $6\times6$ matrix mapping engineering strain Voigt
 vectors to stress Voigt vectors. The ordering is
 `[xx, yy, zz, xy, yz, xz]`; strain shear entries are
@@ -209,9 +246,10 @@ assembled residuals DOF by DOF.
 ## State lifecycle
 
 Each integration point stores committed and trial
-`J2PlasticityState` values. Constitutive evaluation is a deterministic function
-of the committed state and current trial strain. Residual or Jacobian assembly
-replaces trial state but never commits it.
+`J2PlasticityState` values containing plastic strain, backstress, and equivalent
+plastic strain. Constitutive evaluation is a deterministic function of the
+committed state and current trial strain. Residual or Jacobian assembly replaces
+trial state but never commits it.
 
 `J2PlasticityMaterial` declares `SolidKinematics::SmallStrain`; the generic
 `SolidMechanicsIntegrator` consequently supplies `SmallStrainMaterialPoint` and
@@ -234,11 +272,64 @@ not thread-safe.
 Incremental energy is deliberately unavailable. `GetElementEnergy()` aborts
 rather than returning a value that could incorrectly be used for globalization.
 
+## Bauschinger material-point example
+
+`j2_bauschinger` isolates the constitutive response without mesh, boundary, or
+global-solver effects. It compares two models with the same elastic constants,
+initial yield stress, and numerical hardening-modulus value:
+
+- linear isotropic hardening with $H>0$ and $C=0$;
+- pure linear kinematic hardening with $H=0$ and $C>0$.
+
+The equal modulus values give matching monotonic uniaxial responses from the
+virgin state. The prescribed axial strain follows
+$0\rightarrow\varepsilon_{\max}\rightarrow-\varepsilon_{\max}$. At every
+increment, a local Newton solve finds the two equal transverse strains for
+$\sigma_{yy}=\sigma_{zz}=0$, so the CSV records a uniaxial-stress response
+rather than a plane-strain response. Each model has independent committed
+history, and state is accepted only after the transverse solve converges.
+
+Run the default cycle from the repository root with
+
+```bash
+build/debug/bin/j2_bauschinger --output-file bauschinger.csv
+```
+
+The output columns are:
+
+| Column | Meaning |
+| --- | --- |
+| `step` | Accepted material-point increment |
+| `stage` | `loading` or `reversal` |
+| `axial_strain` | Prescribed dimensionless axial strain |
+| `isotropic_axial_stress` | Axial stress for linear isotropic hardening |
+| `kinematic_axial_stress` | Axial stress for pure linear kinematic hardening |
+| `isotropic_equivalent_plastic_strain` | Isotropic-model $\alpha$ |
+| `kinematic_equivalent_plastic_strain` | Kinematic-model $\alpha$ |
+| `kinematic_backstress_xx` | Axial tensor component $\beta_{xx}$ |
+| `isotropic_branch` | Isotropic-model elastic/plastic branch |
+| `kinematic_branch` | Kinematic-model elastic/plastic branch |
+
+Plot `axial_strain` on the horizontal axis and the two `*_axial_stress`
+columns on the vertical axis. The curves coincide during initial monotonic
+loading. After tensile plastic deformation, the kinematic yield surface is
+translated and reverse plastic flow begins at a less-negative stress and higher
+reversal strain than for the expanded isotropic yield surface. The executable
+brackets each elastic-to-plastic transition and bisects it using the last
+elastic committed state. It reports the resulting numerical reverse yield
+points and verifies both orderings. The CSV still contains only the requested
+accepted strain increments; its branch transition becomes more sharply resolved
+as `--steps-per-half-cycle` is increased. The default parameters are
+illustrative rather than calibrated material data.
+
 ## Tensile example
 
 `j2_tensile` reads the two-dimensional rectangular bar in
 `data/simple_bar.msh`. Both displacement components are fixed at the bottom,
 the top remains horizontally free, and its vertical displacement is prescribed.
+A zero kinematic modulus is selected through the original four-coefficient
+material constructor, so this example continues to use linear isotropic
+hardening only.
 A second stage reduces the prescribed displacement to `--unload-fraction`
 times its maximum; the default fraction is three quarters. For each accepted
 increment, the program prints a labeled status line with the stage, stage
@@ -294,31 +385,39 @@ consistent tangent is symmetric.
 
 - zero and hydrostatic elastic states;
 - engineering-shear scaling and the three-dimensional J2 invariant;
-- perfect-plastic and linear-hardening consistency;
-- invalid parameter and history rejection;
+- perfect-plastic, isotropic-hardening, and combined-hardening consistency;
+- shifted-stress consistency and symmetric deviatoric backstress evolution;
+- invalid isotropic/kinematic parameters and history rejection;
+- matched monotonic response and earlier reverse yielding under kinematic
+  hardening;
 - proportional monotonic loading with different increment subdivisions;
 - plane-strain out-of-plane stress and plastic flow;
 - the analytic tangent against centered differences and an independent
   `autodiff` differentiation of the plastic update;
+- the kinematic tangent after nonproportional plastic history against centered
+  differences;
 - deterministic trial evaluation, commit, and rollback behavior;
 - generic stateless small- and finite-strain material dispatch;
-- two- and three-dimensional J2 element residual/Jacobian directional derivatives;
+- isotropic and kinematic J2 element residual/Jacobian directional derivatives;
 - committed-history projection and incompatible-mesh rejection;
 - equivalent residuals for global `byNODES` and `byVDIM` orderings;
 - transaction-wide rejection and failed-Newton solution restoration.
 
 The `J2Tensile.Smoke` CTest runs the plane-strain example on a two-element mesh
 through plastic loading and unloading, requires reported active plasticity with
-an elastic unload, and does not create output files.
+an elastic unload, and does not create output files. `J2Bauschinger.Smoke` runs
+the material-point cycle, requires the kinematic model to yield earlier in
+reverse loading, and disables CSV output. `J2Bauschinger.Csv` additionally
+checks the documented header and row count, then removes its temporary output.
 
 ## Provenance
 
 The constitutive equations and radial-return algorithm follow the standard
-associative J2 framework described by the references below. The displayed
-specialization and consistent-tangent formula were derived for this
-repository's definitions of $\Delta\gamma$, $\alpha$, and engineering Voigt
-strain, then checked numerically; they are not represented as verbatim copied
-equations.
+associative J2 framework described by the references below. The combined linear
+isotropic--Prager specialization and consistent-tangent formula were derived
+for this repository's definitions of $\Delta\gamma$, $\alpha$, $C$, and
+engineering Voigt strain, then checked numerically; they are not represented as
+verbatim copied equations.
 
 1. Simo, J. C., and Taylor, R. L. (1985), “Consistent tangent operators for
    rate-independent elastoplasticity,” *Computer Methods in Applied Mechanics
@@ -329,11 +428,12 @@ equations.
    Section 3, Eqs. (3.2)–(3.8), pp. 105–106 gives the endpoint radial return and
    scalar consistency equation; Section 4, Eqs. (4.5) and (4.12)–(4.13),
    pp. 108–110 defines and derives the consistent tangent of the discrete
-   update. Specializing those equations to zero backstress and linear isotropic
-   hardening, with the paper's multiplier
-   $\lambda=\sqrt{3/2}\,\Delta\gamma$, gives this repository's $3G+H$
-   denominator and tensor tangent. The engineering-Voigt conversion is a
-   repository-specific derivation checked by the tests.
+   update. With the paper's multiplier
+   $\lambda=\sqrt{3/2}\,\Delta\gamma$, the zero-backstress specialization gives
+   the original $3G+H$ denominator. Applying the explicitly stated Prager law
+   to the same discrete framework gives the repository's $3G+H+C$ combined
+   denominator and tensor tangent. This specialization and its engineering-
+   Voigt conversion are repository derivations checked by the tests.
 2. Simo, J. C., and Hughes, T. J. R. (1998), *Computational Inelasticity*,
    Interdisciplinary Applied Mathematics 7, Springer-Verlag, New York.
    [doi:10.1007/b98904](https://doi.org/10.1007/b98904). This is background for
@@ -344,3 +444,12 @@ equations.
    [doi:10.1002/9780470694626](https://doi.org/10.1002/9780470694626). This is
    background for the standard radial-return implementation structure; no book
    equation is transcribed verbatim here.
+4. Desmorat, R. (2010), “Non-saturating nonlinear kinematic hardening laws,”
+   *Comptes Rendus Mécanique*, 338(3), 146–151.
+   [doi:10.1016/j.crme.2010.02.007](https://doi.org/10.1016/j.crme.2010.02.007),
+   [open article](https://comptes-rendus.academie-sciences.fr/mecanique/articles/10.1016/j.crme.2010.02.007/).
+   Equation (1), p. 146 gives the generic $2C/3$ kinematic term. Equation (3)
+   and the following paragraph in Section 2, p. 147 identify the internal
+   variable with plastic strain for the linear Prager law, yielding
+   $\dot{\boldsymbol\beta}=(2/3)C\dot{\boldsymbol\varepsilon}^p$ in this
+   document's notation.

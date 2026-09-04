@@ -328,7 +328,8 @@ void ExpectStatelessMaterialJacobianMatchesDirectionalDifference( mfem::Mesh& me
 
 template <int Dimension>
 void ExpectElementJacobianMatchesDirectionalDifference( mfem::Mesh& mesh,
-                                                        const Eigen::Matrix<mfem::real_t, Dimension, Dimension>& gradient )
+                                                        const Eigen::Matrix<mfem::real_t, Dimension, Dimension>& gradient,
+                                                        const mfem::real_t kinematicHardeningModulus = 0. )
 {
     mfem::H1_FECollection collection( 1, mesh.Dimension() );
     mfem::FiniteElementSpace space( &mesh, &collection, mesh.Dimension(), mfem::Ordering::byVDIM );
@@ -341,7 +342,8 @@ void ExpectElementJacobianMatchesDirectionalDifference( mfem::Mesh& mesh,
     mfem::ConstantCoefficient poissonRatio( .25 );
     mfem::ConstantCoefficient initialYieldStress( 1. );
     mfem::ConstantCoefficient hardeningModulus( 10. );
-    J2PlasticityMaterial material( youngsModulus, poissonRatio, initialYieldStress, hardeningModulus );
+    mfem::ConstantCoefficient kinematicHardening( kinematicHardeningModulus );
+    J2PlasticityMaterial material( youngsModulus, poissonRatio, initialYieldStress, hardeningModulus, kinematicHardening );
     J2PointStorage pointStorage( &mesh );
     plugin::SolidMechanicsIntegrator<J2PlasticityMaterial> integrator( material, pointStorage );
     FixedStepContext context;
@@ -620,6 +622,53 @@ TEST( J2Plasticity, PerfectPlasticAndHardeningReturnsSatisfyConsistency )
     EXPECT_LT( EquivalentStress( perfect.Stress ), EquivalentStress( hardening.Stress ) );
 }
 
+TEST( J2Plasticity, CombinedHardeningReturnSatisfiesShiftedYieldCondition )
+{
+    auto parameters = Parameters();
+    parameters.KinematicHardening.Modulus = 15.;
+    Eigen::Matrix3r strain = Eigen::Matrix3r::Zero();
+    strain( 0, 0 ) = .03;
+
+    const auto response = plugin::EvaluateJ2Plasticity( strain, {}, parameters );
+    ASSERT_EQ( response.Branch, plugin::J2PlasticityBranch::Plastic );
+    const mfem::real_t yieldStress = YieldStress( parameters.Hardening, response.TrialState.EquivalentPlasticStrain );
+    EXPECT_NEAR( EquivalentStress( response.Stress - response.TrialState.BackStress ), yieldStress,
+                 kTightTolerance * ( 1. + yieldStress ) );
+    EXPECT_LE(
+        ( response.TrialState.BackStress - ( 2. / 3. ) * parameters.KinematicHardening.Modulus * response.TrialState.PlasticStrain )
+            .norm(),
+        kTightTolerance * ( 1. + response.TrialState.BackStress.norm() ) );
+    EXPECT_NEAR( response.TrialState.BackStress.trace(), 0., kTightTolerance );
+    EXPECT_GT( response.TrialState.BackStress.norm(), 0. );
+}
+
+TEST( J2Plasticity, LinearKinematicHardeningDemonstratesBauschingerEffect )
+{
+    auto isotropicParameters = Parameters();
+    auto kinematicParameters = Parameters();
+    kinematicParameters.Hardening.HardeningModulus = 0.;
+    kinematicParameters.KinematicHardening.Modulus = isotropicParameters.Hardening.HardeningModulus;
+
+    Eigen::Vector6r loadingStrain = Eigen::Vector6r::Zero();
+    loadingStrain( 3 ) = .04;
+    const auto isotropicLoading = plugin::EvaluateJ2Plasticity( util::InverseVoigt( loadingStrain, true ), {}, isotropicParameters );
+    const auto kinematicLoading = plugin::EvaluateJ2Plasticity( util::InverseVoigt( loadingStrain, true ), {}, kinematicParameters );
+    ASSERT_EQ( isotropicLoading.Branch, plugin::J2PlasticityBranch::Plastic );
+    ASSERT_EQ( kinematicLoading.Branch, plugin::J2PlasticityBranch::Plastic );
+    EXPECT_LE( ( isotropicLoading.Stress - kinematicLoading.Stress ).norm(),
+               kTightTolerance * ( 1. + isotropicLoading.Stress.norm() ) );
+
+    Eigen::Vector6r reverseStrain = Eigen::Vector6r::Zero();
+    reverseStrain( 3 ) = .024;
+    const auto isotropicReverse = plugin::EvaluateJ2Plasticity( util::InverseVoigt( reverseStrain, true ),
+                                                                isotropicLoading.TrialState, isotropicParameters );
+    const auto kinematicReverse = plugin::EvaluateJ2Plasticity( util::InverseVoigt( reverseStrain, true ),
+                                                                kinematicLoading.TrialState, kinematicParameters );
+    EXPECT_EQ( isotropicReverse.Branch, plugin::J2PlasticityBranch::Elastic );
+    EXPECT_EQ( kinematicReverse.Branch, plugin::J2PlasticityBranch::Plastic );
+    EXPECT_GT( kinematicReverse.Stress( 0, 1 ), isotropicReverse.Stress( 0, 1 ) );
+}
+
 TEST( J2Plasticity, ProportionalLoadingIsIndependentOfIncrementSubdivision )
 {
     const auto parameters = Parameters();
@@ -654,6 +703,11 @@ TEST( J2Plasticity, RejectsInvalidParametersAndHistory )
     parameters.Hardening.HardeningModulus = -1.;
     EXPECT_DEATH( (void)plugin::EvaluateJ2Plasticity( Eigen::Matrix3r::Zero(), {}, parameters ), "hardening modulus" );
 
+    parameters = Parameters();
+    parameters.KinematicHardening.Modulus = -1.;
+    EXPECT_DEATH( (void)plugin::EvaluateJ2Plasticity( Eigen::Matrix3r::Zero(), {}, parameters ),
+                  "kinematic hardening modulus" );
+
     plugin::J2PlasticityState invalidState;
     invalidState.EquivalentPlasticStrain = -1.;
     EXPECT_DEATH( (void)plugin::EvaluateJ2Plasticity( Eigen::Matrix3r::Zero(), invalidState, Parameters() ),
@@ -667,6 +721,16 @@ TEST( J2Plasticity, RejectsInvalidParametersAndHistory )
     invalidState.PlasticStrain( 0, 0 ) = 1e-3;
     EXPECT_DEATH( (void)plugin::EvaluateJ2Plasticity( Eigen::Matrix3r::Zero(), invalidState, Parameters() ),
                   "must be deviatoric" );
+
+    invalidState = {};
+    invalidState.BackStress( 0, 1 ) = 1.;
+    EXPECT_DEATH( (void)plugin::EvaluateJ2Plasticity( Eigen::Matrix3r::Zero(), invalidState, Parameters() ),
+                  "backstress must be symmetric" );
+
+    invalidState = {};
+    invalidState.BackStress( 0, 0 ) = 1.;
+    EXPECT_DEATH( (void)plugin::EvaluateJ2Plasticity( Eigen::Matrix3r::Zero(), invalidState, Parameters() ),
+                  "backstress must be deviatoric" );
 
     parameters = Parameters();
     parameters.YoungsModulus = std::numeric_limits<mfem::real_t>::max();
@@ -734,7 +798,8 @@ TEST( J2Plasticity, PlaneStrainRetainsOutOfPlaneStressAndPlasticFlow )
 
 TEST( J2PlasticityHistory, TrialEvaluationIsDeterministicAndRollbackSafe )
 {
-    const auto parameters = Parameters();
+    auto parameters = Parameters();
+    parameters.KinematicHardening.Modulus = 15.;
     plugin::J2PlasticityHistory history;
     history.BeginStep();
 
@@ -754,6 +819,8 @@ TEST( J2PlasticityHistory, TrialEvaluationIsDeterministicAndRollbackSafe )
     history.SetTrialState( plugin::EvaluateJ2Plasticity( largeStrain, history.CommittedState(), parameters ).TrialState );
     history.RollbackStep();
     EXPECT_EQ( history.TrialState().EquivalentPlasticStrain, history.CommittedState().EquivalentPlasticStrain );
+    EXPECT_LE( ( history.TrialState().BackStress - history.CommittedState().BackStress ).norm(), kTightTolerance );
+    EXPECT_LE( ( history.TrialState().PlasticStrain - history.CommittedState().PlasticStrain ).norm(), kTightTolerance );
 
     history.BeginStep();
     const auto firstPlasticResponse = plugin::EvaluateJ2Plasticity( largeStrain, history.CommittedState(), parameters );
@@ -761,7 +828,9 @@ TEST( J2PlasticityHistory, TrialEvaluationIsDeterministicAndRollbackSafe )
     history.SetTrialState( firstPlasticResponse.TrialState );
     history.CommitStep();
     const mfem::real_t firstCommittedPlasticStrain = history.CommittedState().EquivalentPlasticStrain;
+    const Eigen::Matrix3r firstCommittedBackStress = history.CommittedState().BackStress;
     ASSERT_GT( firstCommittedPlasticStrain, 0. );
+    ASSERT_GT( firstCommittedBackStress.norm(), 0. );
 
     Eigen::Matrix3r unloadedStrain = largeStrain;
     unloadedStrain( 0, 0 ) -= .001;
@@ -781,6 +850,7 @@ TEST( J2PlasticityHistory, TrialEvaluationIsDeterministicAndRollbackSafe )
     history.SetTrialState( reloading.TrialState );
     history.RollbackStep();
     EXPECT_EQ( history.CommittedState().EquivalentPlasticStrain, firstCommittedPlasticStrain );
+    EXPECT_LE( ( history.TrialState().BackStress - firstCommittedBackStress ).norm(), kTightTolerance );
 }
 
 TEST( J2Plasticity, ConsistentTangentMatchesCenteredDifferenceAfterPlasticHistory )
@@ -799,6 +869,28 @@ TEST( J2Plasticity, ConsistentTangentMatchesCenteredDifferenceAfterPlasticHistor
 
     const Eigen::Matrix6r numerical = FiniteDifferenceTangent( secondStrain, firstResponse.TrialState, parameters );
     EXPECT_LE( ( secondResponse.ConsistentTangent - numerical ).norm(), kDerivativeTolerance * ( 1. + numerical.norm() ) );
+}
+
+TEST( J2Plasticity, KinematicTangentMatchesCenteredDifferenceAfterNonproportionalHistory )
+{
+    auto parameters = Parameters();
+    parameters.KinematicHardening.Modulus = 15.;
+    Eigen::Vector6r firstStrain = Eigen::Vector6r::Zero();
+    firstStrain( 0 ) = .03;
+    firstStrain( 3 ) = .01;
+    const auto firstResponse = plugin::EvaluateJ2Plasticity( util::InverseVoigt( firstStrain, true ), {}, parameters );
+    ASSERT_EQ( firstResponse.Branch, plugin::J2PlasticityBranch::Plastic );
+    ASSERT_GT( firstResponse.TrialState.BackStress.norm(), 0. );
+
+    Eigen::Vector6r secondStrain;
+    secondStrain << .045, -.003, .001, .008, -.004, .006;
+    const auto secondResponse =
+        plugin::EvaluateJ2Plasticity( util::InverseVoigt( secondStrain, true ), firstResponse.TrialState, parameters );
+    ASSERT_EQ( secondResponse.Branch, plugin::J2PlasticityBranch::Plastic );
+
+    const Eigen::Matrix6r numerical = FiniteDifferenceTangent( secondStrain, firstResponse.TrialState, parameters );
+    EXPECT_LE( ( secondResponse.ConsistentTangent - numerical ).norm(), kDerivativeTolerance * ( 1. + numerical.norm() ) );
+    EXPECT_LE( ( secondResponse.ConsistentTangent - secondResponse.ConsistentTangent.transpose() ).norm(), kTightTolerance );
 }
 
 TEST( SolidMechanicsIntegrator, AcceptsStatelessSmallStrainMaterial )
@@ -876,6 +968,14 @@ TEST( SolidMechanicsIntegrator, J2ThreeDimensionalElementJacobianMatchesResidual
     Eigen::Matrix3r gradient;
     gradient << .018, .006, -.004, .002, -.003, .005, .001, -.002, .004;
     ExpectElementJacobianMatchesDirectionalDifference( mesh, gradient );
+}
+
+TEST( SolidMechanicsIntegrator, J2KinematicElementJacobianMatchesResidualDirectionalDifference )
+{
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL, true, 1., 1. );
+    Eigen::Matrix2r gradient;
+    gradient << .018, .006, .002, -.003;
+    ExpectElementJacobianMatchesDirectionalDifference( mesh, gradient, 15. );
 }
 
 TEST( SolidMechanicsIntegrator, CommitsRollsBackAndProjectsJ2ElementHistory )

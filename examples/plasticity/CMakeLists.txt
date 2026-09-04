@@ -1,4 +1,5 @@
 mfem_mechanics_add_executable(j2_tensile j2_tensile.cpp mfemMechanics::femplugin)
+mfem_mechanics_add_executable(j2_bauschinger j2_bauschinger.cpp mfemMechanics::matlib)
 
 if(MFEM_USE_MPI AND MFEM_USE_MUMPS)
     mfem_mechanics_add_executable(
@@ -23,6 +24,18 @@ if(BUILD_TESTING)
         NAME J2Tensile.RefinementSmoke
         COMMAND j2_tensile -r 1 -lr 1 -steps 2 -disp 0.01 -no-output
     )
+    add_test(
+        NAME J2Bauschinger.Smoke
+        COMMAND j2_bauschinger -steps 1 -no-output
+    )
+    add_test(
+        NAME J2Bauschinger.Csv
+        COMMAND
+            ${CMAKE_COMMAND}
+            "-DEXECUTABLE=$<TARGET_FILE:j2_bauschinger>"
+            "-DOUTPUT_FILE=${CMAKE_CURRENT_BINARY_DIR}/j2_bauschinger_test.csv"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/verify_bauschinger_csv.cmake"
+    )
     set_tests_properties(
         J2Tensile.Smoke
         PROPERTIES
@@ -34,6 +47,12 @@ if(BUILD_TESTING)
         PROPERTIES
             PASS_REGULAR_EXPRESSION "Plastic response: active"
             WORKING_DIRECTORY "$<TARGET_FILE_DIR:j2_tensile>"
+    )
+    set_tests_properties(
+        J2Bauschinger.Smoke
+        PROPERTIES
+            PASS_REGULAR_EXPRESSION "Bauschinger effect: active"
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:j2_bauschinger>"
     )
 
     if(TARGET pCuProtrusion)
