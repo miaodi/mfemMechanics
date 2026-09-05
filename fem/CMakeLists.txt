@@ -7,6 +7,7 @@ add_library(
     CZM.cpp
     AMR.cpp
     PhaseField.cpp
+    Contact.cpp
 )
 add_library(mfemMechanics::femplugin ALIAS femplugin)
 

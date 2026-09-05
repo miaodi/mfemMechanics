@@ -31,9 +31,16 @@ mfem_mechanics_add_executable(
     GTest::gtest_main
     mfemMechanics::femplugin
 )
+mfem_mechanics_add_executable(
+    contact_test
+    contact_test.cpp
+    GTest::gtest_main
+    mfemMechanics::femplugin
+)
 
 gtest_discover_tests(autodiff_test)
 gtest_discover_tests(eigen_decomp_test)
 gtest_discover_tests(czm_history_test)
 gtest_discover_tests(thermal_strain_test)
 gtest_discover_tests(j2_plasticity_test)
+gtest_discover_tests(contact_test)

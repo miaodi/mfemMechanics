@@ -162,10 +162,12 @@ source failure. There is no repository lint, install, or benchmark target.
   `MFEM_ABORT` only for truly unsupported paths. Check finite values,
   orientation (`det(F) > 0` where required), dimensions, and physical parameter
   domains before state is changed.
-- Current Eigen maps of MFEM element vectors assume component-major
-  `mfem::Ordering::byVDIM`: a vector field is mapped as `dof x dim`, with one
-  column per component. If supporting `byNODES`, translate explicitly and test
-  both layouts; never silently reinterpret memory.
+- `FiniteElementSpace::GetElementVDofs()` returns indices in MFEM's local
+  `byNODES` order regardless of the finite-element space's global ordering.
+  Consequently, element vectors passed to integrators are component-major and
+  may be mapped as `dof x dim`, with one column per component. When accessing a
+  global vector directly, honor the space's configured ordering; test both
+  global layouts and never silently reinterpret memory.
 - Set the MFEM integration point before evaluating transformations or
   coefficients. Honor an integrator's `IntRule` override, use an adequate rule
   for every nonlinear product, use the same rule in residual and Jacobian
@@ -353,6 +355,9 @@ transitions separately. Use scaled absolute-plus-relative tolerances based on
   `Eigen::Map` and `noalias()` safely, and cache only data whose invalidation is
   well defined. Do not trade away clarity of the governing equations for an
   unmeasured micro-optimization.
+- Prefer clear matrix/vector or BLAS-style operations to hand-written nested
+  scalar loops when dimensions, memory layout, and aliasing are explicit; avoid
+  unnecessary temporaries.
 - Autodiff is valuable as an implementation route and correctness oracle, but
   benchmark it before placing dynamic AD work in a dominant quadrature path.
   An optimized analytic path should remain checked against AD or finite

@@ -2,6 +2,7 @@
 
 #include "AMR.h"
 #include "CZM.h"
+#include "Contact.h"
 #include "FEMPlugin.h"
 #include "PostProc.h"
 #include "SolidMechanicsIntegrator.h"
