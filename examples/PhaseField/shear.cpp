@@ -1,221 +1,276 @@
-
 #include "PhaseField.h"
 #include "Plugin.h"
 #include "mfem.hpp"
+
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iostream>
-#include <omp.h>
+#include <limits>
+#include <memory>
+#include <type_traits>
 
-using namespace std;
-using namespace mfem;
+namespace
+{
+constexpr int kBottomBoundary = 11;
+constexpr int kTopBoundary = 12;
+
+void VerifyMesh( const mfem::Mesh& mesh )
+{
+    MFEM_VERIFY( mesh.Dimension() == 2 && mesh.SpaceDimension() == 2,
+                 "PhaseField_shear requires a two-dimensional planar mesh." );
+    MFEM_VERIFY( mesh.attributes.Size() == 1 && mesh.attributes.Find( 1 ) >= 0,
+                 "PhaseField_shear requires domain attribute 1." );
+    MFEM_VERIFY( mesh.bdr_attributes.Find( kBottomBoundary ) >= 0 && mesh.bdr_attributes.Find( kTopBoundary ) >= 0,
+                 "PhaseField_shear requires bottom boundary attribute 11 and top boundary attribute 12." );
+}
+
+void VerifyPhaseBounds( const mfem::GridFunction& phaseField )
+{
+    const mfem::real_t tolerance = std::is_same_v<mfem::real_t, float> ? 1e-4f : 1e-8;
+    MFEM_VERIFY( mfem::IsFinite( phaseField.Min() ) && mfem::IsFinite( phaseField.Max() ),
+                 "The phase-field solution contains a non-finite value." );
+    MFEM_VERIFY( phaseField.Min() >= -tolerance && phaseField.Max() <= 1. + tolerance,
+                 "The phase-field solution left its admissible interval [0, 1]." );
+}
+} // namespace
 
 int main( int argc, char* argv[] )
 {
-    // 1. Parse command-line options.
-    const char* mesh_file = "../../data/crack_square2d.msh";
+    const char* meshFile = "data/crack_square2d.msh";
+    const char* outputDirectory = "ParaView";
     int order = 1;
-    bool static_cond = false;
-    bool visualization = 1;
-    int refineLvl = 0;
-    int localRefineLvl = 0;
+    int refinementLevels = 4;
+    int localRefinementLevels = 0;
+    int maximumSteps = 100000;
+    int outputInterval = 20;
+    bool output = true;
+    mfem::real_t maximumDisplacement = 1e-4;
+    mfem::real_t finalPseudoTime = 1.;
+    mfem::real_t initialPseudoTimeStep = 2e-6;
+    mfem::real_t maximumPseudoTimeStep = 1e-4;
+    mfem::real_t minimumPseudoTimeStep = 1e-14;
+    PhaseFieldFractureParameters fractureParameters;
 
-    OptionsParser args( argc, argv );
-    args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
-    args.AddOption( &order, "-o", "--order", "Finite element order (polynomial degree)." );
-    args.AddOption( &static_cond, "-sc", "--static-condensation", "-no-sc", "--no-static-condensation",
-                    "Enable static condensation." );
-    args.AddOption( &visualization, "-vis", "--visualization", "-no-vis", "--no-visualization",
-                    "Enable or disable GLVis visualization." );
-    args.AddOption( &refineLvl, "-r", "--refine-level", "Finite element refine level." );
-    args.AddOption( &localRefineLvl, "-lr", "--local-refine-level", "Finite element local refine level." );
+    mfem::OptionsParser args( argc, argv );
+    args.AddOption( &meshFile, "-m", "--mesh", "Mesh file to use." );
+    args.AddOption( &order, "-o", "--order", "Finite element order." );
+    args.AddOption( &refinementLevels, "-r", "--refine-level", "Uniform refinement levels." );
+    args.AddOption( &localRefinementLevels, "-lr", "--local-refine-level", "Crack-tip local refinement levels." );
+    args.AddOption( &maximumDisplacement, "-disp", "--maximum-displacement", "Final horizontal top displacement." );
+    args.AddOption( &fractureParameters.criticalEnergyReleaseRate, "-gc", "--fracture-energy",
+                    "Critical energy release rate." );
+    args.AddOption( &fractureParameters.lengthScale, "-l", "--length-scale", "AT2 length scale." );
+    args.AddOption( &fractureParameters.residualStiffness, "-k", "--residual-stiffness",
+                    "Quadratic degradation residual stiffness." );
+    args.AddOption( &finalPseudoTime, "-tf", "--final-pseudo-time", "Final continuation coordinate." );
+    args.AddOption( &initialPseudoTimeStep, "-dt", "--initial-step", "Initial continuation increment." );
+    args.AddOption( &maximumPseudoTimeStep, "-dt-max", "--maximum-step", "Maximum continuation increment." );
+    args.AddOption( &minimumPseudoTimeStep, "-dt-min", "--minimum-step", "Minimum continuation increment." );
+    args.AddOption( &maximumSteps, "-steps", "--maximum-steps", "Maximum continuation attempts." );
+    args.AddOption( &outputInterval, "-oi", "--output-interval", "Accepted steps between ParaView writes." );
+    args.AddOption( &outputDirectory, "-od", "--output-directory", "ParaView output directory." );
+    args.AddOption( &output, "-vis", "--visualization", "-no-vis", "--no-visualization",
+                    "Enable ParaView and force-curve output." );
     args.Parse();
     if ( !args.Good() )
     {
-        args.PrintUsage( cout );
+        args.PrintUsage( std::cout );
         return 1;
     }
-    args.PrintOptions( cout );
-    cout << static_cond << endl;
+    args.PrintOptions( std::cout );
 
-    // 2. Read the mesh from the given mesh file. We can handle triangular,
-    //    quadrilateral, tetrahedral or hexahedral elements with the same code.
-    Mesh* mesh = new Mesh( mesh_file, 1, 1 );
-    int dim = mesh->Dimension();
+    MFEM_VERIFY( order >= 1 && refinementLevels >= 0 && localRefinementLevels >= 0,
+                 "Finite element order must be positive and refinement levels must be nonnegative." );
+    MFEM_VERIFY( maximumSteps > 0 && outputInterval > 0, "Step and output intervals must be positive." );
+    MFEM_VERIFY( std::isfinite( maximumDisplacement ) && maximumDisplacement >= 0.,
+                 "Maximum displacement must be finite and nonnegative." );
+    MFEM_VERIFY( std::isfinite( finalPseudoTime ) && finalPseudoTime > 0.,
+                 "Final pseudo-time must be finite and positive." );
 
-    // 3. Select the order of the finite element discretization space. For NURBS
-    //    meshes, we increase the order by degree elevation.
-    if ( mesh->NURBSext )
+    MFEM_VERIFY( std::isfinite( minimumPseudoTimeStep ) && std::isfinite( initialPseudoTimeStep ) &&
+                     std::isfinite( maximumPseudoTimeStep ) && minimumPseudoTimeStep > 0. && minimumPseudoTimeStep <= initialPseudoTimeStep &&
+                     initialPseudoTimeStep <= maximumPseudoTimeStep && minimumPseudoTimeStep < maximumPseudoTimeStep,
+                 "Continuation increments must be finite and satisfy 0 < minimum <= initial <= maximum, with minimum < "
+                 "maximum." );
+
+    mfem::Mesh mesh( meshFile, 1, 1 );
+    VerifyMesh( mesh );
+    if ( mesh.NURBSext )
     {
-        mesh->DegreeElevate( order, order );
+        mesh.DegreeElevate( order, order );
     }
-
-    //  4. Mesh refinement
-    for ( int k = 0; k < refineLvl; k++ )
-        mesh->UniformRefinement();
-
-    for ( int k = 0; k < localRefineLvl; k++ )
+    for ( int level = 0; level < refinementLevels; level++ )
     {
-        int ne = mesh->GetNE();
-        auto eles = mesh->GetElementsArray();
-        Array<Refinement> refinements;
-        for ( int i = 0; i < ne; i++ )
+        mesh.UniformRefinement();
+    }
+    for ( int level = 0; level < localRefinementLevels; level++ )
+    {
+        mfem::Array<mfem::Refinement> refinements;
+        const auto elements = mesh.GetElementsArray();
+        for ( int element = 0; element < mesh.GetNE(); element++ )
         {
-            double* node{ nullptr };
-            for ( int j = 0; j < eles[i]->GetNVertices(); j++ )
+            for ( int vertex = 0; vertex < elements[element]->GetNVertices(); vertex++ )
             {
-                const int vi = eles[i]->GetVertices()[j];
-                node = mesh->GetVertex( vi );
-                if ( node[1] > -0.00001 && node[1] < 0.0008 && node[0] > -0.00001 && node[0] < .0006 )
+                const double* coordinate = mesh.GetVertex( elements[element]->GetVertices()[vertex] );
+                if ( coordinate[1] > -1e-5 && coordinate[1] < 8e-4 && coordinate[0] > -1e-5 && coordinate[0] < 6e-4 )
                 {
-                    refinements.Append( i );
+                    refinements.Append( element );
                     break;
                 }
             }
         }
-        mesh->GeneralRefinement( refinements );
+        mesh.GeneralRefinement( refinements );
     }
 
-    // 5. Define the finite element spaces for displacement and pressure
-    //    (Taylor-Hood elements). By default, the displacement (u/x) is a second
-    //    order vector field, while the pressure (p) is a linear scalar function.
-    H1_FECollection lin_coll( order, dim );
+    const int dimension = mesh.Dimension();
+    mfem::H1_FECollection collection( order, dimension );
+    mfem::FiniteElementSpace displacementSpace( &mesh, &collection, dimension, mfem::Ordering::byVDIM );
+    mfem::FiniteElementSpace phaseSpace( &mesh, &collection );
+    mfem::Array<mfem::FiniteElementSpace*> spaces( 2 );
+    spaces[0] = &displacementSpace;
+    spaces[1] = &phaseSpace;
 
-    FiniteElementSpace R_space( mesh, &lin_coll, dim, Ordering::byVDIM );
-    FiniteElementSpace W_space( mesh, &lin_coll );
+    std::cout << "Displacement true DOFs: " << displacementSpace.GetTrueVSize() << '\n'
+              << "Phase-field true DOFs: " << phaseSpace.GetTrueVSize() << '\n';
 
-    Array<FiniteElementSpace*> spaces( 2 );
-    spaces[0] = &R_space;
-    spaces[1] = &W_space;
+    mfem::Array<int> displacementBoundaryMarker( mesh.bdr_attributes.Max() );
+    displacementBoundaryMarker = 0;
+    displacementBoundaryMarker[kBottomBoundary - 1] = 1;
+    displacementBoundaryMarker[kTopBoundary - 1] = 1;
+    mfem::Array<int> phaseBoundaryMarker( mesh.bdr_attributes.Max() );
+    phaseBoundaryMarker = 0;
+    mfem::Array<int> topBoundaryMarker( mesh.bdr_attributes.Max() );
+    topBoundaryMarker = 0;
+    topBoundaryMarker[kTopBoundary - 1] = 1;
+    mfem::Array<int> constrainedDisplacementDofs;
+    mfem::Array<int> loadedHorizontalDofs;
+    displacementSpace.GetEssentialTrueDofs( displacementBoundaryMarker, constrainedDisplacementDofs );
+    displacementSpace.GetEssentialTrueDofs( topBoundaryMarker, loadedHorizontalDofs, 0 );
+    MFEM_VERIFY( loadedHorizontalDofs.Size() > 0, "Top boundary attribute 12 has no horizontal true DOFs." );
 
-    int R_size = R_space.GetTrueVSize();
-    int W_size = W_space.GetTrueVSize();
+    mfem::Array<int> blockOffsets( 3 );
+    blockOffsets[0] = 0;
+    blockOffsets[1] = displacementSpace.GetTrueVSize();
+    blockOffsets[2] = phaseSpace.GetTrueVSize();
+    blockOffsets.PartialSum();
+    mfem::BlockVector solution( blockOffsets );
+    solution = 0.;
+    mfem::GridFunction displacement( &displacementSpace );
+    mfem::GridFunction phaseField( &phaseSpace );
+    displacement = 0.;
+    phaseField = 0.;
 
-    // Print the mesh statistics
-    std::cout << "***********************************************************\n";
-    std::cout << "dim(u) = " << R_size << "\n";
-    std::cout << "dim(p) = " << W_size << "\n";
-    std::cout << "dim(u+p) = " << R_size + W_size << "\n";
-    std::cout << "***********************************************************\n";
+    mfem::ConstantCoefficient youngsModulus( 210e9 );
+    mfem::ConstantCoefficient poissonRatio( .3 );
+    PhaseFieldElasticMaterial material(
+        youngsModulus, poissonRatio, PhaseFieldElasticMaterial::StrainEnergySplit::MieheSpectral, fractureParameters );
+    plugin::PhaseFieldPointStorage pointStorage( &mesh );
 
-    VectorArrayCoefficient d( dim );
-    Vector topDisp( R_space.GetMesh()->bdr_attributes.Max() );
-    topDisp = .0;
-    topDisp( 10 ) = 1e-4;
-    topDisp( 11 ) = 0;
-    d.Set( 0, new PWConstCoefficient( topDisp ) );
+    mfem::BlockNonlinearForm residual( spaces );
+    residual.AddDomainIntegrator( new plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage>( material, pointStorage ) );
+    mfem::Array<mfem::Array<int>*> essentialBoundaryMarkers( 2 );
+    essentialBoundaryMarkers[0] = &displacementBoundaryMarker;
+    essentialBoundaryMarkers[1] = &phaseBoundaryMarker;
+    mfem::Array<mfem::Vector*> essentialRightHandSides( 2 );
+    essentialRightHandSides = nullptr;
+    residual.SetEssentialBC( essentialBoundaryMarkers, essentialRightHandSides );
 
-    Vector activeBC( R_space.GetMesh()->bdr_attributes.Max() );
-    activeBC = 0.0;
-    activeBC( 10 ) = 1e17;
-    activeBC( 11 ) = 1e17;
-    VectorArrayCoefficient hevi( dim );
-    for ( int i = 0; i < dim; i++ )
-    {
-        hevi.Set( i, new PWConstCoefficient( activeBC ) );
-    }
+    mfem::BlockNonlinearForm internalResidual( spaces );
+    auto* reactionIntegrator = new plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage>( material, pointStorage );
+    internalResidual.AddDomainIntegrator( reactionIntegrator );
 
-    //  Define the block structure of the solution vector (u then p)
-    Array<int> block_trueOffsets( 3 );
-    block_trueOffsets[0] = 0;
-    block_trueOffsets[1] = R_space.GetTrueVSize();
-    block_trueOffsets[2] = W_space.GetTrueVSize();
-    block_trueOffsets.PartialSum();
-
-    BlockVector xp( block_trueOffsets );
-
-    xp = 0.;
-
-    //    Define grid functions for the current configuration, reference
-    //    configuration, final deformation, and pressure
-    GridFunction x_gf( &R_space );
-    GridFunction p_gf( &W_space );
-
-    x_gf.MakeTRef( &R_space, xp.GetBlock( 0 ), 0 );
-    p_gf.MakeTRef( &W_space, xp.GetBlock( 1 ), 0 );
-
-    printf( "Mesh is %i dimensional.\n", dim );
-    printf( "Number of mesh attributes: %i\n", mesh->attributes.Size() );
-    printf( "Number of boundary attributes: %i\n", mesh->bdr_attributes.Size() );
-
-    //    Define the solution vector x as a finite element grid function
-    //    corresponding to fespace. Initialize x with initial guess of zero,
-    //    which satisfies the boundary conditions.
-    Vector Nu( mesh->attributes.Max() );
-    Nu = .3;
-    PWConstCoefficient nu_func( Nu );
-
-    Vector E( mesh->attributes.Max() );
-    E = 210E9;
-    PWConstCoefficient E_func( E );
-
-    PhaseFieldElasticMaterial iem( E_func, nu_func, PhaseFieldElasticMaterial::StrainEnergyType::Amor );
-
-    plugin::PhaseFieldPointStorage pointStorage( mesh );
-
-    auto intg = new plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage>( iem, pointStorage );
-    // intg->setNonlinear( true );
-
-    auto* nlf = new mfem::BlockNonlinearForm( spaces );
-    nlf->AddDomainIntegrator( intg );
-    nlf->AddBdrFaceIntegrator( new plugin::BlockNonlinearDirichletPenaltyIntegrator( d, hevi ) );
-
-    // Set up the Jacobian solver
-    omp_set_num_threads( 10 );
-    auto j_gmres = new UMFPackSolver();
-    auto newton_solver = new plugin::MultiNewtonAdaptive<plugin::NewtonForPhaseField>();
-    intg->SetStepContext( newton_solver );
-
-    // Set the newton solve parameters
-    newton_solver->iterative_mode = true;
-    newton_solver->SetSolver( *j_gmres );
-    newton_solver->SetOperator( *nlf );
-    newton_solver->SetPrintLevel( -1 );
-    newton_solver->SetRelTol( 1e-7 );
-    newton_solver->SetAbsTol( 0 );
-    newton_solver->SetMaxIter( 10 );
-    newton_solver->SetPrintLevel( 0 );
-    newton_solver->SetDelta( 2e-6 );
-    newton_solver->SetMaxStep( 10000000 );
-    newton_solver->SetMaxDelta( 1e-4 );
-    newton_solver->SetMinDelta( 1e-14 );
-
-    ParaViewDataCollection paraview_dc( "phase_field_square_shear_test", mesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x_gf );
-    paraview_dc.RegisterField( "PhaseField", &p_gf );
-
-    auto stress_fec = new H1_FECollection( order, dim );
-
-    // GridFunction ue( fespace );
-    // ue = 0.;
-    auto stress_fespace = new FiniteElementSpace( mesh, stress_fec, 7 );
-    GridFunction stress_grid( stress_fespace );
-    plugin::StressCoefficient sc( dim, iem );
-    sc.SetDisplacement( x_gf );
-    paraview_dc.RegisterField( "Stress", &stress_grid );
-    stress_grid.ProjectCoefficient( sc );
-    paraview_dc.Save();
-
-    std::function<void( int, int, double )> func = [&paraview_dc, &stress_grid, &sc]( int step, int count, double time )
-    {
-        if ( step % 20 == 0 )
+    mfem::UMFPackSolver tangentSolver;
+    plugin::MultiNewtonAdaptive<plugin::NewtonForPhaseField> nonlinearSolver;
+    nonlinearSolver.iterative_mode = true;
+    nonlinearSolver.SetSolver( tangentSolver );
+    nonlinearSolver.SetOperator( residual );
+    nonlinearSolver.SetRelTol( std::is_same_v<mfem::real_t, float> ? 1e-4f : 1e-7 );
+    const mfem::real_t precisionTolerance = mfem::real_t( 100 ) * std::numeric_limits<mfem::real_t>::epsilon();
+    nonlinearSolver.SetAbsTol( std::max(
+        std::numeric_limits<mfem::real_t>::min(),
+        precisionTolerance * youngsModulus.constant * std::max( maximumDisplacement, mfem::real_t( 1e-12 ) ) ) );
+    nonlinearSolver.SetMaxIter( 25 );
+    nonlinearSolver.SetPseudoTimeInterval( 0., finalPseudoTime );
+    nonlinearSolver.SetDelta( initialPseudoTimeStep );
+    nonlinearSolver.SetMaxDelta( maximumPseudoTimeStep );
+    nonlinearSolver.SetMinDelta( minimumPseudoTimeStep );
+    nonlinearSolver.SetMaxStep( maximumSteps );
+    nonlinearSolver.SetTrialStateFunc(
+        [blockOffsets, constrainedDisplacementDofs, loadedHorizontalDofs, maximumDisplacement, finalPseudoTime](
+            const mfem::real_t pseudoTime, mfem::Vector& state )
         {
-            paraview_dc.SetCycle( count );
-            paraview_dc.SetTime( count );
-            stress_grid.ProjectCoefficient( sc );
-            paraview_dc.Save();
-        }
-    };
+            mfem::Vector displacementBlock( state.GetData() + blockOffsets[0], blockOffsets[1] - blockOffsets[0] );
+            displacementBlock.SetSubVector( constrainedDisplacementDofs, 0. );
+            displacementBlock.SetSubVector( loadedHorizontalDofs, maximumDisplacement * pseudoTime / finalPseudoTime );
+        } );
+    reactionIntegrator->SetStepContext( &nonlinearSolver );
 
-    newton_solver->SetDataCollectionFunc( func );
+    mfem::H1_FECollection stressCollection( order, dimension );
+    mfem::FiniteElementSpace stressSpace( &mesh, &stressCollection, 7 );
+    mfem::GridFunction stress( &stressSpace );
+    plugin::StressCoefficient stressCoefficient( dimension, material );
+    stressCoefficient.SetDisplacement( displacement );
+    stressCoefficient.SetPhaseField( phaseField );
+    plugin::ParaView2DVectorCoefficient paraviewDisplacement( displacement );
 
-    Vector zero;
+    std::unique_ptr<mfem::ParaViewDataCollection> paraview;
+    std::ofstream forceCurve;
+    if ( output )
+    {
+        paraview = std::make_unique<mfem::ParaViewDataCollection>( "phase_field_square_shear", &mesh );
+        paraview->SetPrefixPath( outputDirectory );
+        paraview->SetLevelsOfDetail( order );
+        paraview->SetDataFormat( mfem::VTKFormat::BINARY );
+        paraview->SetHighOrderOutput( true );
+        paraview->RegisterVCoeffField( "displacement", &paraviewDisplacement );
+        paraview->RegisterField( "phase_field", &phaseField );
+        paraview->RegisterField( "stress", &stress );
+        stress.ProjectCoefficient( stressCoefficient );
+        paraview->SetCycle( 0 );
+        paraview->SetTime( 0. );
+        paraview->Save();
 
-    newton_solver->Mult( zero, xp );
+        forceCurve.open( "phase_field_force.csv" );
+        MFEM_VERIFY( forceCurve, "Could not open phase_field_force.csv for writing." );
+        forceCurve << "displacement,reaction_force\n0,0\n";
+    }
+
+    mfem::BlockVector unconstrainedResidual( blockOffsets );
+    int acceptedSteps = 0;
+    nonlinearSolver.SetDataCollectionFunc(
+        [&]( const int, const int, const mfem::real_t pseudoTime )
+        {
+            acceptedSteps++;
+            displacement.SetFromTrueDofs( solution.GetBlock( 0 ) );
+            phaseField.SetFromTrueDofs( solution.GetBlock( 1 ) );
+            VerifyPhaseBounds( phaseField );
+            if ( forceCurve.is_open() )
+            {
+                internalResidual.Mult( solution, unconstrainedResidual );
+                mfem::real_t reaction = 0.;
+                for ( int i = 0; i < loadedHorizontalDofs.Size(); i++ )
+                {
+                    reaction += unconstrainedResidual.GetBlock( 0 )( loadedHorizontalDofs[i] );
+                }
+                forceCurve << maximumDisplacement * pseudoTime / finalPseudoTime << ',' << reaction << '\n';
+            }
+            if ( paraview && ( acceptedSteps % outputInterval == 0 || pseudoTime == finalPseudoTime ) )
+            {
+                stress.ProjectCoefficient( stressCoefficient );
+                paraview->SetCycle( acceptedSteps );
+                paraview->SetTime( pseudoTime );
+                paraview->Save();
+            }
+        } );
+
+    mfem::Vector zeroRightHandSide;
+    nonlinearSolver.Mult( zeroRightHandSide, solution );
+    const mfem::real_t targetTolerance = precisionTolerance * ( 1. + std::abs( finalPseudoTime ) );
+    MFEM_VERIFY( nonlinearSolver.GetConverged() && std::abs( nonlinearSolver.GetCurLambda() - finalPseudoTime ) <= targetTolerance,
+                 "PhaseField_shear did not reach the requested final pseudo-time." );
+    displacement.SetFromTrueDofs( solution.GetBlock( 0 ) );
+    phaseField.SetFromTrueDofs( solution.GetBlock( 1 ) );
+    VerifyPhaseBounds( phaseField );
     return 0;
 }

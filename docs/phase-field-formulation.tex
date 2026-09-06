@@ -1,0 +1,851 @@
+% !TeX program = pdflatex
+% Build from repository root (keep intermediates outside the repository):
+% latexmk -pdf -interaction=nonstopmode -halt-on-error \
+%   -outdir=/tmp/opencode/phase-field-formulation docs/phase-field-formulation.tex
+% Copy the resulting PDF to docs/phase-field-formulation.pdf.
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=24mm,headheight=14pt]{geometry}
+\usepackage{amsmath,amssymb,bm,booktabs,array,longtable}
+\usepackage{fancyhdr}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black,citecolor=blue!50!black]{hyperref}
+\usepackage{xcolor}
+\hypersetup{pdftitle={Current small-strain AT2 phase-field fracture formulation},pdfauthor={mfemMechanics technical documentation}}
+\newcommand{\eps}{\bm{\varepsilon}}
+\newcommand{\sig}{\bm{\sigma}}
+\newcommand{\uu}{\bm{u}}
+\newcommand{\vv}{\bm{v}}
+\newcommand{\I}{\bm{I}}
+\newcommand{\D}{\bm{D}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\dev}{\operatorname{dev}}
+\newcommand{\sym}{\operatorname{sym}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\pos}[1]{\langle #1\rangle_+}
+\newcommand{\negp}[1]{\langle #1\rangle_-}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\newcommand{\sectionpage}[1]{\clearpage\section{#1}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\setlength{\emergencystretch}{2em}
+\renewcommand{\arraystretch}{1.2}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small mfemMechanics\enspace /\enspace AT2 formulation}
+\fancyhead[R]{\small Working-tree edition}
+\fancyfoot[C]{\thepage}
+\numberwithin{equation}{section}
+\begin{document}
+\hypersetup{pageanchor=false}
+\begin{titlepage}
+\vspace*{12mm}
+{\Large\sffamily mfemMechanics\par}
+\vspace{12mm}
+{\huge\bfseries Current small-strain AT2\\[4pt]phase-field fracture model\par}
+\vspace{7mm}
+{\Large Strong and weak forms, elastic and algorithmic moduli,\\[3pt]parameters, discretization, and state evolution\par}
+\vspace{12mm}
+\textbf{Implementation scope.} This document describes the current phase-field
+material, finite-element integrator, and staggered nonlinear solver in the
+inspected working tree. Damage is denoted by $d$ throughout:
+\[
+ d=0\quad\text{intact},\qquad d=1\quad\text{fully damaged}.
+\]
+The code's \code{phi}/\code{mPhi} is exactly $d$, not $1-d$.
+
+\textbf{Central distinction.} Mechanical stress comes from the current degraded
+elastic energy. Only the phase equation replaces the current crack-driving
+energy by a maximum-history field. Consequently, unloading does not generally
+admit one shared potential for both implemented residuals, and monotone history
+does not itself impose pointwise damage bounds or pointwise damage irreversibility.
+
+\vfill
+\begin{tabular}{@{}ll@{}}
+Inspection date & 5 September 2026\\
+Base Git revision & \code{528c91c09c4d0d6a95a1396eeb345a14678ce5d0}\\
+Source state & Base revision \emph{plus pre-existing uncommitted changes}\\
+Artifact & Editable \LaTeX{} source and compiled PDF
+\end{tabular}
+
+\vspace{6mm}
+\small The revision alone does not reproduce this working-tree edition. No C++
+source was changed and no numerical experiments or C++ tests were run for this
+documentation task. Source correspondence, literature verification boundaries,
+and checks appropriate to this artifact are stated in Section~\ref{sec:evidence}.
+\end{titlepage}
+\hypersetup{pageanchor=true}
+
+\tableofcontents
+\vfill
+\textbf{How to use this note.} Sections 1--3 fix conventions and inputs;
+Sections 4--7 derive the continuum equations and constitutive moduli;
+Sections 8--10 connect them to the implemented finite-element equations and
+transactional solver. Sections 11--12 give the current example specification
+and an evidence/verification guide; Section 13 records reference provenance.
+All equation numbers refer to this document
+unless explicitly prefixed by ``Borden report.''
+
+\sectionpage{Scope, symbols, and code correspondence}
+\label{sec:symbols}
+Let $\Omega\subset\mathbb{R}^{m}$ be a fixed body, with spatial dimension
+$m=2$ or $3$ and outward unit normal $\bm n$. The unknowns are displacement
+$\uu(\bm x)$ and scalar damage $d(\bm x)$. The formulation is quasi-static,
+small-strain, isotropic brittle fracture, with no inertia, viscosity, plasticity,
+temperature evolution, or crack-face contact. The loading coordinate $\tau$ is
+dimensionless continuation, not physical time. Reference and current measures
+coincide to the adopted small-strain accuracy:
+\begin{equation}
+ \eps=\sym\nabla\uu=\tfrac12(\nabla\uu+\nabla\uu^T).
+\end{equation}
+For $m=2$, use the three-dimensional embedding
+\begin{equation}
+ \eps=\begin{pmatrix}\varepsilon_{xx}&\varepsilon_{xy}&0\\
+ \varepsilon_{xy}&\varepsilon_{yy}&0\\0&0&0\end{pmatrix}.
+\end{equation}
+This is \textbf{plane strain}, not plane stress: $\sigma_{zz}$ generally is not
+zero. Traces, deviators, eigenvalues, stresses, and moduli remain 3D.
+
+\begin{tabular}{@{}p{.20\linewidth}p{.53\linewidth}p{.20\linewidth}@{}}
+\toprule Symbol & Meaning & SI units\\\midrule
+$\bm x,\uu,\ell$ & Position, displacement, crack regularization length & m\\
+$d,g,k$ & Damage, degradation, residual stiffness fraction & 1\\
+$E,\nu$ & Young's modulus and Poisson ratio & Pa, 1\\
+$\lambda,\mu,K$ & First Lam\'e modulus, shear modulus, bulk modulus & Pa\\
+$\eps,t=\tr\eps$ & Infinitesimal strain and its trace & 1\\
+$\varepsilon_a,\bm n_a,\bm P_a$ & Principal strain, unit eigenvector, projector $\bm n_a\otimes\bm n_a$ & 1\\
+$\psi_0,\psi^\pm,H_n,H$ & Intact/split energy density; committed/current history & J/m$^3$ = Pa\\
+$\sig,\sig^\pm,\C$ & Stress, split stresses, strain-to-stress modulus & Pa\\
+$G_c$ & Critical energy release rate & J/m$^2$ = N/m\\
+$\bm b,\bar{\bm t}$ & Body force per volume, surface traction & N/m$^3$, Pa\\
+$\vv,q;\D$ & Displacement/phase test fields; symmetric strain increment & m, 1; 1\\
+$\chi$ & Current history derivative branch indicator & 1\\
+\bottomrule
+\end{tabular}
+
+\begin{tabular}{@{}p{.21\linewidth}p{.72\linewidth}@{}}
+\toprule Notation & Implementation correspondence\\\midrule
+$d$ & \code{mPhi}, \code{phi}, \code{phaseValue}, \code{setPhaseField()}\\
+$G_c,\ell,k$ & \code{criticalEnergyReleaseRate}, \code{lengthScale}, \code{residualStiffness}\\
+$K$ versus $k$ & \code{bulkModulus} versus \code{getK()} (returns $k$, \emph{not} $K$)\\
+$H_n,H$ & \code{CommittedValue()}, \code{TrialValue()}; local \code{positiveEnergy} is overwritten with $H$ during assembly\\
+$\sig,\C$ & \code{getPK2StressVector()}, \code{getRefModuli()} in small-strain mode\\
+\bottomrule
+\end{tabular}
+
+\sectionpage{Elastic constants: derivation and admissibility}
+\label{sec:elastic}
+The undegraded isotropic elastic energy and its first derivative are
+\begin{align}
+ \psi_0(\eps)&=\frac{\lambda}{2}(\tr\eps)^2+\mu\eps:\eps
+ =\frac K2 t^2+\mu\dev\eps:\dev\eps,\label{eq:psi0}\\
+ \sig_0&=\lambda t\I+2\mu\eps,
+ \qquad\dev\eps=\eps-\frac t3\I.\label{eq:sigma0}
+\end{align}
+Here $\bm A:\bm B=\sum_{i,j=1}^3 A_{ij}B_{ij}$. Hydrostatic strain
+$\eps=a\I$ gives $\sig_0=(3\lambda+2\mu)a\I=K t\I$, hence
+\begin{equation}K=\lambda+\frac{2\mu}{3}.\end{equation}
+To relate $(\lambda,\mu)$ to experimentally interpretable $(E,\nu)$, consider
+\emph{undegraded, three-dimensional uniaxial stress}, with free lateral
+contraction: $\eps=\operatorname{diag}(a,-\nu a,-\nu a)$ and
+$\sig_0=\operatorname{diag}(Ea,0,0)$. The lateral and axial equations give
+\begin{align}
+ 0&=\lambda(1-2\nu)-2\mu\nu,\\
+ E&=\lambda(1-2\nu)+2\mu=2\mu(1+\nu).
+\end{align}
+Therefore the constants evaluated by the material are
+\begin{equation}\boxed{
+ \mu=\frac{E}{2(1+\nu)},\qquad
+ \lambda=\frac{E\nu}{(1+\nu)(1-2\nu)},\qquad
+ K=\frac{E}{3(1-2\nu)}.}\label{eq:constants}
+\end{equation}
+This derivation defines the material constants; it is not the lateral constraint
+used in the 2D shear example. Do not substitute plane-stress elastic constants
+into the plane-strain embedding.
+
+\textbf{Admissible elastic inputs.} The code requires finite $E>0$ and
+$-1<\nu<1/2$, pointwise for coefficient-valued inputs. These conditions make
+$\mu>0$ and $K>0$, so \eqref{eq:psi0} is positive definite on nonzero symmetric
+strains. The limit $\nu\to1/2$ is singular and badly conditioned in a
+displacement-only formulation; no mixed incompressibility treatment is present.
+The limit $\nu\to-1$ also makes the conversion singular.
+
+\textbf{Auxetic nuance.} Negative $\nu$ is allowed and implies $\lambda<0$;
+positivity of the intact energy does not require $\lambda>0$. The Amor split
+uses positive $K$ and $\mu$. The spectral split instead separates a
+$\lambda\pos{t}^{2}/2$ term. Its split energies remain nonnegative in the
+admissible elastic range, but convexity of each split, and stability of the
+damaged tangent, must not be inferred from intact stability when $\lambda<0$.
+For example, with mixed-sign principal strains and $t<0$, a perturbation in a
+positive principal direction has spectral tangent quadratic coefficient
+$\lambda+2\mu g$, which can be negative at small $g$. The code does not impose
+an additional auxetic restriction; the example uses $\nu=0.3$.
+
+For $E=210\times10^9$ Pa and $\nu=0.3$, direct substitution yields
+\[
+ \lambda\simeq121.153846\ \text{GPa},\qquad
+ \mu\simeq80.769231\ \text{GPa},\qquad K=175\ \text{GPa}.
+\]
+These are calculated constants, not fitted or simulated results.
+
+\sectionpage{Fracture inputs, degradation, and units}
+\label{sec:inputs}
+The material takes two elastic coefficients, a discrete split selection, and
+three scalar fracture parameters. The current defaults are
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule Input & Value in shear examples & Domain & Origin in code\\\midrule
+$E$ & $210\times10^9$ Pa & finite, $>0$ & example constant\\
+$\nu$ & $0.3$ & finite, $(-1,1/2)$ & example constant\\
+$G_c$ & $2700$ J/m$^2$ & finite, $>0$ & parameter struct\\
+$\ell$ & $15\times10^{-6}$ m & finite, $>0$ & parameter struct\\
+$k$ & $10^{-9}$ & finite, $[0,1)$ & parameter struct\\
+split & Miehe spectral & one of three enum values & constructor/example\\
+\bottomrule
+\end{tabular}
+\end{center}
+$G_c$ describes fracture resistance, $\ell$ controls the diffuse crack width
+and influences the strength response, and $k$ retains a fraction of the
+degraded stiffness. None is obtained from $E$ and $\nu$ alone. They require
+independent physical identification and/or a declared regularization choice;
+the repository defaults are not a documented calibration to a particular
+specimen. Mesh size must resolve $\ell$, but $\ell$ is not automatically equal
+to a mesh size. No universal mesh-resolution ratio is established here.
+
+The normalized quadratic degradation is
+\begin{align}
+ g(d)&=(1-k)(1-d)^2+k,\label{eq:g}\\
+ g'(d)&=-2(1-k)(1-d),\qquad g''(d)=2(1-k).
+\end{align}
+Thus $g(0)=1$ exactly, $g(1)=k$, and $g'(1)=0$. This differs from the
+unnormalized expression $(1-d)^2+k$. At $k=0$, fully damaged displacement
+blocks may be singular; positive $k$ improves this limit but is not a guarantee
+of good conditioning or a cure for rigid motions. Values outside $[0,1]$ are
+accepted by the material if finite. They are not clamped, and then $g$ need not
+remain between $k$ and $1$.
+
+The AT2 crack density and corresponding fracture energy are
+\begin{equation}
+ \gamma_\ell(d,\nabla d)=\frac{d^2}{2\ell}
+      +\frac\ell2|\nabla d|^2,\qquad
+ \mathcal G_\ell[d]=\int_\Omega G_c\gamma_\ell\dd V.\label{eq:crack}
+\end{equation}
+The factor $1/2$ is essential. For a flat crack on an infinite normal coordinate
+$z$, the ideal profile $d(z)=\exp(-|z|/\ell)$ has
+$\int_{-\infty}^{\infty}\gamma_\ell\dd z=1$. The two equal terms integrate to
+one unit of crack-area density together, not two.
+
+Equations \eqref{eq:g}--\eqref{eq:crack} adapt Borden report
+\cite{borden}, Section 2.2, equations (6)--(7), printed page 5, using
+$c=1-d$ and $\ell=2\epsilon_{\mathrm B}$; $\epsilon_{\mathrm B}$ is the
+report's length parameter, not the strain tensor $\eps$.
+
+\textbf{Dimensional checks.} $G_c/\ell$ and $H$ both have units Pa;
+$G_c\ell|\nabla d|^2$ has units J/m$^3$. A 3D mechanical residual has units N
+and a phase residual has units J (variation with respect to dimensionless
+damage). Integrating the same densities over a 2D area gives energy per
+out-of-plane thickness, J/m. Mechanical reactions are then N/m, whereas phase
+residuals are J/m. Multiply a 2D reaction by a physical thickness in metres to
+obtain force in N. No physical thickness multiplier is supplied by these examples.
+
+\sectionpage{Energy, variations, weak form, and strong form}
+\label{sec:forms}
+At fixed dead body force $\bm b$ and traction $\bar{\bm t}$, first consider the
+\emph{instantaneous energetic} functional before the history substitution:
+\begin{equation}
+ \Pi[\uu,d]=\int_\Omega\left[g(d)\psi^+(\eps)+\psi^-(\eps)
+                  +G_c\gamma_\ell\right]\dd V
+ -\int_\Omega\bm b\cdot\uu\dd V
+ -\int_{\Gamma_t}\bar{\bm t}\cdot\uu\dd S.\label{eq:potential}
+\end{equation}
+Each split in Sections 5--7 satisfies $\psi^++\psi^-=\psi_0$.
+Prescribe $\uu=\bar{\uu}$ on $\Gamma_u$ and, if desired, $d=\bar d$ on
+$\Gamma_d$. The complementary phase boundary is $\Gamma_q$.
+Seek $\uu\in[H^1(\Omega)]^m$ and $d\in H^1(\Omega)$ with those traces;
+tests $\vv$ and $q$ vanish on their respective essential boundaries. Mechanical
+boundary partitions may be applied componentwise.
+
+At fixed $d$, $\delta\eps=\sym\nabla\vv$, so the displacement variation is
+\begin{equation}
+ R_u(\vv)=\int_\Omega\sig:\sym\nabla\vv\dd V
+ -\int_\Omega\bm b\cdot\vv\dd V
+ -\int_{\Gamma_t}\bar{\bm t}\cdot\vv\dd S=0,
+ \quad\sig=g\sig^++\sig^-,\quad\sig^\pm=\partial_{\eps}\psi^\pm.
+ \label{eq:weak-u}
+\end{equation}
+At fixed $\uu$, differentiating each phase term in \eqref{eq:potential} gives
+$g'\psi^+q$, $G_c d q/\ell$, and $G_c\ell\nabla d\cdot\nabla q$.
+The \textbf{implemented history formulation} replaces $\psi^+$ by
+$H=\max(H_n,\psi^+(\eps))$ in this phase variation only:
+\begin{equation}
+ R_d(q)=\int_\Omega\left[g'Hq+\frac{G_c}{\ell}d q
+                   +G_c\ell\nabla d\cdot\nabla q\right]\dd V=0.
+ \label{eq:weak-d}
+\end{equation}
+There is no applied phase flux in the examples. The same $\sig$ as in
+\eqref{eq:weak-u} is used, even during unloading; it does not differentiate a
+history-substituted mechanical energy.
+
+Since stress is symmetric, $\sig:\sym\nabla\vv=\sig:\nabla\vv$.
+Integration by parts gives
+\begin{align}
+ \int_\Omega\sig:\nabla\vv\dd V
+ &=-\int_\Omega(\nabla\cdot\sig)\cdot\vv\dd V
+      +\int_{\partial\Omega}(\sig\bm n)\cdot\vv\dd S,\\
+ \int_\Omega G_c\ell\nabla d\cdot\nabla q\dd V
+ &=-\int_\Omega\nabla\cdot(G_c\ell\nabla d)q\dd V
+      +\int_{\partial\Omega}G_c\ell\nabla d\cdot\bm n\,q\dd S.
+\end{align}
+Thus, for the current constant $G_c,\ell$, the interior strong equations are
+\begin{equation}\boxed{\begin{aligned}
+ \nabla\cdot\sig+\bm b&=\bm0,\\
+ -G_c\ell\Delta d+\left[\frac{G_c}{\ell}+2(1-k)H\right]d
+                -2(1-k)H&=0.
+\end{aligned}}\label{eq:strong}\end{equation}
+The natural conditions are $\sig\bm n=\bar{\bm t}$ on $\Gamma_t$ and
+$G_c\ell\nabla d\cdot\bm n=0$ on $\Gamma_q$; the latter is equivalent to
+$\nabla d\cdot\bm n=0$. If fracture coefficients were spatially variable, the
+divergence form, not a constant-coefficient Laplacian, would be required.
+Body force and traction are the standard load extension derived here; the
+current domain integrator assembles internal terms only and shear examples
+load through prescribed displacement.
+
+\sectionpage{Isotropic and Amor splits: stresses and moduli}
+\label{sec:amor}
+For a symmetric increment $\D$, define the fixed-damage modulus by
+$\C[\D]=\partial_{\eps}\sig[\D]$. Let
+\begin{equation}
+ \pos{x}=\max(x,0),\quad\negp{x}=\min(x,0),\qquad
+ h(x)=\begin{cases}1&x>0,\\1/2&x=0,\\0&x<0.\end{cases}\label{eq:h}
+\end{equation}
+The slopes of the positive and negative scalar parts are chosen as $h$ and
+$1-h$, respectively, at the switch. Their sum is always one.
+
+\subsection{Isotropic degradation}
+All elastic energy is crack-driving:
+\begin{align}
+ \psi^+&=\psi_0, & \psi^-&=0,\\
+ \sig^+&=\lambda t\I+2\mu\eps, & \sig^-&=\bm0,\\
+ \C^+[\D]&=\lambda\tr(\D)\I+2\mu\D,&\C^-[\D]&=\bm0,\\
+ \C[\D]&=g\left[\lambda\tr(\D)\I+2\mu\D\right].
+\end{align}
+These expressions follow from $\delta(t^2)=2t\tr\D$ and
+$\delta(\eps:\eps)=2\eps:\D$. This option degrades compression as well as
+tension and shear. The superscript $+$ means ``degraded/crack-driving part,''
+not necessarily tensile loading.
+
+\subsection{Amor volumetric/deviatoric split}
+The implemented split, attributed contextually to Amor et al.\ \cite{amor}, is
+\begin{align}
+ \psi^+&=\frac K2\pos{t}^2+\mu\dev\eps:\dev\eps,
+ &\psi^-&=\frac K2\negp{t}^2,\\
+ \sig^+&=K\pos{t}\I+2\mu\dev\eps,
+ &\sig^-&=K\negp{t}\I.\label{eq:amor-stress}
+\end{align}
+To differentiate the deviatoric term, use
+$\delta\dev\eps=\dev\D$ and
+$\dev\eps:\dev\D=\dev\eps:\D$. The split moduli are then
+\begin{align}
+ \C^+[\D]&=K h(t)\tr(\D)\I+2\mu\dev\D,\\
+ \C^-[\D]&=K[1-h(t)]\tr(\D)\I.
+\end{align}
+Combining them at fixed $d$ gives the analytic tangent used by the material:
+\begin{equation}\boxed{
+ \C[\D]=K\{g h(t)+1-h(t)\}\tr(\D)\I+2\mu g\dev\D.}
+ \label{eq:amor-tangent}
+\end{equation}
+At $t=0$, the volumetric coefficient is $K(g+1)/2$. In particular, at $d=0$
+it is $K$, including at zero strain and pure shear. This is the current
+\textbf{corrected complementary-slope branch}; assigning zero to both scalar
+branch derivatives would incorrectly remove intact bulk stiffness. At damaged
+zero-trace states this is a centered generalized choice, not a classical
+derivative at the nonsmooth switch.
+
+Amor preserves purely compressive volumetric energy but degrades all deviatoric
+energy, even in a state dominated by compression. A volumetric/deviatoric split
+is not a face-gap constraint or frictional contact law. Both split stresses and
+all tangent expressions above are obtained here by differentiating the energies
+implemented in \code{EvaluateResponse}; no external equation numbers are claimed
+for these derivative formulas.
+
+\sectionpage{Miehe spectral split and its analytic derivative}
+\label{sec:spectral}
+Use the eigendecomposition of the physical symmetric strain tensor,
+\begin{equation}
+ \eps=\sum_{a=1}^{3}\varepsilon_a\bm P_a
+ =\bm Q\operatorname{diag}(\varepsilon_a)\bm Q^T,
+ \qquad\bm P_a=\bm n_a\otimes\bm n_a,\quad\bm Q^T\bm Q=\I.
+\end{equation}
+Define $\eps_\pm=\sum_a\langle\varepsilon_a\rangle_\pm\bm P_a$.
+The implemented split, attributed contextually to Miehe et al.\ \cite{miehe}, is
+\begin{align}
+ \psi^\pm&=\frac\lambda2\langle t\rangle_\pm^2
+                  +\mu\eps_\pm:\eps_\pm,\\
+ \sig^\pm&=\lambda\langle t\rangle_\pm\I+2\mu\eps_\pm,
+ \qquad\sig=g\sig^++\sig^-.\label{eq:spectral-stress}
+\end{align}
+In the first variation, the eigenvalue identity
+$\delta\varepsilon_a=\bm P_a:\D$ yields
+$\delta\psi^\pm=\sig^\pm:\D$. The energy is differentiable through a zero
+principal strain because the squared scalar parts have zero first derivative
+there. Its stress derivative needs a generalized choice at that switch.
+
+\subsection{Matrix-function derivative, not eigenvector autodiff}
+Let $f(x)=\pos{x}$ and $\widehat{\D}=\bm Q^T\D\bm Q$. At simple
+eigenvalues, differentiating the spectral representation gives
+\begin{equation}
+ \mathcal P_+[\D]:=\delta\eps_+[\D]
+   =\bm Q\left(\bm L\odot\widehat{\D}\right)\bm Q^T,
+ \qquad\delta\eps_-[\D]=\D-\mathcal P_+[\D].\label{eq:frechet}
+\end{equation}
+$\odot$ denotes entrywise multiplication. Off-diagonal entries collect the
+change of eigenvectors and have slope
+$(f(\varepsilon_a)-f(\varepsilon_b))/(\varepsilon_a-\varepsilon_b)$;
+diagonal entries use $f'(\varepsilon_a)$. The code evaluates the continuous
+same-sign limits directly:
+\begin{equation}
+ L_{ab}=\begin{cases}
+ 1/2,&\varepsilon_a=\varepsilon_b=0,\\
+ 1,&\varepsilon_a,\varepsilon_b\ge0\text{ and not both zero},\\
+ 0,&\varepsilon_a,\varepsilon_b\le0\text{ and not both zero},\\
+ \displaystyle\frac{\pos{\varepsilon_a}-\pos{\varepsilon_b}}
+ {\varepsilon_a-\varepsilon_b},&\varepsilon_a\varepsilon_b<0.
+ \end{cases}\label{eq:slopes}
+\end{equation}
+These formulas also cover repeated nonzero eigenvalues without a small-gap
+regularization. Within a repeated eigenspace the resulting map does not depend
+on the arbitrary eigenvector basis. At a zero eigenspace $1/2$ is the centered
+generalized slope, not a claim of classical differentiability in all directions.
+
+The split and combined moduli are
+\begin{align}
+ \C^+[\D]&=\lambda h(t)\tr(\D)\I+2\mu\mathcal P_+[\D],\\
+ \C^-[\D]&=\lambda[1-h(t)]\tr(\D)\I+2\mu(\D-\mathcal P_+[\D]),\\
+ \C[\D]&=\lambda\{g h(t)+1-h(t)\}\tr(\D)\I\notag\\
+ &\quad+2\mu\bm Q\left(\{g\bm L+(\bm1-\bm L)\}
+                         \odot\widehat{\D}\right)\bm Q^T.\label{eq:spectral-C}
+\end{align}
+Here $\bm1$ is the all-ones matrix, not $\I$. Directly weighting positive and
+negative slopes avoids subtractive cancellation of tiny residual stiffness in
+pure tension. All these derivatives are analytic in the current material;
+no autodiff of the nonunique eigenvectors is used.
+
+\sectionpage{Voigt convention, phase coupling, and limiting checks}
+\label{sec:voigt}
+The repository uses engineering shear for strain and physical shear for stress:
+\begin{equation}
+ \bm e=\begin{bmatrix}\varepsilon_{xx}&\varepsilon_{yy}&\varepsilon_{zz}&
+ 2\varepsilon_{xy}&2\varepsilon_{yz}&2\varepsilon_{xz}\end{bmatrix}^T,
+ \quad
+ \bm s=\begin{bmatrix}\sigma_{xx}&\sigma_{yy}&\sigma_{zz}&
+ \sigma_{xy}&\sigma_{yz}&\sigma_{xz}\end{bmatrix}^T.
+\end{equation}
+Then $\sig:\delta\eps=\bm s^T\delta\bm e$, so the matrix modulus is
+$\bm C=\partial\bm s/\partial\bm e$, not the derivative with respect to a
+vector containing physical shear strain. For the $J$th unit coordinate
+$\bm e_J$ construct the symmetric tensor $\bm T_J$ by inverse engineering
+Voigt conversion and set
+\begin{equation}
+ \bm C_{:J}=\operatorname{Voigt}_{\rm stress}(\C[\bm T_J]),\quad
+ \bm T_4=\tfrac12(\bm e_x\otimes\bm e_y+\bm e_y\otimes\bm e_x),
+ \label{eq:voigt-C}
+\end{equation}
+with analogous $yz$ and $xz$ shear bases. Each off-diagonal tensor entry is
+$1/2$ for a unit engineering shear. Conversely, an already assembled physical
+strain tensor must \emph{not} be halved again before its eigendecomposition.
+
+At zero damage every split recovers
+\begin{equation}
+ \bm C_0=\begin{pmatrix}
+ \lambda+2\mu&\lambda&\lambda&0&0&0\\
+ \lambda&\lambda+2\mu&\lambda&0&0&0\\
+ \lambda&\lambda&\lambda+2\mu&0&0&0\\
+ 0&0&0&\mu&0&0\\0&0&0&0&\mu&0\\0&0&0&0&0&\mu
+ \end{pmatrix}.\label{eq:C0}
+\end{equation}
+For isotropic degradation $\bm C=g\bm C_0$. For the other splits one must
+use the strain-dependent formulas, not multiply every entry of $\bm C_0$ by
+$g$. The material tangents are symmetric on smooth branches because they are
+energy Hessians in the work-conjugate convention; the centered switch choices
+preserve symmetry. Symmetry does not imply positive definiteness in every
+parameter regime.
+
+At fixed strain the stress--damage derivative, common to all splits, is
+\begin{equation}
+ \partial_d\sig=g'\sig^+,
+ \qquad\partial_d\bm s=g'\bm s^+,
+ \qquad\partial_{\eps}\psi^+[\D]=\sig^+:\D.\label{eq:phase-stress}
+\end{equation}
+This is \code{getPhaseStressDerivative()}; it does not include $\chi$.
+History affects the derivative of the \emph{phase} residual with respect to
+displacement, not the derivative of mechanical stress with respect to damage.
+
+\textbf{Useful limiting checks.}
+\begin{itemize}
+\item At $\eps=0$, all energies and stresses vanish and the intact modulus is
+\eqref{eq:C0}, including its nonzero bulk and shear parts.
+\item In strictly positive principal strain (and positive trace), the spectral
+law gives $\sig=g\sig_0$ and $\C=g\C_0$; at $d=1$ these retain the factor $k$.
+\item In strictly negative principal strain the spectral energy has $\psi^+=0$;
+Amor also has $\psi^+=0$ for purely hydrostatic compression, but not for general
+compressive states with nonzero deviatoric strain.
+\item In a plane-strain calculation, retain $\sigma_{zz}$ in stress invariants.
+The $zz,yz,xz$ rows of the strain--displacement matrix are zero; this does not
+license a plane-stress condensation of the material tangent.
+\end{itemize}
+
+\sectionpage{History substitution and the four consistent Jacobian blocks}
+\label{sec:jacobian}
+During a trial solve, $H_n$ is fixed at each quadrature point. Define
+\begin{equation}
+ H(\eps;H_n)=\max(H_n,\psi^+(\eps)),\quad
+ \chi=\begin{cases}1,&\psi^+(\eps)>H_n,\\0,&\psi^+(\eps)\le H_n,\end{cases}
+ \quad\delta H=\chi\sig^+:\delta\eps.\label{eq:history}
+\end{equation}
+Equality is explicitly \textbf{inactive}. This is distinct from the centered
+$1/2$ constitutive choices in \eqref{eq:h} and \eqref{eq:slopes}.
+Linearizing \eqref{eq:weak-u}--\eqref{eq:weak-d} at current $(\uu,d)$ gives
+\begin{align}
+ \delta R_u(\vv)&=\int_\Omega\sym\nabla\vv:
+       \left[\C[\sym\nabla\delta\uu]+g'\sig^+\delta d\right]\dd V,\\
+ \delta R_d(q)&=\int_\Omega\left[g' q\chi\sig^+:\sym\nabla\delta\uu
+       +\left(\frac{G_c}{\ell}+g''H\right)q\delta d
+       +G_c\ell\nabla q\cdot\nabla\delta d\right]\dd V.
+\end{align}
+These are derivatives of the implemented residual, including the derivative
+of the current maximum history. They are not a frozen-history approximation
+on the active branch. Dead external loads have zero derivative; other load
+models would require their own tangent contributions.
+
+At quadrature point $r$, let $n_u,n_d$ be the scalar shape-function counts,
+$\bm u_e\in\mathbb R^{mn_u}$, $\bm d_e\in\mathbb R^{n_d}$, and
+\begin{equation}
+ \bm e=\bm B\bm u_e,\qquad d=\bm N^T\bm d_e,\qquad
+ \nabla d=\bm G^T\bm d_e,\qquad
+ w_r=\widehat w_r\det\left(\frac{\partial\bm x}{\partial\bm\xi}\right)_r.
+\end{equation}
+$\bm B$ is $6\times mn_u$, $\bm N$ is $n_d\times1$, and the rows of
+$\bm G\in\mathbb R^{n_d\times m}$ are physical phase shape gradients.
+The element residuals and all four Jacobian blocks are
+\begin{align}
+ \bm R_u^e&=\sum_r w_r\bm B^T\bm s-\bm f^e_{\rm ext},\\
+ \bm R_d^e&=\sum_r w_r\left[g'H\bm N
+           +G_c\ell\bm G\bm G^T\bm d_e+\frac{G_c}{\ell}d\bm N\right],\\
+ \bm K_{uu}^e&=\sum_r w_r\bm B^T\bm C\bm B,\label{eq:Kuu}\\
+ \bm K_{ud}^e&=\sum_r w_r(\bm B^Tg'\bm s^+)\bm N^T,\\
+ \bm K_{du}^e&=\sum_r w_r g'\bm N\chi(\bm s^+)^T\bm B,\\
+ \bm K_{dd}^e&=\sum_r w_r\left[G_c\ell\bm G\bm G^T
+                +\left(\frac{G_c}{\ell}+g''H\right)\bm N\bm N^T\right].
+ \label{eq:Kdd}
+\end{align}
+At active points, the cross-block contributions transpose each other. At
+inactive points, $\bm K_{du}=0$ while $\bm K_{ud}$ generally is not zero.
+The full assembled Jacobian is therefore \textbf{generally nonsymmetric}; it
+is symmetric when all relevant cross-coupling contributions are active (or
+vanish). There is \textbf{no geometric stiffness}: $\bm B$ and integration
+measures refer to the fixed small-strain geometry.
+
+\sectionpage{Discretization and what irreversibility does not guarantee}
+\label{sec:discrete}
+\subsection{Finite-element and quadrature contracts}
+Displacement is block 0 and phase is block 1. Their $H^1$ orders $p_u,p_d$ may
+differ in the integrator; the supplied examples use the same order for both.
+Both residual and Jacobian assemblies choose the same default rule order,
+\begin{equation}p_{\rm quad}=2\max(p_u,p_d)+1.\end{equation}
+An explicit \code{SetIntRule} overrides it. This is an implementation default,
+not an exactness theorem for every mixed-order product, curved geometry,
+coefficient variation, or spectral response. Spectral/history switches are
+nonpolynomial. A convergence study must vary quadrature as well as mesh/order.
+Apply the quadrature weight and transformation measure exactly once.
+
+MFEM element displacement arrays are component-major regardless of the global
+finite-element space ordering. They are mapped as an $n_u\times m$ matrix;
+global-vector accesses must still respect their actual ordering. For a 2D
+displacement shape $N_i^u$, the two column contributions to $\bm B$ are
+\begin{equation}
+ \bm B_{i,x}=\begin{bmatrix}N^u_{i,x}&0&0&N^u_{i,y}&0&0\end{bmatrix}^T,
+ \quad
+ \bm B_{i,y}=\begin{bmatrix}0&N^u_{i,y}&0&N^u_{i,x}&0&0\end{bmatrix}^T.
+\end{equation}
+The integrator constructs $\bm F=\I+\nabla\uu$ solely to call the inherited
+material interface. Its material enforces small-deformation mode; this does
+not introduce a finite-strain Green--Lagrange formulation.
+
+Point storage binds the exact displacement finite-element and integration-rule
+objects and caches reference gradients. Borrowed coefficient, material,
+storage, and rule objects must outlive the integrator; the form owns the
+integrator. Geometry, topology, partition, finite-element, or rule changes
+require resetting storage. After history develops, resetting without an
+admissible transfer would discard the model state. Such AMR history transfer
+and restart serialization are not provided. The examples refine only before
+history initialization. Mutable scratch and state are not reentrant or
+thread-safe, and the present assembly is host-only, not a device kernel.
+
+\subsection{History is not a bound-constrained damage solve}
+For constant nonnegative $H$ and spatially uniform damage, the phase equation
+reduces to
+\begin{equation}
+ d=\frac{2(1-k)H}{G_c/\ell+2(1-k)H}.\label{eq:uniform}
+\end{equation}
+This lies in $[0,1)$ and increases with $H$, but it is a homogeneous limiting
+case, not a discrete maximum-principle proof. In particular, AT2 admits a
+nonzero homogeneous response for any positive $H$ rather than an imposed
+finite damage-initiation threshold.
+
+The code guarantees nondecreasing \emph{accepted quadrature history} through
+\eqref{eq:history}. It imposes neither $d_{n+1}(\bm x)\ge d_n(\bm x)$ nor
+$0\le d(\bm x)\le1$ as constraints. Arbitrary FE meshes and higher-order
+spaces need not preserve continuous maximum principles. The examples check
+phase coefficients after acceptance and fail if bounds are violated (tolerance
+$10^{-8}$ in double precision, $10^{-4}$ in single); they do not implement a
+bound-constrained solve or automatic bound-violation cutback. At higher order,
+coefficient bounds do not prove bounds everywhere inside elements.
+
+Finally, replacing $\psi^+$ by $H$ in \eqref{eq:potential} would change its
+mechanical derivative on unloading. It would not produce the implemented
+stress. The nonsymmetric cross blocks are another direct demonstration that
+the history formulation does not generally share one potential. The inherited
+unavailable element-energy method must not be interpreted as zero physical
+energy or used for energy-based globalization.
+
+\sectionpage{Transactional state and the actual staggered solver}
+\label{sec:solver}
+\subsection{Initialize, evaluate, accept, or reject}
+Each quadrature point starts with $H_0=0$ and trial history zero. The example
+also starts with $\uu=0$ and $d=0$; its notch is geometric, not a prescribed
+diffuse phase crack. State evolution is:
+\begin{enumerate}
+\item \code{BeginStep}: copy committed history $H_n$ to trial history and open
+the transaction. Save the accepted unknowns before a continuation attempt.
+\item Every residual or Jacobian evaluation: compute $\psi^+$ at the current
+trial displacement and reset trial history to $\max(H_n,\psi^+)$. Never take
+a maximum over rejected Newton iterates. Residual/Jacobian call order must not
+change the constitutive result at the same fields and committed state.
+\item Success: after both current residuals converge, commit the final trial
+history as $H_{n+1}$ and retain the accepted unknowns.
+\item Failure: rollback trial history and restore the saved unknowns. The
+continuation wrapper also restores the accepted loading coordinate and
+reapplies the trial boundary data after a cutback.
+\end{enumerate}
+Nested begins increment a depth counter. An inner successful commit does not
+write committed point history until the outermost commit. A nested rejection
+marks the transaction rejected and prevents the enclosing transaction from
+committing; the outer completion restores history. Assembly itself never commits.
+
+\subsection{Block Gauss--Seidel, despite the Newton name}
+\code{NewtonForPhaseField} uses the two diagonal tangent blocks, not a
+monolithic solve with all four blocks. One sweep is:
+\begin{align}
+ \bm K_{uu}\bm c_u&=\bm r_u, &\bm u&\leftarrow\bm u-\bm c_u,\\
+ \text{reevaluate }(\bm r_u,\bm r_d)&\text{ at current }(\bm u,\bm d),&&\\
+ \bm K_{dd}\bm c_d&=\bm r_d, &\bm d&\leftarrow\bm d-\bm c_d,\\
+ \text{reevaluate }(\bm r_u,\bm r_d)&\text{ at current }(\bm u,\bm d).&&
+\end{align}
+The gradients are evaluated at the corresponding current fields. A block
+already within tolerance can skip its update, but is not permanently marked
+converged: the other update can reactivate it. A supplied algebraic RHS is
+subtracted on \emph{every} residual evaluation. There is no energy line search
+in this routine, despite inheritance from \code{NewtonLineSearch}.
+
+Let $\rho_i$ be each block's first finite nonzero residual norm in the current
+solve, including evaluations between field updates. It is then frozen. The
+acceptance condition, checked starting at iteration zero, is
+\begin{equation}
+ \|\bm r_i\|\le\max(\eta_{\rm rel}\rho_i,\eta_{\rm abs}),
+ \qquad i\in\{u,d\},\quad\text{simultaneously at the same state}.\label{eq:tol}
+\end{equation}
+An initially zero block uses only the absolute tolerance until coupling
+activates it, at which point it establishes its relative reference, even if
+$\eta_{\rm abs}=0$. Nonfinite residuals and exhausted iteration budgets cause
+failure, not acceptance. The same numerical absolute tolerance is used for
+blocks with different physical units (Section~\ref{sec:inputs}); it is an
+example heuristic, not dimensional nondimensionalization.
+
+\sectionpage{Current shear examples: complete problem inputs}
+\label{sec:examples}
+Both examples use the spectral split and material inputs in
+Section~\ref{sec:inputs}. The mesh must be planar 2D, contain only domain
+attribute 1, and have bottom/top boundary attributes 11/12. The prescribed
+conditions, with $U_{\max}\ge0$, are
+\begin{equation}
+ \uu=\bm0\text{ on bottom},\qquad
+ u_x=U_{\max}\frac{\tau}{\tau_f},\quad u_y=0\text{ on top}.
+\end{equation}
+All remaining mechanical boundaries are traction-free; $\bm b=0$ and
+$\nabla d\cdot\bm n=0$ on the entire phase boundary. The CLI flag
+\code{-disp} names a positive displacement magnitude, not a negative sign.
+There is no phase essential boundary or initial diffuse crack.
+
+\begin{center}\small
+\begin{tabular}{@{}p{.36\linewidth}p{.25\linewidth}p{.28\linewidth}@{}}
+\toprule Setting / flag & Serial & MPI\\\midrule
+Target & \code{PhaseField\_shear} & \code{pPhaseField\_shear}\\
+Mesh (under \code{data/}) & \code{crack\_square2d.msh} & \code{crack\_square2d\_quad.msh}\\
+Polynomial order, \code{-o} & 1 & 1\\
+Uniform refinements & 4 (\code{-r}) & 3 serial + 4 parallel (\code{-rs}, \code{-rp})\\
+Local initial refinements, \code{-lr} & 0 & 0\\
+$U_{\max}$, \code{-disp} & $10^{-4}$ m & $10^{-4}$ m\\
+$\tau_f$, \code{-tf} & 1 & 1\\
+Initial $\Delta\tau$, \code{-dt} & $2\times10^{-6}$ & $10^{-6}$\\
+Maximum $\Delta\tau$, \code{-dt-max} & $10^{-4}$ & $10^{-3}$\\
+Minimum $\Delta\tau$, \code{-dt-min} & $10^{-14}$ & $10^{-14}$\\
+Attempt budget, \code{-steps} & 100000 & 100000\\
+Maximum nonlinear sweeps & 25 & 12\\
+Output interval, \code{-oi} & 20 accepted steps & 20 accepted steps\\
+\bottomrule
+\end{tabular}\end{center}
+Fracture flags are \code{-gc}, \code{-l}, \code{-k}. Elastic $E,\nu$ and
+the split are set in source, not exposed by these CLI parsers. Require finite
+$0<\Delta\tau_{\min}\le\Delta\tau_0\le\Delta\tau_{\max}$, with
+$\Delta\tau_{\min}<\Delta\tau_{\max}$, and finite $\tau_f>0$.
+Failed solves halve the increment; successful solves grow it by at most 1.2
+up to the maximum. The attempt count includes rejections, and failure to reach
+$\tau_f$ is reported. Optional local refinement selectors differ between
+serial and MPI; the MPI polynomial selector is a legacy geometric heuristic,
+not a predicted crack path.
+
+Both nonlinear relative tolerances are $10^{-7}$ in double precision and
+$10^{-4}$ in single. Both use
+\begin{equation}
+ \eta_{\rm abs}=\max\!\left(r_{\min},
+       100\epsilon_{\rm mach}E\max(U_{\max},10^{-12}\text{ m})\right),
+\end{equation}
+where $r_{\min}$ is the smallest positive normalized \code{mfem::real\_t}
+value, interpreted numerically by the code. The dimensional caveat after
+\eqref{eq:tol} applies. Serial uses UMFPack; MPI uses GMRES for both diagonal
+blocks with relative tolerance $10^{-10}$ ($10^{-5}$ single), 2000 iterations,
+and restart length 50. Default displacement BoomerAMG uses systems options;
+phase BoomerAMG is scalar. \code{-uamg} selects alternative displacement AMG
+modes; \code{-il 1} enables per-solve diagnostics (default 0).
+
+\sectionpage{Evidence, parallel interpretation, and verification guide}
+\label{sec:evidence}
+\subsection{Serial and MPI describe the same equations, not identical defaults}
+Serial uses \code{Mesh}, \code{FiniteElementSpace}, \code{GridFunction}, and
+\code{BlockNonlinearForm}; MPI uses their \code{Par} counterparts and
+distributed Hypre ParCSR tangent blocks. The solver unknowns are true DOFs,
+not raw element/local DOFs. Each MPI rank owns its true entries;
+\code{SetFromTrueDofs} reconstructs local/shared output fields. Reaction
+evaluation sums unconstrained top-horizontal internal-residual true entries;
+MPI reduces owned contributions once, without gathering a global solution.
+Norms and other collectives run on all ranks, with CSV/progress reporting on
+rank zero. A reported 2D reaction is N/m.
+
+Serial stress output is projected into continuous $H^1$; MPI stress output is
+discontinuous. Both must use the current displacement \emph{and damage} in
+\code{StressCoefficient}. \code{-no-vis} disables both ParaView and reaction
+CSV; \code{-od} changes the ParaView directory, not the CSV working directory.
+CMake gates serial on MFEM SuiteSparse and MPI on MFEM MPI. Use the same
+explicit mesh and final refinement for rank comparisons; defaults differ.
+
+\subsection{Source evidence and existing tests (not rerun here)}
+Equations were checked against the current contents of
+\code{material/PhaseFieldMaterial.h/.cpp}, \code{fem/PhaseField.h/.tpp},
+\code{fem/Solvers.h/.cpp}, and the serial/MPI shear sources and their CMake
+file. The existing \code{docs/phase-field-fracture.md} supplies useful context,
+but current code takes precedence: notably MPI now specifies 12 nonlinear
+sweeps, not the 25 stated there. This PDF is a working-tree description, not a
+description of the clean base commit.
+
+The inspected \code{tests/phase\_field\_test.cpp} includes tests for engineering
+shear, all-split compression behavior and tangents, the corrected Amor zero-trace
+branch, intact zero-strain stiffness, repeated principal strains, tiny residual
+stiffness, active/inactive four-block Jacobians, RHS handling, initially zero
+residual activation, block-solver routing, and phase-aware stress output.
+\code{tests/czm\_history\_test.cpp} includes deterministic trial-history and
+nested lifecycle checks. The example CMake registers serial, one-rank, and
+two-rank smoke tests when targets are available. Their existence is not a new
+pass result: \textbf{no C++ tests, example runs, or performance measurements
+were executed for this document}. Prior run counts in other documents are not
+reasserted as verification of the present working tree.
+
+For future changes, check $\bm C\bm a$ against
+$[\bm s(\bm e+\delta\bm a)-\bm s(\bm e-\delta\bm a)]/(2\delta)$ and
+the full Jacobian against a centered residual directional difference with
+\emph{fixed committed history}. Use smooth active and inactive states;
+test history equality and zero-eigenvalue generalized branches separately.
+Scale absolute-plus-relative tolerances to \code{mfem::real\_t}. Element
+derivative agreement does not establish mesh convergence or calibrated fracture
+prediction. Full default fracture, reaction-curve agreement, mesh/order and
+quadrature convergence, auxetic damaged stability, and AMR state transfer are
+not established by this documentation task.
+
+\subsection{Reproducibility record}
+For numerical results record the base revision \emph{and local diff}, MFEM
+version/precision/capabilities, configure preset, executable, mesh/attributes,
+order/refinement, all physical inputs and units, continuation sequence,
+tolerances/iteration budgets, ranks/threads/device, and output quantities.
+The source \code{docs/phase-field-formulation.tex} builds the adjacent PDF
+with pdf\LaTeX{} via \code{latexmk}; intermediates are kept in
+\nolinkurl{/tmp/opencode/phase-field-formulation}.
+
+\sectionpage{Reference provenance and derivation boundaries}
+\label{sec:references}
+\textbf{Independently verified primary source.} The Borden author report
+\cite{borden} was downloaded from the University of Texas report archive and
+its relevant full-text passages inspected on 5 September 2026. Specifically:
+\begin{itemize}
+\item Section 2.2, equations (6)--(7), printed page 5: crack functional and
+normalized quadratic degradation. Adaptations here use $c=1-d$ and
+$\ell=2\epsilon_{\mathrm B}$, also identified in the report's footnote 2.
+\item Section 2.2, equations (10)--(13), printed page 6: current-energy stress,
+history substitution in the phase equation, and natural boundary conditions.
+The present mechanical equation omits the report's inertia and permits
+standard dead loads derived in Section~\ref{sec:forms}.
+\item Section 4.1: quasi-static shear example, plane strain and the values
+$E=210$ GPa, $\nu=0.3$, $G_c=2700$ J/m$^2$. This contextual agreement is not
+a calibration or a replication of its numerical results.
+\end{itemize}
+All of these external equation/page numbers refer to the \emph{2011 author
+report}, not to the pagination or numbering of the later journal article.
+
+\textbf{Contextual primary-article citations.} Zotero's collection resource was
+discovered, but access returned connection refused. The prior local Amor
+extraction mentioned in the existing Markdown was not present in
+\code{/tmp/opencode} during this task. The separate Amor and Miehe primary
+article full texts were therefore \emph{not independently reverified in this
+pass}. Entries \cite{amor,miehe} retain the contextual attribution and
+bibliographic metadata from the existing repository documentation; the Miehe
+title/authors/venue are also listed in Borden's report bibliography. No exact
+Amor/Miehe article equation or page is asserted here as verified evidence.
+
+\textbf{Derivations supplied here.} The $(E,\nu)$ conversion, first variations,
+integration-by-parts steps, split stress derivatives, divided-difference
+construction, engineering-Voigt conversion, and four discrete Jacobian blocks
+are derivations of the stated implementation equations. They are not quoted
+verbatim from an external article. The repeated-eigenvalue and zero-slope rules,
+inactive history equality branch, state transaction, and solver acceptance
+details are implementation-specific contracts checked against code.
+
+\begingroup\small
+\begin{thebibliography}{9}
+\bibitem{borden}
+M. J. Borden, C. V. Verhoosel, M. A. Scott, T. J. R. Hughes, and C. M. Landis.
+\emph{A phase-field description of dynamic brittle fracture}.
+ICES Report 11-14, Institute for Computational Engineering and Sciences,
+The University of Texas at Austin, May 2011.
+\url{https://www.oden.utexas.edu/media/reports/2011/1114.pdf}.
+Verified report passages are identified above. The repository lists the later
+journal version in CMAME 217--220 (2012), 77--95,
+\url{https://doi.org/10.1016/j.cma.2012.01.008}; that version's equations were
+not independently checked here.
+
+\bibitem{amor}
+H. Amor, J.-J. Marigo, and C. Maurini.
+\emph{Regularized formulation of the variational brittle fracture with
+unilateral contact: Numerical experiments}.
+Journal of the Mechanics and Physics of Solids 57 (2009), 1209--1229.
+\url{https://doi.org/10.1016/j.jmps.2009.04.011}.
+Contextual citation; verification limitation stated above.
+
+\bibitem{miehe}
+C. Miehe, M. Hofacker, and F. Welschinger.
+\emph{A phase field model for rate-independent crack propagation:
+Robust algorithmic implementation based on operator splits}.
+Computer Methods in Applied Mechanics and Engineering 199 (2010), 2765--2778.
+\url{https://doi.org/10.1016/j.cma.2010.04.011}.
+Contextual citation; verification limitation stated above.
+\end{thebibliography}
+\endgroup
+\end{document}

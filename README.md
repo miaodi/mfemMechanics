@@ -62,9 +62,9 @@ written to `build/<configuration>/bin`.
 | Requirement | Targets |
 | --- | --- |
 | Always available | `test3`, `ex2`, `heat_dynamic`, `heat_static`, `playMesh`, `j2_tensile`, `j2_bauschinger` |
-| MFEM with SuiteSparse | `test2`, `exec`, `beam`, `block`, `postBuckling2D` |
+| MFEM with SuiteSparse | `test2`, `exec`, `beam`, `block`, `postBuckling2D`, `PhaseField_shear` |
 | MFEM with MPI | `ex2p`, `pblock`, `pPhaseField_shear` |
-| OpenMP C++ and MFEM with SuiteSparse | `PhaseField_shear`, `czm`, `czm2` |
+| OpenMP C++ and MFEM with SuiteSparse | `czm`, `czm2` |
 | MFEM with MPI and MUMPS | `beamParallel`, `pCuProtrusion` |
 | MFEM with MPI and PETSc | `petchbuckle`, `postBuckling3D1`, `postBuckling3D2`, `thermalStrain`, `czm2p` |
 | MFEM with MPI, PETSc, and SLEPc | `eigenbuckling` |
@@ -110,6 +110,17 @@ mpirun -np 2 build/debug/bin/pCuProtrusion -steps 20 -no-output
 The default Cu inputs are illustrative CLI values, not a calibrated material
 database. See [Copper thermal protrusion](docs/cu-protrusion.md) for boundary
 attributes, units, assumptions, outputs, and model limitations.
+
+## Phase-Field Fracture
+
+`PhaseField_shear` and `pPhaseField_shear` solve quasi-static, plane-strain AT2
+fracture with transactional tensile-energy history. They provide configurable
+fracture parameters, adaptive displacement stepping, phase-aware stress output,
+and reaction CSV. The serial target requires SuiteSparse; MPI uses GMRES/AMG.
+
+See [Phase-field fracture](docs/phase-field-fracture.md) for equations, history
+and damage-bound limitations, API migration, and matched serial/MPI smoke runs.
+These smoke runs do not establish crack-propagation benchmark agreement.
 
 ## Cohesive History
 

@@ -7,6 +7,8 @@
 #include <Eigen/Dense>
 #include <vector>
 
+class PhaseFieldElasticMaterial;
+
 namespace plugin
 {
 /**
@@ -66,7 +68,8 @@ void ProjectCommittedEquivalentPlasticStrain( const PointStorage& pointStorage, 
 class StressCoefficient : public mfem::VectorCoefficient
 {
 protected:
-    mfem::GridFunction* u;  // displacement
+    mfem::GridFunction* u; // displacement
+    const mfem::GridFunction* phaseField{ nullptr };
     mfem::DenseMatrix grad; // auxiliary matrix, used in Eval
     ElasticMaterial* materialModel{ nullptr };
     int dim;
@@ -83,6 +86,14 @@ public:
     void SetDisplacement( mfem::GridFunction& u_ )
     {
         u = &u_;
+    }
+
+    /// Set the scalar phase field required when the material is phase-field elastic.
+    void SetPhaseField( const mfem::GridFunction& phaseField_ )
+    {
+        MFEM_VERIFY( phaseField_.FESpace() != nullptr && phaseField_.VectorDim() == 1,
+                     "Phase-field stress output requires a scalar GridFunction." );
+        phaseField = &phaseField_;
     }
 
     void AddStressFreeDeformation( StressFreeDeformation& deformation )

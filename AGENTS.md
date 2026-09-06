@@ -33,9 +33,8 @@ Prioritize, in order:
   stress-free kinematics, postprocessing, AMR, and Newton/arc-length/adaptive
   solvers. The CMake target is `mfemMechanics::femplugin`.
 - `util/` owns scalar/Eigen aliases, Voigt/tensor helpers, printing, and small
-  utilities (`mfemMechanics::util`). `SymmetricEigensolver3x3.hpp` and
-  `CircularBuffer.hpp` are imported code; retain their license notices and do
-  not casually restyle or rewrite them.
+  utilities (`mfemMechanics::util`). `CircularBuffer.hpp` is imported code;
+  retain its license notice and do not casually restyle or rewrite it.
 - `tests/` contains GoogleTest executables registered through CTest. Numerical
   tangent, precision-aware, cohesive-history, and thermal-kinematics tests here
   are the closest testing examples.
@@ -120,8 +119,8 @@ Target availability is configuration-dependent:
   `heat_static`, `playMesh`, `j2_tensile`, and `j2_bauschinger`; the test
   executables are added when `BUILD_TESTING=ON`.
 - SuiteSparse gates `test2`, `exec`, `beam`, `block`, and `postBuckling2D`.
-- MFEM MPI gates `ex2p`, `pblock`, and `pPhaseField_shear`; OpenMP plus
-  SuiteSparse gates `PhaseField_shear`, `czm`, and `czm2`.
+- MFEM MPI gates `ex2p`, `pblock`, and `pPhaseField_shear`; SuiteSparse gates
+  `PhaseField_shear`; OpenMP plus SuiteSparse gates `czm` and `czm2`.
 - MPI plus MUMPS gates `beamParallel` and `pCuProtrusion`; MPI plus PETSc gates
   `petchbuckle`, `postBuckling3D1`, `postBuckling3D2`, `thermalStrain`, and
   `czm2p`; SLEPc is additionally required for `eigenbuckling`.

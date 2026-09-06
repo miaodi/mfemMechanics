@@ -154,8 +154,9 @@ class NewtonForPhaseField : public NewtonLineSearch
 protected:
     mutable mfem::Vector r_u, c_u;
     mutable mfem::Vector r_p, c_p;
-    mutable mfem::BlockNonlinearForm* blockOper;
+    mutable mfem::BlockNonlinearForm* blockOper{ nullptr };
     mfem::Array<int> block_trueOffsets;
+    mfem::Solver* phaseSolver{ nullptr };
 
 public:
     NewtonForPhaseField() : NewtonLineSearch()
@@ -167,6 +168,20 @@ public:
     {
     }
 #endif
+
+    /// Use one borrowed linear solver for both blocks (the original behavior).
+    void SetSolver( mfem::Solver& solver ) override
+    {
+        NewtonLineSearch::SetSolver( solver );
+        phaseSolver = nullptr;
+    }
+
+    /// Borrow separate displacement/phase solvers; both must outlive this solver.
+    void SetBlockSolvers( mfem::Solver& displacement, mfem::Solver& phase )
+    {
+        SetSolver( displacement );
+        phaseSolver = &phase;
+    }
 
     virtual void SetOperator( const mfem::Operator& op );
     virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;

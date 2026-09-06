@@ -1,311 +1,550 @@
-
 #include "PhaseField.h"
 #include "Plugin.h"
 #include "mfem.hpp"
+
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iostream>
-#include <omp.h>
+#include <limits>
+#include <memory>
+#include <string>
+#include <type_traits>
 
-using namespace std;
-using namespace mfem;
-
-double crack_curve_y( const double x )
+namespace
 {
-    return -1.69104E-6 - 2.65179 * x + 6455.51 * std::pow( x, 2 ) - 9.11803E6 * std::pow( x, 3 );
+constexpr int kBottomBoundary = 11;
+constexpr int kTopBoundary = 12;
+
+class TimedBoomerAMG final : public mfem::HypreBoomerAMG
+{
+public:
+    explicit TimedBoomerAMG( bool timing ) : mTiming( timing )
+    {
+    }
+
+    void SetOperator( const mfem::Operator& op ) override
+    {
+        mSetupSeconds = 0.;
+        mfem::HypreBoomerAMG::SetOperator( op );
+    }
+
+    using mfem::HypreBoomerAMG::Setup;
+    void Setup( const mfem::HypreParVector& rhs, mfem::HypreParVector& solution ) const override
+    {
+        if ( !mTiming || setup_called )
+        {
+            mfem::HypreBoomerAMG::Setup( rhs, solution );
+            return;
+        }
+        const double start = MPI_Wtime();
+        mfem::HypreBoomerAMG::Setup( rhs, solution );
+        mSetupSeconds += MPI_Wtime() - start;
+    }
+
+    double SetupSeconds() const
+    {
+        return mSetupSeconds;
+    }
+
+private:
+    bool mTiming;
+    mutable double mSetupSeconds{ 0. };
+};
+
+// Optional diagnostics belong to the example; the nonlinear solver still uses
+// the normal MFEM Solver interface and unchanged convergence criteria.
+class ReportingGMRESSolver final : public mfem::GMRESSolver
+{
+public:
+    ReportingGMRESSolver( MPI_Comm communicator, const int infoLevel, TimedBoomerAMG& preconditioner, const char* blockName )
+        : mfem::GMRESSolver( communicator ),
+          mInfoLevel( infoLevel ),
+          mCommunicator( communicator ),
+          mPreconditioner( preconditioner ),
+          mBlockName( blockName )
+    {
+        MPI_Comm_rank( communicator, &mRank );
+    }
+
+    void Mult( const mfem::Vector& rhs, mfem::Vector& solution ) const override
+    {
+        const double start = mInfoLevel ? MPI_Wtime() : 0.;
+        mfem::GMRESSolver::Mult( rhs, solution );
+        const double elapsed = mInfoLevel ? MPI_Wtime() - start : 0.;
+        if ( mInfoLevel == 0 )
+        {
+            return;
+        }
+
+        // The matrix multiply and global norms must run on every rank.
+        mfem::Vector residual( rhs.Size() );
+        oper->Mult( solution, residual );
+        residual -= rhs;
+        const mfem::real_t residualNorm = Norm( residual );
+        const mfem::real_t rhsNorm = Norm( rhs );
+        const auto relativeNorm = []( const mfem::real_t numerator, const mfem::real_t denominator )
+        {
+            return denominator > 0. ? numerator / denominator
+                                    : ( numerator == 0. ? mfem::real_t( 0. ) : std::numeric_limits<mfem::real_t>::infinity() );
+        };
+        double timing[3] = { mPreconditioner.SetupSeconds(), elapsed - mPreconditioner.SetupSeconds(), elapsed };
+        MPI_Allreduce( MPI_IN_PLACE, timing, 3, MPI_DOUBLE, MPI_MAX, mCommunicator );
+        ++mSolveCount;
+        if ( mRank == 0 )
+        {
+            mfem::out << "GMRES solve " << mSolveCount << " [" << mBlockName << "]: total iterations = " << GetNumIterations()
+                      << ", relative residual ||b-Ax||/||b|| = " << relativeNorm( residualNorm, rhsNorm )
+                      << ", preconditioned relative residual = " << relativeNorm( GetFinalNorm(), GetInitialNorm() )
+                      << ", converged = " << ( GetConverged() ? "yes" : "no" ) << ", AMG setup s = " << timing[0]
+                      << ", Krylov solve s = " << timing[1] << ", setup+solve s = " << timing[2] << '\n';
+        }
+    }
+
+private:
+    int mInfoLevel;
+    MPI_Comm mCommunicator;
+    TimedBoomerAMG& mPreconditioner;
+    const char* mBlockName;
+    int mRank{ 0 };
+    mutable int mSolveCount{ 0 };
+};
+
+#ifdef MFEM_USE_MUMPS
+class ReportingMUMPSSolver final : public mfem::MUMPSSolver
+{
+public:
+    ReportingMUMPSSolver( MPI_Comm communicator, int infoLevel, const char* blockName )
+        : mfem::MUMPSSolver( communicator ), mCommunicator( communicator ), mInfoLevel( infoLevel ), mBlockName( blockName )
+    {
+        // Factor the full assembled block; do not impose SPD or discard a triangle.
+        SetMatrixSymType( mfem::MUMPSSolver::UNSYMMETRIC );
+        SetReorderingReuse( false );
+        SetPrintLevel( 1 );
+    }
+
+    void SetOperator( const mfem::Operator& op ) override
+    {
+        const double start = mInfoLevel ? MPI_Wtime() : 0.;
+        mfem::MUMPSSolver::SetOperator( op );
+        mSetupSeconds = mInfoLevel ? MPI_Wtime() - start : 0.;
+        // Borrowed only for the immediately following Mult diagnostic. The form
+        // may replace its gradient on the next assembly; never reuse this pointer.
+        mOperator = &op;
+    }
+
+    void Mult( const mfem::Vector& rhs, mfem::Vector& solution ) const override
+    {
+        const double start = mInfoLevel ? MPI_Wtime() : 0.;
+        mfem::MUMPSSolver::Mult( rhs, solution );
+        const double elapsed = mInfoLevel ? MPI_Wtime() - start : 0.;
+        if ( !mInfoLevel )
+        {
+            return;
+        }
+        mfem::Vector residual( rhs.Size() );
+        mOperator->Mult( solution, residual );
+        residual -= rhs;
+        const mfem::real_t residualNorm = std::sqrt( mfem::InnerProduct( mCommunicator, residual, residual ) );
+        const mfem::real_t rhsNorm = std::sqrt( mfem::InnerProduct( mCommunicator, rhs, rhs ) );
+        const mfem::real_t relativeNorm =
+            rhsNorm > 0. ? residualNorm / rhsNorm
+                         : ( residualNorm == 0. ? mfem::real_t( 0. ) : std::numeric_limits<mfem::real_t>::infinity() );
+        double timing[] = { mSetupSeconds, elapsed, mSetupSeconds + elapsed };
+        MPI_Allreduce( MPI_IN_PLACE, timing, 3, MPI_DOUBLE, MPI_MAX, mCommunicator );
+        int rank;
+        MPI_Comm_rank( mCommunicator, &rank );
+        ++mSolveCount;
+        if ( rank == 0 )
+        {
+            mfem::out << "MUMPS solve " << mSolveCount << " [" << mBlockName << "]: relative residual ||b-Ax||/||b|| = " << relativeNorm
+                      << ", analysis+factorization s = " << timing[0] << ", solve s = " << timing[1]
+                      << ", setup+solve s = " << timing[2] << '\n';
+        }
+    }
+
+private:
+    MPI_Comm mCommunicator;
+    int mInfoLevel;
+    const char* mBlockName;
+    const mfem::Operator* mOperator{ nullptr };
+    double mSetupSeconds{ 0. };
+    mutable int mSolveCount{ 0 };
+};
+#endif
+
+mfem::real_t CrackCurveY( const mfem::real_t x )
+{
+    return -1.69104e-6 - 2.65179 * x + 6455.51 * std::pow( x, 2 ) - 9.11803e6 * std::pow( x, 3 );
 }
 
-int main( int argc, char* argv[] )
+void VerifyMesh( const mfem::Mesh& mesh )
 {
-    // 1. Initialize MPI.
-    int num_procs, myid;
-    Mpi::Init( argc, argv );
-    MPI_Comm_size( MPI_COMM_WORLD, &num_procs );
-    MPI_Comm_rank( MPI_COMM_WORLD, &myid );
-    Hypre::Init();
+    MFEM_VERIFY( mesh.Dimension() == 2 && mesh.SpaceDimension() == 2,
+                 "pPhaseField_shear requires a two-dimensional planar mesh." );
+    MFEM_VERIFY( mesh.attributes.Size() == 1 && mesh.attributes.Find( 1 ) >= 0,
+                 "pPhaseField_shear requires domain attribute 1." );
+    MFEM_VERIFY( mesh.bdr_attributes.Find( kBottomBoundary ) >= 0 && mesh.bdr_attributes.Find( kTopBoundary ) >= 0,
+                 "pPhaseField_shear requires bottom boundary attribute 11 and top boundary attribute 12." );
+}
 
-    // 1. Parse command-line options.
-    const char* mesh_file = "../../../data/crack_square2d_quad.msh";
+mfem::real_t GlobalReduction( mfem::real_t value, const MPI_Op operation, MPI_Comm communicator )
+{
+    MFEM_VERIFY( MPI_Allreduce( MPI_IN_PLACE, &value, 1, mfem::MPITypeMap<mfem::real_t>::mpi_type, operation, communicator ) == MPI_SUCCESS,
+                 "MPI failed to reduce a phase-field diagnostic." );
+    return value;
+}
+
+void VerifyPhaseBounds( const mfem::ParGridFunction& phaseField, MPI_Comm communicator )
+{
+    const mfem::real_t minimum = GlobalReduction( phaseField.Min(), MPI_MIN, communicator );
+    const mfem::real_t maximum = GlobalReduction( phaseField.Max(), MPI_MAX, communicator );
+    const mfem::real_t tolerance = std::is_same_v<mfem::real_t, float> ? 1e-4f : 1e-8;
+    MFEM_VERIFY( mfem::IsFinite( minimum ) && mfem::IsFinite( maximum ),
+                 "The distributed phase-field solution contains a non-finite value." );
+    MFEM_VERIFY( minimum >= -tolerance && maximum <= 1. + tolerance,
+                 "The distributed phase-field solution left its admissible interval [0, 1]: min = "
+                     << minimum << ", max = " << maximum << ", tolerance = " << tolerance );
+}
+
+int RunExample( int argc, char* argv[], MPI_Comm communicator )
+{
+    const int rank = mfem::Mpi::WorldRank();
+    const char* meshFile = "data/crack_square2d_quad.msh";
+    const char* outputDirectory = "ParaView";
+    const char* displacementAMG = "systems";
+    const char* linearSolver = "direct";
     int order = 1;
-    bool static_cond = false;
-    int ser_ref_levels = -1, par_ref_levels = -1;
-    int localRefineLvl = 0;
-    const char* petscrc_file = "../../../data/petscSetting";
+    int serialRefinementLevels = 3;
+    int parallelRefinementLevels = 4;
+    int localRefinementLevels = 0;
+    int maximumSteps = 100000;
+    int maximumSweeps = 15;
+    int outputInterval = 20;
+    int infoLevel = 0;
+    bool output = true;
+    mfem::real_t maximumDisplacement = 1e-4;
+    mfem::real_t finalPseudoTime = 1.;
+    mfem::real_t initialPseudoTimeStep = 1e-6;
+    mfem::real_t maximumPseudoTimeStep = 1e-2;
+    mfem::real_t minimumPseudoTimeStep = 1e-14;
+    PhaseFieldFractureParameters fractureParameters;
 
-    OptionsParser args( argc, argv );
-    args.AddOption( &mesh_file, "-m", "--mesh", "Mesh file to use." );
-    args.AddOption( &order, "-o", "--order", "Finite element order (polynomial degree)." );
-    args.AddOption( &static_cond, "-sc", "--static-condensation", "-no-sc", "--no-static-condensation",
-                    "Enable static condensation." );
-    args.AddOption( &ser_ref_levels, "-rs", "--refine-serial",
-                    "Number of times to refine the mesh uniformly in serial." );
-    args.AddOption( &par_ref_levels, "-rp", "--refine-parallel",
-                    "Number of times to refine the mesh uniformly in parallel." );
-    args.AddOption( &petscrc_file, "-petscopts", "--petscopts", "PetscOptions file to use." );
-    args.AddOption( &localRefineLvl, "-lr", "--local-refine-level", "Finite element local refine level." );
+    mfem::OptionsParser args( argc, argv );
+    args.AddOption( &linearSolver, "-ls", "--linear-solver",
+                    "Block linear solver: direct (default, requires MFEM MUMPS) or gmres (BoomerAMG)." );
+    args.AddOption( &displacementAMG, "-uamg", "--displacement-amg",
+                    "GMRES-only displacement AMG: systems (default), scalar, elasticity, or elasticity-no-refine." );
+    args.AddOption( &meshFile, "-m", "--mesh", "Mesh file to use." );
+    args.AddOption( &infoLevel, "-il", "--info-level",
+                    "Linear diagnostics: 0 disables summaries (default), 1 prints each solve." );
+    args.AddOption( &order, "-o", "--order", "Finite element order." );
+    args.AddOption( &serialRefinementLevels, "-rs", "--refine-serial", "Uniform serial refinement levels." );
+    args.AddOption( &parallelRefinementLevels, "-rp", "--refine-parallel", "Uniform parallel refinement levels." );
+    args.AddOption( &localRefinementLevels, "-lr", "--local-refine-level", "Crack-tip local refinement levels." );
+    args.AddOption( &maximumDisplacement, "-disp", "--maximum-displacement", "Final horizontal top displacement." );
+    args.AddOption( &fractureParameters.criticalEnergyReleaseRate, "-gc", "--fracture-energy",
+                    "Critical energy release rate." );
+    args.AddOption( &fractureParameters.lengthScale, "-l", "--length-scale", "AT2 length scale." );
+    args.AddOption( &fractureParameters.residualStiffness, "-k", "--residual-stiffness",
+                    "Quadratic degradation residual stiffness." );
+    args.AddOption( &finalPseudoTime, "-tf", "--final-pseudo-time", "Final continuation coordinate." );
+    args.AddOption( &initialPseudoTimeStep, "-dt", "--initial-step", "Initial continuation increment." );
+    args.AddOption( &maximumPseudoTimeStep, "-dt-max", "--maximum-step", "Maximum continuation increment." );
+    args.AddOption( &minimumPseudoTimeStep, "-dt-min", "--minimum-step", "Minimum continuation increment." );
+    args.AddOption( &maximumSteps, "-steps", "--maximum-steps", "Maximum continuation attempts." );
+    args.AddOption( &maximumSweeps, "-ni", "--nonlinear-iterations",
+                    "Maximum block-Newton sweeps per continuation attempt (not GMRES iterations)." );
+    args.AddOption( &outputInterval, "-oi", "--output-interval", "Accepted steps between ParaView writes." );
+    args.AddOption( &outputDirectory, "-od", "--output-directory", "ParaView output directory." );
+    args.AddOption( &output, "-vis", "--visualization", "-no-vis", "--no-visualization",
+                    "Enable ParaView and force-curve output." );
     args.Parse();
     if ( !args.Good() )
     {
-        if ( myid == 0 )
+        if ( rank == 0 )
         {
-            args.PrintUsage( cout );
+            args.PrintUsage( std::cout );
         }
-        MPI_Finalize();
         return 1;
     }
-    if ( myid == 0 )
+    if ( rank == 0 )
     {
-        args.PrintOptions( cout );
+        args.PrintOptions( std::cout );
     }
 
-    // 2. Read the mesh from the given mesh file. We can handle triangular,
-    //    quadrilateral, tetrahedral or hexahedral elements with the same code.
-    Mesh* mesh = new Mesh( mesh_file, 1, 1 );
-    int dim = mesh->Dimension();
+    const std::string amgMode( displacementAMG );
+    const std::string solverMode( linearSolver );
+    MFEM_VERIFY( solverMode == "direct" || solverMode == "gmres", "Linear solver must be direct or gmres." );
+#ifndef MFEM_USE_MUMPS
+    MFEM_VERIFY(
+        solverMode != "direct",
+        "Direct solves require MFEM built with MFEM_USE_MUMPS=ON. Rebuild MFEM with MUMPS or select -ls gmres." );
+#endif
+    MFEM_VERIFY(
+        amgMode == "scalar" || amgMode == "systems" || amgMode == "elasticity" || amgMode == "elasticity-no-refine",
+        "Displacement AMG must be scalar, systems, elasticity, or elasticity-no-refine." );
+    MFEM_VERIFY( infoLevel == 0 || infoLevel == 1, "Info level must be 0 (default) or 1 (linear solver summaries)." );
+    MFEM_VERIFY( order >= 1 && serialRefinementLevels >= 0 && parallelRefinementLevels >= 0 && localRefinementLevels >= 0,
+                 "Finite element order must be positive and refinement levels must be nonnegative." );
+    MFEM_VERIFY( maximumSteps > 0 && outputInterval > 0, "Step and output intervals must be positive." );
+    MFEM_VERIFY( maximumSweeps > 0, "The maximum number of block-Newton sweeps must be positive." );
+    MFEM_VERIFY( std::isfinite( maximumDisplacement ) && maximumDisplacement >= 0.,
+                 "Maximum displacement must be finite and nonnegative." );
+    MFEM_VERIFY( std::isfinite( finalPseudoTime ) && finalPseudoTime > 0.,
+                 "Final pseudo-time must be finite and positive." );
 
-    // MFEMInitializePetsc( NULL, NULL, petscrc_file, NULL );
+    MFEM_VERIFY( std::isfinite( minimumPseudoTimeStep ) && std::isfinite( initialPseudoTimeStep ) &&
+                     std::isfinite( maximumPseudoTimeStep ) && minimumPseudoTimeStep > 0. && minimumPseudoTimeStep <= initialPseudoTimeStep &&
+                     initialPseudoTimeStep <= maximumPseudoTimeStep && minimumPseudoTimeStep < maximumPseudoTimeStep,
+                 "Continuation increments must be finite and satisfy 0 < minimum <= initial <= maximum, with minimum < "
+                 "maximum." );
 
-    //  4. Mesh refinement
-    for ( int lev = 0; lev < ser_ref_levels; lev++ )
+    mfem::Mesh serialMesh( meshFile, 1, 1 );
+    VerifyMesh( serialMesh );
+    for ( int level = 0; level < serialRefinementLevels; level++ )
     {
-        mesh->UniformRefinement();
+        serialMesh.UniformRefinement();
     }
-
-    for ( int k = 0; k < localRefineLvl; k++ )
+    for ( int level = 0; level < localRefinementLevels; level++ )
     {
-        int ne = mesh->GetNE();
-        auto eles = mesh->GetElementsArray();
-        Array<Refinement> refinements;
-        for ( int i = 0; i < ne; i++ )
+        mfem::Array<mfem::Refinement> refinements;
+        const auto elements = serialMesh.GetElementsArray();
+        for ( int element = 0; element < serialMesh.GetNE(); element++ )
         {
-            double* node{ nullptr };
-            for ( int j = 0; j < eles[i]->GetNVertices(); j++ )
+            for ( int vertex = 0; vertex < elements[element]->GetNVertices(); vertex++ )
             {
-                const int vi = eles[i]->GetVertices()[j];
-                node = mesh->GetVertex( vi );
-                if ( node[0] >= -.00005 && node[1] < .00005 &&
-                     std::abs( node[1] - crack_curve_y( node[0] ) ) < .00008 * std::pow( 1 + 250 * std::abs( node[1] ), 4 ) )
+                const double* coordinate = serialMesh.GetVertex( elements[element]->GetVertices()[vertex] );
+                if ( coordinate[0] >= -5e-5 && coordinate[1] < 5e-5 &&
+                     std::abs( coordinate[1] - CrackCurveY( coordinate[0] ) ) <
+                         8e-5 * std::pow( 1. + 250. * std::abs( coordinate[1] ), 4 ) )
                 {
-                    refinements.Append( i );
+                    refinements.Append( element );
                     break;
                 }
             }
         }
-        mesh->GeneralRefinement( refinements );
+        serialMesh.GeneralRefinement( refinements );
     }
-    // ofstream file;
-    // file.open( "refined.vtk" );
-    // mesh->PrintVTK( file );
-    // file.close();
-    // return 0;
 
-    ParMesh* pmesh = new ParMesh( MPI_COMM_WORLD, *mesh );
-    delete mesh;
+    mfem::ParMesh mesh( communicator, serialMesh );
+    for ( int level = 0; level < parallelRefinementLevels; level++ )
     {
-        for ( int l = 0; l < par_ref_levels; l++ )
+        mesh.UniformRefinement();
+    }
+
+    const int dimension = mesh.Dimension();
+    mfem::H1_FECollection collection( order, dimension );
+    mfem::ParFiniteElementSpace displacementSpace( &mesh, &collection, dimension, mfem::Ordering::byVDIM );
+    mfem::ParFiniteElementSpace phaseSpace( &mesh, &collection );
+    mfem::Array<mfem::ParFiniteElementSpace*> spaces( 2 );
+    spaces[0] = &displacementSpace;
+    spaces[1] = &phaseSpace;
+    const HYPRE_BigInt globalDisplacementDofs = displacementSpace.GlobalTrueVSize();
+    const HYPRE_BigInt globalPhaseDofs = phaseSpace.GlobalTrueVSize();
+    if ( rank == 0 )
+    {
+        std::cout << "Global displacement true DOFs: " << globalDisplacementDofs << '\n'
+                  << "Global phase-field true DOFs: " << globalPhaseDofs << '\n';
+    }
+
+    mfem::Array<int> displacementBoundaryMarker( mesh.bdr_attributes.Max() );
+    displacementBoundaryMarker = 0;
+    displacementBoundaryMarker[kBottomBoundary - 1] = 1;
+    displacementBoundaryMarker[kTopBoundary - 1] = 1;
+    mfem::Array<int> phaseBoundaryMarker( mesh.bdr_attributes.Max() );
+    phaseBoundaryMarker = 0;
+    mfem::Array<int> topBoundaryMarker( mesh.bdr_attributes.Max() );
+    topBoundaryMarker = 0;
+    topBoundaryMarker[kTopBoundary - 1] = 1;
+    mfem::Array<int> constrainedDisplacementDofs;
+    mfem::Array<int> loadedHorizontalDofs;
+    displacementSpace.GetEssentialTrueDofs( displacementBoundaryMarker, constrainedDisplacementDofs );
+    displacementSpace.GetEssentialTrueDofs( topBoundaryMarker, loadedHorizontalDofs, 0 );
+    int globalLoadedDofs = 0;
+    const int localLoadedDofs = loadedHorizontalDofs.Size();
+    MFEM_VERIFY( MPI_Allreduce( &localLoadedDofs, &globalLoadedDofs, 1, MPI_INT, MPI_SUM, communicator ) == MPI_SUCCESS,
+                 "MPI failed to count loaded boundary DOFs." );
+    MFEM_VERIFY( globalLoadedDofs > 0, "Top boundary attribute 12 has no horizontal true DOFs." );
+
+    mfem::Array<int> blockOffsets( 3 );
+    blockOffsets[0] = 0;
+    blockOffsets[1] = displacementSpace.GetTrueVSize();
+    blockOffsets[2] = phaseSpace.GetTrueVSize();
+    blockOffsets.PartialSum();
+    mfem::BlockVector solution( blockOffsets );
+    solution = 0.;
+    mfem::ParGridFunction displacement( &displacementSpace );
+    mfem::ParGridFunction phaseField( &phaseSpace );
+    displacement = 0.;
+    phaseField = 0.;
+
+    mfem::ConstantCoefficient youngsModulus( 210e9 );
+    mfem::ConstantCoefficient poissonRatio( .3 );
+    PhaseFieldElasticMaterial material(
+        youngsModulus, poissonRatio, PhaseFieldElasticMaterial::StrainEnergySplit::MieheSpectral, fractureParameters );
+    plugin::PhaseFieldPointStorage pointStorage( &mesh );
+
+    mfem::ParBlockNonlinearForm residual( spaces );
+    residual.AddDomainIntegrator( new plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage>( material, pointStorage ) );
+    mfem::Array<mfem::Array<int>*> essentialBoundaryMarkers( 2 );
+    essentialBoundaryMarkers[0] = &displacementBoundaryMarker;
+    essentialBoundaryMarkers[1] = &phaseBoundaryMarker;
+    mfem::Array<mfem::Vector*> essentialRightHandSides( 2 );
+    essentialRightHandSides = nullptr;
+    residual.SetEssentialBC( essentialBoundaryMarkers, essentialRightHandSides );
+    residual.SetGradientType( mfem::Operator::Type::Hypre_ParCSR );
+
+    mfem::ParBlockNonlinearForm internalResidual( spaces );
+    auto* reactionIntegrator = new plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage>( material, pointStorage );
+    internalResidual.AddDomainIntegrator( reactionIntegrator );
+
+    // Each field has its own hierarchy and physics-specific configuration.
+    // SetOperator still rebuilds AMG for each new tangent: no stale hierarchy reuse.
+    TimedBoomerAMG displacementPreconditioner( infoLevel != 0 );
+    TimedBoomerAMG phasePreconditioner( infoLevel != 0 );
+    if ( solverMode == "gmres" && amgMode == "systems" )
+    {
+        displacementPreconditioner.SetSystemsOptions( dimension );
+    }
+    else if ( solverMode == "gmres" && ( amgMode == "elasticity" || amgMode == "elasticity-no-refine" ) )
+    {
+        displacementPreconditioner.SetElasticityOptions( &displacementSpace, amgMode == "elasticity" );
+    }
+    displacementPreconditioner.SetPrintLevel( 0 );
+    phasePreconditioner.SetPrintLevel( 0 );
+    ReportingGMRESSolver displacementSolver( communicator, infoLevel, displacementPreconditioner, "displacement" );
+    ReportingGMRESSolver phaseSolver( communicator, infoLevel, phasePreconditioner, "phase" );
+    displacementSolver.SetPreconditioner( displacementPreconditioner );
+    phaseSolver.SetPreconditioner( phasePreconditioner );
+    for ( auto* solver : { &displacementSolver, &phaseSolver } )
+    {
+        solver->SetRelTol( std::is_same_v<mfem::real_t, float> ? 1e-5f : 1e-10 );
+        solver->SetMaxIter( 2000 );
+        solver->SetKDim( 50 );
+        solver->SetPrintLevel( 0 );
+    }
+
+    // The nonlinear solver borrows these solvers. All solvers outlive it and
+    // are destroyed before the forms/spaces and before MPI finalization.
+    mfem::Solver* displacementBlockSolver = &displacementSolver;
+    mfem::Solver* phaseBlockSolver = &phaseSolver;
+#ifdef MFEM_USE_MUMPS
+    std::unique_ptr<ReportingMUMPSSolver> displacementDirectSolver;
+    std::unique_ptr<ReportingMUMPSSolver> phaseDirectSolver;
+    if ( solverMode == "direct" )
+    {
+        displacementDirectSolver = std::make_unique<ReportingMUMPSSolver>( communicator, infoLevel, "displacement" );
+        phaseDirectSolver = std::make_unique<ReportingMUMPSSolver>( communicator, infoLevel, "phase" );
+        displacementBlockSolver = displacementDirectSolver.get();
+        phaseBlockSolver = phaseDirectSolver.get();
+    }
+#endif
+
+    plugin::MultiNewtonAdaptive<plugin::NewtonForPhaseField> nonlinearSolver( communicator );
+    nonlinearSolver.iterative_mode = true;
+    nonlinearSolver.SetBlockSolvers( *displacementBlockSolver, *phaseBlockSolver );
+    nonlinearSolver.SetOperator( residual );
+    nonlinearSolver.SetRelTol( std::is_same_v<mfem::real_t, float> ? 1e-4f : 1e-5 );
+    const mfem::real_t precisionTolerance = mfem::real_t( 100 ) * std::numeric_limits<mfem::real_t>::epsilon();
+    nonlinearSolver.SetAbsTol( std::max(
+        std::numeric_limits<mfem::real_t>::min(),
+        precisionTolerance * youngsModulus.constant * std::max( maximumDisplacement, mfem::real_t( 1e-12 ) ) ) );
+    nonlinearSolver.SetMaxIter( maximumSweeps );
+    nonlinearSolver.SetPseudoTimeInterval( 0., finalPseudoTime );
+    nonlinearSolver.SetDelta( initialPseudoTimeStep );
+    nonlinearSolver.SetMaxDelta( maximumPseudoTimeStep );
+    nonlinearSolver.SetMinDelta( minimumPseudoTimeStep );
+    nonlinearSolver.SetMaxStep( maximumSteps );
+    nonlinearSolver.SetTrialStateFunc(
+        [blockOffsets, constrainedDisplacementDofs, loadedHorizontalDofs, maximumDisplacement, finalPseudoTime](
+            const mfem::real_t pseudoTime, mfem::Vector& state )
         {
-            pmesh->UniformRefinement();
+            mfem::Vector displacementBlock( state.GetData() + blockOffsets[0], blockOffsets[1] - blockOffsets[0] );
+            displacementBlock.SetSubVector( constrainedDisplacementDofs, 0. );
+            displacementBlock.SetSubVector( loadedHorizontalDofs, maximumDisplacement * pseudoTime / finalPseudoTime );
+        } );
+    reactionIntegrator->SetStepContext( &nonlinearSolver );
+
+    mfem::DG_FECollection stressCollection( order, dimension );
+    mfem::ParFiniteElementSpace stressSpace( &mesh, &stressCollection, 7 );
+    mfem::ParGridFunction stress( &stressSpace );
+    plugin::StressCoefficient stressCoefficient( dimension, material );
+    stressCoefficient.SetDisplacement( displacement );
+    stressCoefficient.SetPhaseField( phaseField );
+    plugin::ParaView2DVectorCoefficient paraviewDisplacement( displacement );
+
+    std::unique_ptr<mfem::ParaViewDataCollection> paraview;
+    std::ofstream forceCurve;
+    if ( output )
+    {
+        paraview = std::make_unique<mfem::ParaViewDataCollection>( "p_phase_field_square_shear", &mesh );
+        paraview->SetPrefixPath( outputDirectory );
+        paraview->SetLevelsOfDetail( order );
+        paraview->SetDataFormat( mfem::VTKFormat::BINARY );
+        paraview->SetHighOrderOutput( true );
+        paraview->RegisterVCoeffField( "displacement", &paraviewDisplacement );
+        paraview->RegisterField( "phase_field", &phaseField );
+        paraview->RegisterField( "stress", &stress );
+        stress.ProjectCoefficient( stressCoefficient );
+        paraview->SetCycle( 0 );
+        paraview->SetTime( 0. );
+        paraview->Save();
+        if ( rank == 0 )
+        {
+            forceCurve.open( "p_phase_field_force.csv" );
+            MFEM_VERIFY( forceCurve, "Could not open p_phase_field_force.csv for writing." );
+            forceCurve << "displacement,reaction_force\n0,0\n";
         }
     }
 
-    // 5. Define the finite element spaces for displacement and pressure
-    //    (Taylor-Hood elements). By default, the displacement (u/x) is a second
-    //    order vector field, while the pressure (p) is a linear scalar function.
-    H1_FECollection lin_coll( order, dim );
-
-    ParFiniteElementSpace R_space( pmesh, &lin_coll, dim, Ordering::byVDIM );
-    ParFiniteElementSpace W_space( pmesh, &lin_coll );
-
-    Array<ParFiniteElementSpace*> spaces( 2 );
-    spaces[0] = &R_space;
-    spaces[1] = &W_space;
-
-    HYPRE_BigInt glob_R_size = R_space.GlobalTrueVSize();
-    HYPRE_BigInt glob_W_size = W_space.GlobalTrueVSize();
-
-    // 9. Print the mesh statistics
-    if ( myid == 0 )
-    {
-        std::cout << "***********************************************************\n";
-        std::cout << "dim(u) = " << glob_R_size << "\n";
-        std::cout << "dim(p) = " << glob_W_size << "\n";
-        std::cout << "dim(u+p) = " << glob_R_size + glob_W_size << "\n";
-        std::cout << "***********************************************************\n";
-    }
-
-    VectorArrayCoefficient d( dim );
-    Vector topDisp( R_space.GetMesh()->bdr_attributes.Max() );
-    topDisp = .0;
-    topDisp( 10 ) = 0;
-    topDisp( 11 ) = 1e-4;
-    d.Set( 0, new PWConstCoefficient( topDisp ) );
-
-    Vector activeBC( R_space.GetMesh()->bdr_attributes.Max() );
-    activeBC = 0.0;
-    activeBC( 10 ) = 1e16;
-    activeBC( 11 ) = 1e16;
-    VectorArrayCoefficient hevi( dim );
-    for ( int i = 0; i < dim; i++ )
-    {
-        hevi.Set( i, new PWConstCoefficient( activeBC ) );
-    }
-
-    VectorArrayCoefficient d2( dim );
-    Vector sideDisp( R_space.GetMesh()->bdr_attributes.Max() );
-    sideDisp = .0;
-    d.Set( 1, new PWConstCoefficient( sideDisp ) );
-
-    Vector activeBC2( R_space.GetMesh()->bdr_attributes.Max() );
-    activeBC2 = 0.0;
-    
-    activeBC2( 12 ) = 1e16;
-    activeBC2( 13 ) = 1e16;
-    activeBC2( 14 ) = 1e16;
-    VectorArrayCoefficient hevi2( dim );
-    hevi2.Set( 1, new PWConstCoefficient( activeBC ) );
-
-    //  Define the block structure of the solution vector (u then p)
-    Array<int> block_trueOffsets( 3 );
-    block_trueOffsets[0] = 0;
-    block_trueOffsets[1] = R_space.GetTrueVSize();
-    block_trueOffsets[2] = W_space.GetTrueVSize();
-    block_trueOffsets.PartialSum();
-
-    BlockVector xp( block_trueOffsets );
-
-    xp = 0.;
-
-    //    Define grid functions for the current configuration, reference
-    //    configuration, final deformation, and pressure
-    ParGridFunction x_gf( &R_space );
-    ParGridFunction p_gf( &W_space );
-
-    if ( myid == 0 )
-    {
-        printf( "Mesh is %i dimensional.\n", dim );
-        printf( "Number of mesh attributes: %i\n", pmesh->attributes.Size() );
-        printf( "Number of boundary attributes: %i\n", pmesh->bdr_attributes.Size() );
-    }
-
-    //    Define the solution vector x as a finite element grid function
-    //    corresponding to fespace. Initialize x with initial guess of zero,
-    //    which satisfies the boundary conditions.
-    Vector Nu( pmesh->attributes.Max() );
-    Nu = .3;
-    PWConstCoefficient nu_func( Nu );
-
-    Vector E( pmesh->attributes.Max() );
-    E = 210E9;
-    PWConstCoefficient E_func( E );
-
-    PhaseFieldElasticMaterial iem( E_func, nu_func, PhaseFieldElasticMaterial::StrainEnergyType::Amor );
-
-    plugin::PhaseFieldPointStorage pointStorage( pmesh );
-
-    auto intg = new plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage>( iem, pointStorage );
-    // intg->setNonlinear( true );
-
-    auto* nlf = new mfem::ParBlockNonlinearForm( spaces );
-    nlf->AddDomainIntegrator( intg );
-    nlf->AddBdrFaceIntegrator( new plugin::BlockNonlinearDirichletPenaltyIntegrator( d, hevi ) );
-    nlf->AddBdrFaceIntegrator( new plugin::BlockNonlinearDirichletPenaltyIntegrator( d2, hevi2 ) );
-    nlf->SetGradientType( Operator::Type::Hypre_ParCSR );
-
-    // Set up the Jacobian solver
-    // PetscLinearSolver* petsc = new PetscLinearSolver( MPI_COMM_WORLD );
-
-    mfem::Solver* lin_solver{ nullptr };
-    {
-        auto gmres  = new mfem::GMRESSolver( MPI_COMM_WORLD );
-        lin_solver = gmres;
-        // gmres->SetPrintLevel( -1 );
-        gmres->SetRelTol( 1e-13 );
-        gmres->SetMaxIter( 2000 );
-        gmres->SetKDim( 50 );
-        gmres->SetPrintLevel(0);
-
-        mfem::HypreBoomerAMG* prec = new mfem::HypreBoomerAMG();
-        prec->SetSystemsOptions( dim );
-        prec->SetPrintLevel(0);
-        gmres->SetPreconditioner( *prec );
-    }
-    // {
-    //     auto cg  = new mfem::CGSolver( MPI_COMM_WORLD );
-    //     lin_solver = cg;
-    //     // gmres->SetPrintLevel( -1 );
-    //     cg->SetRelTol( 1e-14 );
-    //     cg->SetMaxIter( 200000 );
-    //     cg->SetPrintLevel(0);
-
-    //     mfem::HypreBoomerAMG* prec = new mfem::HypreBoomerAMG();
-    //     prec->SetPrintLevel(0);
-    //     cg->SetPreconditioner( *prec );
-    // }
-    // {
-    //     auto mumps = new mfem::MUMPSSolver( MPI_COMM_WORLD );
-    //     mumps->SetMatrixSymType( MUMPSSolver::MatType::UNSYMMETRIC );
-    //     // mumps->SetReorderingStrategy( MUMPSSolver::ReorderingStrategy::PARMETIS );
-    //     mumps->SetPrintLevel( -1 );
-    //     lin_solver = mumps;
-    // }
-
-    auto newton_solver = new plugin::MultiNewtonAdaptive<plugin::NewtonForPhaseField>( MPI_COMM_WORLD );
-
-    // Set the newton solve parameters
-    newton_solver->iterative_mode = true;
-    newton_solver->SetMaxDelta( 1e-4 );
-    newton_solver->SetMinDelta( 1e-20 );
-    newton_solver->SetDelta( 1e-6 );    
-    newton_solver->SetOperator( *nlf );
-    newton_solver->SetSolver( *lin_solver );
-    newton_solver->SetMaxIter( 10 );
-    newton_solver->SetMaxStep( 10000000 );
-    newton_solver->SetRelTol( 1e-4 );
-    newton_solver->SetAbsTol( 0 );
-    
-
-
-    std::string outPutName = "p_phase_field_square_shear_hex_test_rp=" + std::to_string( par_ref_levels );
-
-    ParaViewDataCollection paraview_dc( outPutName, pmesh );
-    paraview_dc.SetPrefixPath( "ParaView" );
-    paraview_dc.SetLevelsOfDetail( order );
-    paraview_dc.SetCycle( 0 );
-    paraview_dc.SetDataFormat( VTKFormat::BINARY );
-    paraview_dc.SetHighOrderOutput( true );
-    paraview_dc.SetTime( 0.0 ); // set the time
-    paraview_dc.RegisterField( "Displace", &x_gf );
-    paraview_dc.RegisterField( "PhaseField", &p_gf );
-
-    auto stress_fec = new DG_FECollection( order, dim );
-    auto stress_fespace = new ParFiniteElementSpace( pmesh, stress_fec, 7 );
-    ParGridFunction stress_grid( stress_fespace );
-    plugin::StressCoefficient sc( dim, iem );
-    sc.SetDisplacement( x_gf );
-    paraview_dc.RegisterField( "Stress", &stress_grid );
-    stress_grid.ProjectCoefficient( sc );
-    paraview_dc.Save();
-
-    std::function<void( int, int, double )> func =
-        [&paraview_dc, &stress_grid, &sc, &x_gf, &p_gf, &xp]( int step, int count, double time )
-    {
-        static int local_counter = 0;
-        if ( count % 10 == 0 )
+    mfem::BlockVector unconstrainedResidual( blockOffsets );
+    int acceptedSteps = 0;
+    nonlinearSolver.SetDataCollectionFunc(
+        [&]( const int, const int, const mfem::real_t pseudoTime )
         {
-            x_gf.Distribute( xp.GetBlock( 0 ) );
-            p_gf.Distribute( xp.GetBlock( 1 ) );
-            paraview_dc.SetCycle( local_counter++ );
-            paraview_dc.SetTime( time );
-            stress_grid.ProjectCoefficient( sc );
-            paraview_dc.Save();
-        }
-    };
+            acceptedSteps++;
+            displacement.SetFromTrueDofs( solution.GetBlock( 0 ) );
+            phaseField.SetFromTrueDofs( solution.GetBlock( 1 ) );
+            VerifyPhaseBounds( phaseField, communicator );
+            if ( output )
+            {
+                internalResidual.Mult( solution, unconstrainedResidual );
+                mfem::real_t localReaction = 0.;
+                for ( int i = 0; i < loadedHorizontalDofs.Size(); i++ )
+                {
+                    localReaction += unconstrainedResidual.GetBlock( 0 )( loadedHorizontalDofs[i] );
+                }
+                const mfem::real_t reaction = GlobalReduction( localReaction, MPI_SUM, communicator );
+                if ( rank == 0 )
+                {
+                    forceCurve << maximumDisplacement * pseudoTime / finalPseudoTime << ',' << reaction << '\n';
+                }
+            }
+            if ( paraview && ( acceptedSteps % outputInterval == 0 || pseudoTime == finalPseudoTime ) )
+            {
+                stress.ProjectCoefficient( stressCoefficient );
+                paraview->SetCycle( acceptedSteps );
+                paraview->SetTime( pseudoTime );
+                paraview->Save();
+            }
+        } );
 
-    newton_solver->SetDataCollectionFunc( func );
-
-    Vector zero;
-
-    newton_solver->Mult( zero, xp );
-
-    // MFEMFinalizePetsc();
+    mfem::Vector zeroRightHandSide;
+    nonlinearSolver.Mult( zeroRightHandSide, solution );
+    const mfem::real_t targetTolerance = precisionTolerance * ( 1. + std::abs( finalPseudoTime ) );
+    MFEM_VERIFY( nonlinearSolver.GetConverged() && std::abs( nonlinearSolver.GetCurLambda() - finalPseudoTime ) <= targetTolerance,
+                 "pPhaseField_shear did not reach the requested final pseudo-time." );
+    displacement.SetFromTrueDofs( solution.GetBlock( 0 ) );
+    phaseField.SetFromTrueDofs( solution.GetBlock( 1 ) );
+    VerifyPhaseBounds( phaseField, communicator );
     return 0;
+}
+} // namespace
+
+int main( int argc, char* argv[] )
+{
+    mfem::Mpi::Init( argc, argv );
+    mfem::Hypre::Init();
+    return RunExample( argc, argv, MPI_COMM_WORLD );
 }

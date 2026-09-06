@@ -2,32 +2,43 @@
 
 #include "Material.h"
 #include <Eigen/Dense>
-#include <autodiff/forward/dual.hpp>
-#include <autodiff/forward/dual/eigen.hpp>
-#include <autodiff/forward/real.hpp>
-#include <autodiff/forward/real/eigen.hpp>
-#include <functional>
+#include <optional>
+
+struct PhaseFieldFractureParameters
+{
+    mfem::real_t criticalEnergyReleaseRate{ 2700. };
+    mfem::real_t lengthScale{ 0.015e-3 };
+    mfem::real_t residualStiffness{ 1e-9 };
+};
 
 class PhaseFieldElasticMaterial : public ElasticMaterial
 {
 public:
-    enum class StrainEnergyType
+    enum class StrainEnergySplit
     {
-        Amor,
-        IsotropicLinearElastic, // for testing
-        Borden
+        MieheSpectral,
+        AmorVolumetricDeviatoric,
+        Isotropic
     };
-    PhaseFieldElasticMaterial( mfem::Coefficient& E, mfem::Coefficient& nu, StrainEnergyType set = StrainEnergyType::Amor );
+
+    PhaseFieldElasticMaterial( mfem::Coefficient& E,
+                               mfem::Coefficient& nu,
+                               StrainEnergySplit split = StrainEnergySplit::MieheSpectral,
+                               PhaseFieldFractureParameters parameters = {} );
+    PhaseFieldElasticMaterial( const PhaseFieldElasticMaterial& ) = delete;
+    PhaseFieldElasticMaterial& operator=( const PhaseFieldElasticMaterial& ) = delete;
+    PhaseFieldElasticMaterial( PhaseFieldElasticMaterial&& ) = delete;
+    PhaseFieldElasticMaterial& operator=( PhaseFieldElasticMaterial&& ) = delete;
 
     virtual void updateRefModuli() override;
 
-    double E() const
+    mfem::real_t E() const
     {
         MFEM_ASSERT( mEleTrans && mIntgP, "ElementTransformation or IntegrationPoint is not set" );
         return mE->Eval( *mEleTrans, *mIntgP );
     }
 
-    double Nu() const
+    mfem::real_t Nu() const
     {
         MFEM_ASSERT( mEleTrans && mIntgP, "ElementTransformation or IntegrationPoint is not set" );
         return mNu->Eval( *mEleTrans, *mIntgP );
@@ -35,49 +46,73 @@ public:
 
     virtual const Eigen::Vector6r& getPK2StressVector() const override;
 
-    void setPhaseField( const double val )
+    void setPhaseField( mfem::real_t value );
+
+    mfem::real_t getPsiPos() const;
+    Eigen::Vector6r getPositiveStressVector() const;
+    Eigen::Vector6r getPhaseStressDerivative() const;
+
+    struct Response
     {
-        mPhi = val;
+        mfem::real_t positiveEnergy;
+        Eigen::Vector6r positiveStress;
+        Eigen::Vector6r stress;
+        Eigen::Vector6r phaseStressDerivative;
+        // Engaged exactly when EvaluateResponse(true) is requested. Maps
+        // engineering strain increments to unscaled Voigt stress increments.
+        std::optional<Eigen::Matrix6r> tangent;
+    };
+
+    /// Owning snapshot of the current borrowed material point; no persistent cache.
+    /// false skips all tangent work and returns a disengaged tangent.
+    Response EvaluateResponse( bool computeTangent ) const;
+
+    mfem::real_t getGc() const noexcept
+    {
+        return mParameters.criticalEnergyReleaseRate;
     }
 
-    double getPsiPos() const;
-
-    const double& getGc() const
+    mfem::real_t getK() const noexcept
     {
-        return mGc;
+        return mParameters.residualStiffness;
     }
 
-    const double& getK() const
+    mfem::real_t getL0() const noexcept
     {
-        return mK;
+        return mParameters.lengthScale;
     }
 
-    const double& getL0() const
+    StrainEnergySplit GetStrainEnergySplit() const noexcept
     {
-        return mL0;
+        return mStrainEnergySplit;
     }
 
-protected:
-    std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::VectorXr& )> StrainEnergyFactory( const StrainEnergyType set ) const;
+    bool SupportsMechanicalStrainInput() const noexcept override
+    {
+        return true;
+    }
 
-protected:
+private:
+    struct ElasticConstants
+    {
+        mfem::real_t lambda;
+        mfem::real_t mu;
+        mfem::real_t bulkModulus;
+    };
+
+    static void EvaluateIsotropic( const Eigen::Matrix3r& strain, const ElasticConstants& constants, mfem::real_t degradation, Response& response );
+    static void EvaluateAmor( const Eigen::Matrix3r& strain, const ElasticConstants& constants, mfem::real_t degradation, Response& response );
+    static void EvaluateSpectral( const Eigen::Matrix3r& strain, const ElasticConstants& constants, mfem::real_t degradation, Response& response );
+    ElasticConstants GetElasticConstants() const;
+    mfem::real_t Degradation() const noexcept;
+    mfem::real_t DegradationDerivative() const noexcept;
+
     mfem::Coefficient* mE{ nullptr };
     mfem::Coefficient* mNu{ nullptr };
 
-    double mPhi{ 0. };
-    double mK{ 1e-9 };      // prevent from 0 elasticity
-    double mGc{ 2700 };     // Grifﬁth-type critical energy release rate
-    double mL0{ 0.015e-3 }; // length scale
-    StrainEnergyType mSET;
-
-    std::function<autodiff::dual2nd( const autodiff::Vector6dual2nd&, const Eigen::VectorXr& )> mStrainEnergyFunc;
-
-    // params[0]: select strain energy: 0 positive, 1 negative, 2 total
-    // params[1]: phase field phi
-    mutable Eigen::VectorXr mParams;
-
-    // strain cache
-    mutable autodiff::Vector6dual2nd mStrainVecDual;
+    mfem::real_t mPhi{ 0. };
+    StrainEnergySplit mStrainEnergySplit;
+    PhaseFieldFractureParameters mParameters;
 };
 
 namespace plugin

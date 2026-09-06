@@ -1,13 +1,15 @@
 #pragma once
 
-#include "SymmetricEigensolver3x3.hpp"
 #include "typeDef.h"
 #include <Eigen/Dense>
+#include <Eigen/Eigenvalues>
 #include <autodiff/forward/real.hpp>
 #include <cmath>
 #include <functional>
 #include <iostream>
 #include <mfem.hpp>
+#include <tuple>
+#include <type_traits>
 namespace util
 {
 constexpr double pi = 3.14159265358979323846;
@@ -133,15 +135,26 @@ double SmallestCircle( const mfem::IntegrationRule& nodes, const int dim );
 //     }
 // }
 
+// Split a finite symmetric tensor with physical (not engineering) shear entries.
+// Only built-in floating-point scalars are supported: differentiating eigenvectors
+// through an eigensolver is not a valid general-purpose AD spectral derivative.
 template <typename T>
 std::tuple<Eigen::Matrix<T, 3, 3>, Eigen::Matrix<T, 3, 3>> StrainSplit( const Eigen::Matrix<T, 3, 3>& strainTensor )
 {
-    Eigen::Matrix<T, 3, 1> eval;
-    Eigen::Matrix<T, 3, 3> evec;
-    gte::SymmetricEigensolver3x3<T> eig;
-
-    eig( strainTensor( 0, 0 ), strainTensor( 0, 1 ) / 2, strainTensor( 0, 2 ) / 2, strainTensor( 1, 1 ),
-         strainTensor( 1, 2 ) / 2, strainTensor( 2, 2 ), true, 1, eval, evec );
+    static_assert( std::is_floating_point_v<T>,
+                   "StrainSplit requires a built-in floating-point scalar; AD is unsupported" );
+    MFEM_VERIFY( strainTensor.allFinite(), "StrainSplit requires finite strain entries" );
+    // Scale the symmetry check so its squared norms cannot overflow/underflow.
+    const T scale = strainTensor.cwiseAbs().maxCoeff();
+    if ( scale > 0 )
+    {
+        const Eigen::Matrix<T, 3, 3> normalized = strainTensor / scale;
+        MFEM_VERIFY( normalized.isApprox( normalized.transpose() ), "StrainSplit requires a symmetric strain tensor" );
+    }
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<T, 3, 3>> eig( strainTensor );
+    MFEM_VERIFY( eig.info() == Eigen::Success, "StrainSplit eigendecomposition failed" );
+    const auto& eval = eig.eigenvalues();
+    const auto& evec = eig.eigenvectors();
 
     Eigen::Matrix<T, 3, 3> strainPos;
     Eigen::Matrix<T, 3, 3> strainNeg;

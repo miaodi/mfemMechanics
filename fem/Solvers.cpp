@@ -558,8 +558,13 @@ void NewtonLineSearch::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 
 void NewtonForPhaseField::SetOperator( const mfem::Operator& op )
 {
+    auto* blockNonlinearForm = dynamic_cast<mfem::BlockNonlinearForm*>( const_cast<mfem::Operator*>( &op ) );
+    MFEM_VERIFY( blockNonlinearForm != nullptr, "NewtonForPhaseField requires an mfem::BlockNonlinearForm operator." );
+    MFEM_VERIFY( blockNonlinearForm->GetBlockTrueOffsets().Size() == 3,
+                 "NewtonForPhaseField requires exactly two unknown blocks: displacement and phase field." );
+
     NewtonLineSearch::SetOperator( op );
-    blockOper = static_cast<mfem::BlockNonlinearForm*>( const_cast<mfem::Operator*>( &op ) );
+    blockOper = blockNonlinearForm;
     block_trueOffsets = blockOper->GetBlockTrueOffsets();
 
     r_u = mfem::Vector( r.GetData() + block_trueOffsets[0], block_trueOffsets[1] - block_trueOffsets[0] );
@@ -571,14 +576,13 @@ void NewtonForPhaseField::SetOperator( const mfem::Operator& op )
 void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
 {
     using namespace mfem;
-    MFEM_ASSERT( oper != NULL, "the Operator is not set (use SetOperator)." );
-    MFEM_ASSERT( prec != NULL, "the Solver is not set (use SetSolver)." );
+    MFEM_VERIFY( oper != nullptr && blockOper != nullptr, "The phase-field operator is not set (use SetOperator)." );
+    MFEM_VERIFY( prec != nullptr, "The phase-field linear solver is not set (use SetSolver)." );
+    MFEM_VERIFY( x.Size() == Height(), "The phase-field solution vector has the wrong size." );
 
     SolutionSnapshot solution_snapshot( x );
     IntegratorStep integrator_step( *this, oper );
 
-    mfem::real_t norm0_u, norm_u, norm_goal_u;
-    mfem::real_t norm0_p{ 0 }, norm_p{ 0 }, norm_goal_p{ 100 };
     const bool have_b = ( b.Size() == Height() );
 
     if ( !iterative_mode )
@@ -586,34 +590,76 @@ void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         x = 0.0;
     }
 
-    mfem::Vector& cur_u = static_cast<mfem::BlockVector&>( x ).GetBlock( 0 );
-    mfem::Vector& cur_p = static_cast<mfem::BlockVector&>( x ).GetBlock( 1 );
+    mfem::Vector cur_u( x.GetData() + block_trueOffsets[0], block_trueOffsets[1] - block_trueOffsets[0] );
+    mfem::Vector cur_p( x.GetData() + block_trueOffsets[1], block_trueOffsets[2] - block_trueOffsets[1] );
 
     ProcessNewState( x );
 
-    blockOper->Mult( x, r );
-    if ( have_b )
+    mfem::real_t norm_u = 0.;
+    mfem::real_t norm_p = 0.;
+    mfem::real_t norm0_u = 0.;
+    mfem::real_t norm0_p = 0.;
+    mfem::real_t norm_goal_u = abs_tol;
+    mfem::real_t norm_goal_p = abs_tol;
+    // Both residuals must belong to the same current (u, phi). Recompute
+    // both after either update; convergence of one block is never latched.
+    const auto evaluateResidual = [&]()
     {
-        r -= b;
-    }
+        blockOper->Mult( x, r );
+        if ( have_b )
+        {
+            r -= b;
+        }
+        norm_u = Norm( r_u );
+        norm_p = Norm( r_p );
+        // Freeze each block's relative reference at its first nonzero residual,
+        // including evaluations between block updates. An initially zero block
+        // may be activated by coupling; using zero forever would require exact
+        // convergence when abs_tol == 0. Initial nonzero references never change.
+        if ( norm0_u == 0. && norm_u > 0. && mfem::IsFinite( norm_u ) )
+        {
+            norm0_u = norm_u;
+            norm_goal_u = std::max( rel_tol * norm0_u, abs_tol );
+        }
+        if ( norm0_p == 0. && norm_p > 0. && mfem::IsFinite( norm_p ) )
+        {
+            norm0_p = norm_p;
+            norm_goal_p = std::max( rel_tol * norm0_p, abs_tol );
+        }
+    };
+    const auto getBlockGradient = [&]() -> mfem::BlockOperator&
+    {
+        auto* gradient = dynamic_cast<mfem::BlockOperator*>( &blockOper->GetGradient( x ) );
+        MFEM_VERIFY( gradient != nullptr, "NewtonForPhaseField requires a two-by-two mfem::BlockOperator gradient." );
+        MFEM_VERIFY( gradient->NumRowBlocks() == 2 && gradient->NumColBlocks() == 2,
+                     "NewtonForPhaseField requires a two-by-two block gradient." );
+        return *gradient;
+    };
 
-    norm0_u = norm_u = Norm( r_u );
-    norm_goal_u = std::max( rel_tol * norm_u, abs_tol );
+    evaluateResidual();
 
+    mfem::Solver& phaseLinearSolver = phaseSolver ? *phaseSolver : *prec;
     prec->iterative_mode = false;
+    phaseLinearSolver.iterative_mode = false;
 
-    // x_{i+1} = x_i - [DF(x_i)]^{-1} [F(x_i)-b]
+    // One block-Newton correction per sweep, not a converged nonlinear
+    // displacement subsolve. Even exact diagonal solves can converge slowly
+    // through coupling; a small phase residual alone does not imply equilibrium.
     for ( it = 0; true; it++ )
     {
-        // r_u.Print();
         if ( MyRank() == 0 )
         {
-            mfem::out << "Newton iteration " << std::setw( 2 ) << it << " : ||r_u|| = " << norm_u;
-            if ( it > 0 )
+            mfem::out << "Phase-field iteration " << std::setw( 2 ) << it << " : ||r_u|| = " << norm_u << ", ||r_phi|| = " << norm_p;
+            mfem::out << ", goals = (" << norm_goal_u << ", " << norm_goal_p << ")";
+            if ( it > 0 && norm0_u > 0. )
             {
-                mfem::out << " : ||r_p|| = " << norm_p << ", ||r_u||/||r_u_0|| = " << norm_u / norm0_u
-                          << ", ||r_p||/||r_p_0|| = " << norm_p / norm0_p << '\n';
+                mfem::out << ", ||r_u||/||r_u_0|| = " << norm_u / norm0_u;
             }
+            if ( it > 0 && norm0_p > 0. )
+            {
+                mfem::out << ", ||r_phi||/||r_phi_0|| = " << norm_p / norm0_p;
+            }
+            mfem::out << '\n';
         }
 
         if ( !mfem::IsFinite( norm_u ) || !mfem::IsFinite( norm_p ) )
@@ -632,34 +678,30 @@ void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             converged = false;
             break;
         }
-        prec->SetOperator( static_cast<mfem::BlockOperator&>( blockOper->GetGradient( x ) ).GetBlock( 0, 0 ) );
-        prec->Mult( r_u, c_u ); // c = [DF(x_i)]^{-1} [F(x_i)-b]
-        add( cur_u, -1., c_u, cur_u );
-        blockOper->Mult( x, r );
 
-        if ( it == 0 )
+        // Skip only at the current state. A subsequent phase update can
+        // reactivate displacement, which is checked on the next sweep.
+        if ( norm_u > norm_goal_u )
         {
-            norm0_p = norm_p = Norm( r_p );
-            norm_goal_p = std::max( rel_tol * norm_p, abs_tol );
-            if ( MyRank() == 0 )
-                mfem::out << " : ||r_p|| = " << norm_p << "\n";
+            prec->SetOperator( getBlockGradient().GetBlock( 0, 0 ) );
+            prec->Mult( r_u, c_u );
+            add( cur_u, -1., c_u, cur_u );
+            ProcessNewState( x );
+            evaluateResidual();
         }
 
-        prec->SetOperator( static_cast<mfem::BlockOperator&>( blockOper->GetGradient( x ) ).GetBlock( 1, 1 ) );
-        prec->Mult( r_p, c_p ); // c = [DF(x_i)]^{-1} [F(x_i)-b]
-        add( cur_p, -1., c_p, cur_p );
-        blockOper->Mult( x, r );
-
-        norm_u = Norm( r_u );
-        norm_p = Norm( r_p );
-
-        if ( have_b )
+        if ( norm_p > norm_goal_p )
         {
-            r -= b;
+            phaseLinearSolver.SetOperator( getBlockGradient().GetBlock( 1, 1 ) );
+            phaseLinearSolver.Mult( r_p, c_p );
+            add( cur_p, -1., c_p, cur_p );
+            ProcessNewState( x );
+            evaluateResidual();
         }
     }
 
     final_iter = it;
+    final_norm = Norm( r );
 
     if ( !converged && MyRank() == 0 )
     {

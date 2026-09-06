@@ -1,4 +1,5 @@
 #include "PostProc.h"
+#include "PhaseFieldMaterial.h"
 
 namespace plugin
 {
@@ -28,6 +29,7 @@ StressCoefficient::StressCoefficient( int d, ElasticMaterial& mat )
 void StressCoefficient::Eval( mfem::Vector& V, mfem::ElementTransformation& T, const mfem::IntegrationPoint& ip )
 {
     MFEM_ASSERT( u != NULL, "displacement field is not set" );
+    T.SetIntPoint( &ip );
     u->GetVectorGradient( T, grad );
 
     Eigen::Map<Eigen::MatrixXr> dudX( grad.Data(), dim, dim );
@@ -38,6 +40,12 @@ void StressCoefficient::Eval( mfem::Vector& V, mfem::ElementTransformation& T, c
     materialModel->at( T, ip );
     materialModel->setLoadFactor( loadFactor );
     materialModel->setDeformationGradient( F );
+    if ( auto* phaseFieldMaterial = dynamic_cast<PhaseFieldElasticMaterial*>( materialModel ) )
+    {
+        MFEM_VERIFY( phaseField != nullptr,
+                     "StressCoefficient requires SetPhaseField() when evaluating a PhaseFieldElasticMaterial." );
+        phaseFieldMaterial->setPhaseField( phaseField->GetValue( T, ip ) );
+    }
     if ( !stressFreeDeformations.Empty() )
     {
         if ( materialModel->isSmallDeformation() )
@@ -64,14 +72,14 @@ void StressCoefficient::Eval( mfem::Vector& V, mfem::ElementTransformation& T, c
     materialModel->updateRefModuli();
     auto vector = materialModel->getCauchyStressVector();
 
+    V.SetSize( 7 );
     V( 0 ) = vector( 0 );
     V( 1 ) = vector( 1 );
     V( 2 ) = vector( 2 );
     V( 3 ) = vector( 3 );
     V( 4 ) = vector( 4 );
     V( 5 ) = vector( 5 );
-    V( 6 ) = std::sqrt( 1. / 2 *
-                        ( std::pow( V( 0 ) - V( 1 ), 2 ) + std::pow( V( 1 ) - V( 2 ), 2 ) + std::pow( V( 2 ) - V( 0 ), 2 ) +
-                          6 * ( std::pow( V( 3 ), 2 ), std::pow( V( 4 ), 2 ), std::pow( V( 5 ), 2 ) ) ) ); // Von mises srtess
+    V( 6 ) = std::sqrt( .5 * ( std::pow( V( 0 ) - V( 1 ), 2 ) + std::pow( V( 1 ) - V( 2 ), 2 ) + std::pow( V( 2 ) - V( 0 ), 2 ) ) +
+                        3. * ( std::pow( V( 3 ), 2 ) + std::pow( V( 4 ), 2 ) + std::pow( V( 5 ), 2 ) ) );
 }
 } // namespace plugin

@@ -4,6 +4,7 @@
 #include "PhaseFieldMaterial.h"
 #include "util.h"
 #include <Eigen/Dense>
+#include <algorithm>
 #include <mfem.hpp>
 #include <type_traits>
 
@@ -39,6 +40,13 @@ public:
     void BeginStep() noexcept override;
     void CommitStep() noexcept override;
     void RollbackStep() noexcept override;
+
+    /// Override the quadrature rule. The borrowed rule must outlive this integrator.
+    void SetIntRule( const mfem::IntegrationRule* rule ) noexcept
+    {
+        mIntegrationRule = rule;
+    }
+
     bool CanCommitStep() const noexcept override
     {
         return !mStepRejected;
@@ -65,6 +73,7 @@ protected:
     mfem::DenseMatrix mDShape, mGShape;
     int mStepDepth{ 0 };
     bool mStepRejected{ false };
+    const mfem::IntegrationRule* mIntegrationRule{ nullptr };
 };
 
 class BlockNonlinearDirichletPenaltyIntegrator : public BlockStepAwareNonlinearFormIntegrator

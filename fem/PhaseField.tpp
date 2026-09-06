@@ -96,7 +96,10 @@ void PhaseFieldIntegrator<PointStorage>::AssembleElementVector( const mfem::Arra
     Eigen::Map<Eigen::VectorXr> displacementResidual( elementResidual[0]->GetData(), displacementDofs * dimension );
     Eigen::Map<Eigen::VectorXr> phaseResidual( elementResidual[1]->GetData(), phaseDofs );
 
-    const mfem::IntegrationRule& rule = mfem::IntRules.Get( el[0]->GetGeomType(), 2 * el[0]->GetOrder() + 1 );
+    const mfem::IntegrationRule& rule =
+        mIntegrationRule
+            ? *mIntegrationRule
+            : mfem::IntRules.Get( el[0]->GetGeomType(), 2 * std::max( el[0]->GetOrder(), el[1]->GetOrder() ) + 1 );
     const Eigen::Matrix3r identity = Eigen::Matrix3r::Identity();
 
     mPointStorage.InitializeElement( *el[0], transformation, rule );
@@ -127,9 +130,10 @@ void PhaseFieldIntegrator<PointStorage>::AssembleElementVector( const mfem::Arra
         mMaterialModel->setPhaseField( phaseValue );
 
         const mfem::real_t weight = integrationPoint.weight * point.DetdXdXi;
-        displacementResidual += weight * ( mB.transpose() * mMaterialModel->getPK2StressVector() );
+        const auto response = mMaterialModel->EvaluateResponse( false );
+        displacementResidual += weight * ( mB.transpose() * response.stress );
 
-        mfem::real_t positiveEnergy = mMaterialModel->getPsiPos();
+        mfem::real_t positiveEnergy = response.positiveEnergy;
         auto& history = point.State.template Get<PhaseFieldElasticMaterial>();
         UpdateHistory( history, positiveEnergy );
 
@@ -173,9 +177,14 @@ void PhaseFieldIntegrator<PointStorage>::AssembleElementGrad( const mfem::Array<
 
     Eigen::Map<Eigen::MatrixXr> displacementJacobian( elementJacobian( 0, 0 )->Data(), displacementDofs * dimension,
                                                       displacementDofs * dimension );
+    Eigen::Map<Eigen::MatrixXr> displacementPhaseJacobian( elementJacobian( 0, 1 )->Data(), displacementDofs * dimension, phaseDofs );
+    Eigen::Map<Eigen::MatrixXr> phaseDisplacementJacobian( elementJacobian( 1, 0 )->Data(), phaseDofs, displacementDofs * dimension );
     Eigen::Map<Eigen::MatrixXr> phaseJacobian( elementJacobian( 1, 1 )->Data(), phaseDofs, phaseDofs );
 
-    const mfem::IntegrationRule& rule = mfem::IntRules.Get( el[0]->GetGeomType(), 2 * el[0]->GetOrder() + 1 );
+    const mfem::IntegrationRule& rule =
+        mIntegrationRule
+            ? *mIntegrationRule
+            : mfem::IntRules.Get( el[0]->GetGeomType(), 2 * std::max( el[0]->GetOrder(), el[1]->GetOrder() ) + 1 );
     const Eigen::Matrix3r identity = Eigen::Matrix3r::Identity();
 
     mPointStorage.InitializeElement( *el[0], transformation, rule );
@@ -202,14 +211,21 @@ void PhaseFieldIntegrator<PointStorage>::AssembleElementGrad( const mfem::Array<
         mMaterialModel->at( transformation, integrationPoint );
         mMaterialModel->setDeformationGradient( mdxdX );
         mMaterialModel->setPhaseField( phaseValue );
-        mMaterialModel->updateRefModuli();
+        const auto response = mMaterialModel->EvaluateResponse( true );
 
         const mfem::real_t weight = integrationPoint.weight * point.DetdXdXi;
-        displacementJacobian += weight * mB.transpose() * mMaterialModel->getRefModuli() * mB;
+        displacementJacobian += weight * mB.transpose() * *response.tangent * mB;
+        displacementPhaseJacobian += weight * ( mB.transpose() * response.phaseStressDerivative ) * phaseShape.transpose();
 
-        mfem::real_t positiveEnergy = mMaterialModel->getPsiPos();
+        mfem::real_t positiveEnergy = response.positiveEnergy;
         auto& history = point.State.template Get<PhaseFieldElasticMaterial>();
+        const bool historyIsActive = positiveEnergy > history.CommittedValue();
         UpdateHistory( history, positiveEnergy );
+
+        if ( historyIsActive )
+        {
+            phaseDisplacementJacobian += weight * phaseShape * response.phaseStressDerivative.transpose() * mB;
+        }
 
         phaseJacobian += weight * ( fractureEnergy * lengthScale * phaseGradientShape * phaseGradientShape.transpose() +
                                     ( fractureEnergy / lengthScale + 2 * ( 1 - residualStiffness ) * positiveEnergy ) *
