@@ -303,6 +303,8 @@ under `docs/`. Before implementation or review, record:
    venue/publisher and year, exact equation/section/page used, and a DOI or
    stable URL when available. Mark formulas adopted verbatim, formulas adapted
    to this repository's notation, and original derivation steps separately.
+   When searching for a paper or book, try connecting to Zotero through the available
+   Zotero skill/connector to search the local library and available full text.
    Verify references from the source; never invent metadata, quotations, or
    equation numbers. If a source cannot be verified, say so and do not present
    the citation as evidence.
