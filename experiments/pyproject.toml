@@ -1,0 +1,16 @@
+[project]
+name = "mfem-mechanics-experiments"
+version = "0.1.0"
+description = "Exploratory scripts and idea verification for mfemMechanics"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "ipykernel>=7.3.0",
+    "ipywidgets>=8.1.9",
+    "jupyterlab>=4.6.3",
+    "matplotlib>=3.11.1",
+    "nbclient>=0.11.0",
+    "numpy>=2.5.3",
+]
+
+[tool.uv]
+package = false

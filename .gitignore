@@ -11,3 +11,10 @@
 !/.vscode/settings.json
 .DS_Store
 ._*
+
+# Exploratory Python environments and generated output
+/experiments/**/.venv/
+/experiments/**/__pycache__/
+/experiments/**/*.py[cod]
+/experiments/**/.ipynb_checkpoints/
+/experiments/**/output/
