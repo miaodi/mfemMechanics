@@ -15,7 +15,8 @@ No manual environment activation or separate kernel installation is needed.
 
 Select **Python 3 (ipykernel)**, then **Kernel > Restart Kernel and Run All Cells**.
 The first cell reports the interpreter; it should be inside `experiments/.venv/`.
-The notebook includes the model PDF link, controls, plots, tables, and animation.
+The committed notebook is output-free. Running all cells generates its controls,
+plots, tables, and embedded animation; the model PDF is linked from the notebook.
 
 For a remote/headless machine, use the same command with `--no-browser` and open
 the server URL through your usual SSH port forwarding:

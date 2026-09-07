@@ -534,7 +534,7 @@ def plot_sweep(rows: list[dict[str, Any]], field: str) -> Any:
     return fig
 
 
-def animate(sol: dict[str, Any], p: Parameters, frames: int = 160, fps: float = 15,
+def animate(sol: dict[str, Any], p: Parameters, frames: int = 480, fps: float = 20,
             *, displacement_scale: float = 1.0) -> Any:
     """Return FuncAnimation for to_jshtml(default_mode='once'); never save files.
 
@@ -543,6 +543,8 @@ def animate(sol: dict[str, Any], p: Parameters, frames: int = 160, fps: float = 
     displacements are magnified: endpoints are (-L+s*U, s*u), s=displacement_scale.
     The dashed length-L guide is not another physical rod. Histories and numeric
     labels remain physical; adhesive opacity is beta, without a debond cutoff.
+    Rod color represents uniform signed axial stress N/A, not bond traction.
+    One symmetric color range covers the entire history and all rendered frames.
     """
     _validate_solution(sol, p)
     if isinstance(frames, (bool, np.bool_)) or not isinstance(frames, Integral) or not 2 <= frames <= 600:
@@ -559,7 +561,20 @@ def animate(sol: dict[str, Any], p: Parameters, frames: int = 160, fps: float = 
     _finite(1.08 * span, "display axis limit")
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
     from matplotlib.patches import FancyArrowPatch, Rectangle
+
+    frame_times = np.linspace(float(sol["t"][0]), float(sol["t"][-1]), frames)
+    frame_U = np.interp(frame_times, sol["t"], sol["U"])
+    frame_beta = np.interp(frame_times, sol["t"], sol["beta"])
+    frame_states = np.asarray([mechanics(U, beta, p) for U, beta in zip(frame_U, frame_beta)])
+    stress_limit = _finite(max(float(np.max(np.abs(sol["N"] / p.A))),
+                              float(np.max(np.abs(frame_states[:, 4] / p.A)))), "stress color range")
+    # Zero-load runs need a nondegenerate display range, not a fabricated stress.
+    stress_limit = stress_limit if stress_limit > 0 else p.p_ref
+    _finite(2 * stress_limit, "stress color span")
+    stress_colors = ScalarMappable(norm=Normalize(-stress_limit, stress_limit), cmap="coolwarm")
 
     fig, axes = plt.subplots(3, 1, figsize=(10, 8), constrained_layout=True,
                              gridspec_kw={"height_ratios": [1.5, 1, 1]})
@@ -569,14 +584,19 @@ def animate(sol: dict[str, Any], p: Parameters, frames: int = 160, fps: float = 
               yticks=[], title=f"Rod and rigid wall | displacement magnification {displacement_scale:g}x (visual only)")
     scene.axvline(0, color="0.2", linewidth=3)
     scene.axvspan(0, 0.15 * span, color="0.9", hatch="//")
-    rod = Rectangle((-span, -0.14), p.L, 0.28, color="tab:blue")
+    rod = Rectangle((-span, -0.14), p.L, 0.28, facecolor=stress_colors.to_rgba(0),
+                    edgecolor="0.2", linewidth=1)
     scene.add_patch(rod)
+    colorbar = fig.colorbar(stress_colors, ax=scene, pad=0.02, fraction=0.045,
+                           ticks=[-stress_limit, 0, stress_limit], format="%.3g")
+    colorbar.set_label("Rod axial stress [stress]\n(tension +)", fontsize=9)
+    colorbar.ax.tick_params(labelsize=8)
     reference = Rectangle((-span, -0.18), p.L, 0.36, fill=False, edgecolor="0.4",
                           linestyle="--", linewidth=1.2, zorder=4, label="Unstretched length L (guide)")
     scene.add_patch(reference)
-    scene.legend(loc="lower left", fontsize=8)
     adhesive, = scene.plot([], [], color="tab:orange", linewidth=10, solid_capstyle="butt",
-                           marker="o", markersize=7)
+                            marker="o", markersize=7, label="Adhesion (opacity = beta)")
+    scene.legend(handles=[reference, adhesive], loc="lower left", fontsize=7, ncol=2)
     actuator, = scene.plot([], [], "|", color="black", markersize=35, markeredgewidth=2)
     arrow = FancyArrowPatch((0, 0), (0, 0), arrowstyle="-|>", mutation_scale=14, color="tab:red")
     scene.add_patch(arrow)
@@ -598,18 +618,17 @@ def animate(sol: dict[str, Any], p: Parameters, frames: int = 160, fps: float = 
         ax.grid(alpha=0.25)
         ax.legend(loc="upper right", fontsize="small")
     bonds.legend(handles=[bond_line, strain_line], loc="upper right", fontsize="small")
-    frame_times = np.linspace(float(sol["t"][0]), float(sol["t"][-1]), frames)
     ends = np.asarray([s["end"] for s in sol["segments"]])
 
     def update(index: int) -> tuple[Any, ...]:
         time = float(frame_times[index])
-        U = float(np.interp(time, sol["t"], sol["U"]))
-        beta = float(np.interp(time, sol["t"], sol["beta"]))
-        u, gap, P, Fb, N = mechanics(U, beta, p)
+        U, beta = float(frame_U[index]), float(frame_beta[index])
+        u, gap, P, Fb, N = frame_states[index]
         left = -p.L + displacement_scale * U
         tip = displacement_scale * u
         rod.set_x(left)
         rod.set_width(tip - left)
+        rod.set_facecolor(stress_colors.to_rgba(N / p.A))
         reference.set_x(left)
         actuator.set_data([left], [0])
         adhesive.set_data([tip, 0], [0, 0])

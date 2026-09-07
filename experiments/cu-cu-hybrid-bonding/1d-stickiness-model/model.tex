@@ -487,8 +487,23 @@ unstretched-length guide follows the actuator. It is not a second rod and
 may cross the wall during compression. Numeric strain, gap, pressure, and
 both traction labels remain physical, as do all history plots. A magnification
 that collapses the displayed compressed rod is rejected. Adhesive opacity
-tracks beta continuously, with no visual failure cutoff. The initial movie
-uses 120 frames at 5 fps, about 24 seconds for one cycle. The loop button
+tracks beta continuously, with no visual failure cutoff. Rod color instead
+represents the signed axial stress $N/A$: blue in compression, neutral at
+zero, and red in tension. The labelled colorbar uses one symmetric range
+covering the complete stored history and all rendered frames, not a separately
+rescaled range for each frame. Thus a relaxing rod fades toward neutral. The
+stress is uniform along this one-element rod; no spatial stress gradient is
+invented. For an identically zero-stress run, the display uses the reference
+range $[-p_{\mathrm{ref}},p_{\mathrm{ref}}]$ while keeping the rod neutral.
+The guide and orange adhesive link have their own legend.
+
+The initial movie uses 480 frames at 20 fps, about 24 seconds for one cycle.
+The increased frame count smooths playback without changing its duration or
+the time-integration resolution. An embedded MP4 keeps the inline notebook
+size manageable; compression affects images only, not numerical arrays or
+reported results. The encoder is supplied by \code{imageio-ffmpeg} in the
+managed Python environment, without a separate system installation. Browser
+controls provide playback and seeking, and a \emph{Loop this cycle} checkbox
 replays that trajectory; changing the physical cycle count is a separate action.
 
 Regression tests check mechanical equilibrium, contact complementarity,

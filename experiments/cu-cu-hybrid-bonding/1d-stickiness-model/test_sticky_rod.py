@@ -536,6 +536,55 @@ class NotebookFigureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reduce displacement_scale"):
             animate(self.sol, self.p, displacement_scale=self.p.L / self.p.U_press)
 
+    def test_signed_stress_colors_and_fixed_colorbar(self):
+        p = replace(self.p, A=3.5)
+        sol = simulate(p)
+        animation = animate(sol, p, frames=13, fps=20, displacement_scale=10)
+        bar = next(ax._colorbar for ax in animation._fig.axes if hasattr(ax, "_colorbar"))
+        times = np.linspace(sol["t"][0], sol["t"][-1], 13)
+        stresses = [mechanics(float(np.interp(t, sol["t"], sol["U"])),
+                              float(np.interp(t, sol["t"], sol["beta"])), p)[4] / p.A
+                    for t in times]
+        limit = max(float(np.max(np.abs(sol["N"] / p.A))), max(abs(s) for s in stresses))
+        self.assertEqual((bar.norm.vmin, bar.norm.vmax), (-limit, limit))
+        self.assertIn("Rod axial stress", bar.ax.get_ylabel())
+        self.assertIn("tension +", bar.ax.get_ylabel())
+        self.assertEqual(animation._interval, 50)
+        self.assertLess(min(stresses), 0)
+        self.assertGreater(max(stresses), 0)
+        self.assertIn(0, stresses)
+        for index, stress in enumerate(stresses):
+            rod_patch = animation._func(index)[0]
+            np.testing.assert_allclose(rod_patch.get_facecolor(), bar.cmap(bar.norm(stress)))
+            self.assertEqual((bar.norm.vmin, bar.norm.vmax), (-limit, limit))
+        labels = [text.get_text() for text in animation._fig.axes[0].get_legend().get_texts()]
+        self.assertIn("Unstretched length L (guide)", labels)
+        self.assertIn("Adhesion (opacity = beta)", labels)
+        # Exercise the notebook's compressed video and verify no frames were lost.
+        import base64
+        import imageio_ffmpeg
+        encoder = imageio_ffmpeg.get_ffmpeg_exe()
+        with self.plt.rc_context({"animation.writer": "ffmpeg", "animation.ffmpeg_path": encoder,
+                                 "animation.ffmpeg_args": ["-movflags", "+faststart", "-threads", "1"]}):
+            html = animation.to_html5_video()
+        payload = html.split("data:video/mp4;base64,", 1)[1].split('"', 1)[0]
+        result = subprocess.run([encoder, "-v", "error", "-i", "pipe:0", "-map", "0:v:0",
+                                 "-f", "framemd5", "-"], input=base64.b64decode(payload),
+                                capture_output=True, check=True)
+        decoded_frames = [line for line in result.stdout.splitlines() if line and not line.startswith(b"#")]
+        self.assertEqual(len(decoded_frames), 13)
+
+    def test_zero_stress_animation_stays_neutral(self):
+        p = Parameters(p_peak=0, k_f=0)
+        sol = simulate(p)
+        animation = animate(sol, p, frames=2, fps=20)
+        bar = next(ax._colorbar for ax in animation._fig.axes if hasattr(ax, "_colorbar"))
+        self.assertEqual((bar.norm.vmin, bar.norm.vmax), (-p.p_ref, p.p_ref))
+        for index in range(2):
+            rod_patch = animation._func(index)[0]
+            np.testing.assert_allclose(rod_patch.get_facecolor(), bar.cmap(bar.norm(0)))
+        self.assertIn("image/png", animation.to_jshtml(default_mode="once"))
+
     def test_visualization_validation(self):
         for frames in (0, 1, 601, 3.5, True):
             with self.assertRaises(ValueError):
