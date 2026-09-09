@@ -564,6 +564,34 @@ private:
     bool mRejected{ false };
     mfem::real_t mResidual{ 0. };
 };
+
+class CompositeTestOperator final : public mfem::Operator, public plugin::CompositeNonlinearOperator
+{
+public:
+    explicit CompositeTestOperator( mfem::Operator& child )
+        : mfem::Operator( child.Height(), child.Width() ), mChild( child )
+    {
+    }
+
+    void Mult( const mfem::Vector& input, mfem::Vector& output ) const override
+    {
+        mChild.Mult( input, output );
+    }
+
+    mfem::Operator& GetGradient( const mfem::Vector& input ) const override
+    {
+        return mChild.GetGradient( input );
+    }
+
+    void GetChildOperators( std::vector<const mfem::Operator*>& children ) const override
+    {
+        children.push_back( &mChild );
+        children.push_back( &mChild );
+    }
+
+private:
+    mfem::Operator& mChild;
+};
 } // namespace
 
 TEST( J2Plasticity, ZeroAndHydrostaticStrainRemainElastic )
@@ -1104,6 +1132,28 @@ TEST( NonlinearStepLifecycle, RejectedIntegratorRollsBackWholeTransaction )
     EXPECT_EQ( companion->Commits(), 0 );
     EXPECT_EQ( rejected->Rollbacks(), 1 );
     EXPECT_EQ( companion->Rollbacks(), 1 );
+}
+
+TEST( NonlinearStepLifecycle, CompositeOperatorForwardsLifecycleToNestedForm )
+{
+    mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL );
+    mfem::H1_FECollection collection( 1, mesh.Dimension() );
+    mfem::FiniteElementSpace space( &mesh, &collection );
+    mfem::NonlinearForm form( &space );
+    auto* integrator = new PoisonableIntegrator;
+    form.AddDomainIntegrator( integrator );
+    CompositeTestOperator composite( form );
+    FixedStepContext context;
+
+    context.BeginStep( &composite );
+    EXPECT_TRUE( context.CommitStep( &composite ) );
+    EXPECT_EQ( integrator->Commits(), 1 );
+    EXPECT_EQ( integrator->Rollbacks(), 0 );
+
+    context.BeginStep( &composite );
+    context.RollbackStep( &composite );
+    EXPECT_EQ( integrator->Commits(), 1 );
+    EXPECT_EQ( integrator->Rollbacks(), 1 );
 }
 
 TEST( NewtonLineSearch, FailedSolveRestoresInputSolution )

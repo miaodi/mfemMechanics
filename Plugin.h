@@ -1,9 +1,11 @@
 #pragma once
 
 #include "AMR.h"
+#include "BoundaryMultiplierSpace.h"
 #include "CZM.h"
 #include "Contact.h"
 #include "FEMPlugin.h"
+#include "OperatorSum.h"
 #include "PostProc.h"
 #include "SolidMechanicsIntegrator.h"
 #include "Solvers.h"

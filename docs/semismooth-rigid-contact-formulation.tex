@@ -1,0 +1,1277 @@
+% !TeX program = pdflatex
+% Build from the repository root; generated files stay in the ignored build tree:
+% latexmk -pdf -outdir=build/docs/semismooth-contact docs/semismooth-rigid-contact-formulation.tex
+% Technical documentation, not a submitted or published research article.
+% The worked discretization and circle solver below retain the default P0 specialization.
+% Configurable L2 ownership/assembly: docs/boundary-multiplier-space.md.
+% 2026-09-09 boundary-space documentation update: no rebuild or new numerical tests.
+\documentclass[preprint,11pt]{elsarticle}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs,array}
+\usepackage{placeins}
+\usepackage[margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{xurl}
+\usepackage[hidelinks]{hyperref}
+\hypersetup{pdftitle={Semismooth rigid contact for vector displacement: weak form and discretization}}
+\journal{mfemMechanics technical documentation}
+% Suppress elsarticle's submission-style first-page footer; retain page numbers.
+\makeatletter
+\let\ps@pfirstpage\ps@plain
+\makeatother
+\numberwithin{equation}{section}
+\newcommand{\bu}{\boldsymbol{u}}
+\newcommand{\bv}{\boldsymbol{v}}
+\newcommand{\bw}{\boldsymbol{w}}
+\newcommand{\bx}{\boldsymbol{x}}
+\newcommand{\bX}{\boldsymbol{X}}
+\newcommand{\bn}{\boldsymbol{n}}
+\newcommand{\bN}{\boldsymbol{N}}
+\newcommand{\bH}{\boldsymbol{H}}
+\newcommand{\bI}{\boldsymbol{I}}
+\newcommand{\bP}{\boldsymbol{P}}
+\newcommand{\bF}{\boldsymbol{F}}
+\newcommand{\bS}{\boldsymbol{S}}
+\newcommand{\bC}{\mathbb{C}}
+\newcommand{\Gc}{\Gamma_{c0}}
+\newcommand{\ip}[2]{\left\langle #1,#2\right\rangle_{\Gc}}
+\newcommand{\iq}[2]{\left\langle #1,#2\right\rangle_Q}
+\newcommand{\pos}[1]{\left[#1\right]_+}
+\newcommand{\Grad}{\operatorname{Grad}}
+\newcommand{\eps}{\boldsymbol{\varepsilon}}
+\newcommand{\Rbulk}{R_{\mathrm{bulk}}}
+\newcommand{\Pibulk}{\Pi_{\mathrm{bulk}}}
+\newcommand{\code}[1]{\texttt{\nolinkurl{#1}}}
+\newcommand{\testname}[1]{\par\smallskip\noindent\code{#1}\par\nobreak}
+\setlength{\emergencystretch}{2em}
+
+\begin{document}
+\begin{frontmatter}
+\title{Semismooth rigid contact for vector displacement:\\
+gap kinematics, mixed weak form, and finite element discretization\\[3pt]
+\large A formulation note for mfemMechanics technical documentation}
+% Intentionally no research-author or affiliation attribution.
+\begin{abstract}
+This technical documentation derives the displacement--multiplier equations
+implemented by \texttt{SemismoothRigidContactOperator} in mfemMechanics.
+It is an implementation-oriented adaptation of the contact algebra in
+Burman, Hansbo, and Larson's augmented Lagrangian formulation, not a claim of
+publication, submission, or a new stability theorem. The starting point is
+the vector-displacement counterpart of Eq.~(2.3) in the authors'
+12 September 2016 arXiv v1 PDF. A positive signed gap and a positive
+compressive nominal multiplier are used throughout. The initial gap is
+separated from displacement-induced closure, exactly for a plane and through
+an integral remainder for a curved rigid wall. A reference-boundary saddle
+functional then gives the mixed residual, default boundary piecewise-constant
+multiplier stabilization, and all four generalized Jacobian blocks,
+including the signed-distance curvature term. The finite element and
+quadrature equations are developed explicitly, followed by a hand-integrated
+two-node edge, essential-constraint handling, primal-field extraction, and
+the monolithic Newton solve. Named source tests provide a verification map;
+no new numerical experiments are reported. In particular, discrete face
+moments and algebraic convergence are not presented as pointwise
+nonpenetration or as evidence of mesh-independent stability.
+\end{abstract}
+\begin{keyword}
+Rigid contact \sep Vector elasticity \sep Signed distance \sep
+Augmented Lagrangian \sep Semismooth Newton method \sep Boundary P0 multiplier
+\end{keyword}
+\end{frontmatter}
+
+\section{The vector counterpart of the source mixed equations}
+\label{sec:lead}
+
+Let $\bu$ be the body's \emph{vector displacement}, $\bv$ a displacement
+test field, $g(\bu;\bX)$ the signed distance from the displaced boundary
+point to a fixed rigid wall, and $\lambda$ a scalar multiplier positive
+in compression. Define the augmented nominal pressure
+\begin{equation}
+ p(\bu,\lambda;\bX)=\pos{\lambda-\frac{g(\bu;\bX)}{\gamma}},
+ \qquad \gamma>0,
+ \qquad \bn(\bu;\bX)=\nabla_x d_w(\bX+\bu(\bX)).
+ \label{eq:pressure}
+\end{equation}
+Here $d_w$ is the wall's signed-distance function, positive in the admissible
+region, and $\gamma$ is a compliance with dimensions length/stress.
+With the reference-boundary product
+$\ip{a}{b}=\int_{\Gc}ab\,dA_0$, the desired counterpart of the
+source PDF's Eq.~(2.3) is the following \emph{unstabilized} pair:
+\begin{equation}
+ \boxed{\begin{aligned}
+  \Rbulk(\bu;\bv)-\ip{p}{\bn\cdot\bv}&=0,
+       &&\text{for every admissible }\bv,\\
+  \ip{\lambda-p}{\mu}&=0,
+       &&\text{for every multiplier test }\mu.
+ \end{aligned}}
+ \label{eq:counterpart}
+\end{equation}
+The bulk residual is internal virtual work minus prescribed external
+virtual work. Thus the actual contact force on the body has positive
+direction $p\bn$, whereas its contribution to the residual is negative.
+The second row of \eqref{eq:counterpart} has the normalization of the
+source Eq.~(2.3). The code instead multiplies this row by $-\gamma$,
+giving $\gamma\ip{p-\lambda}{\mu}=0$ before stabilization.
+This normalization is essential when comparing tangents or adding the
+negative multiplier jump term.
+
+Equation~\eqref{eq:counterpart} is a smooth-formal mechanical statement,
+not an assertion that a continuous $L^2$ multiplier formulation is
+well posed. The precise problem documented here is the finite-dimensional,
+quadrature-defined system in Section~\ref{sec:discrete}, with
+$\lambda_h\in M_h\subset L^2(\Gc)$. The preceding boundary integrals
+presuppose enough regularity to perform the indicated calculations.
+In particular, a scalar contact expression is being transferred to a
+vector bulk model; the scalar and vector field equations are not identified.
+
+\paragraph{Provenance and reading scope.}
+The source is Burman, Hansbo, and Larson,
+\emph{Augmented Lagrangian finite element methods for contact problems}
+\cite{BHLv1}. Source verification for this documentation
+identifies Zotero record \code{ZAV78EWP} and the PDF's first-page mark
+``arXiv:1609.03326v1'', dated 12 September 2016, in a 26-page document.
+Reading PDF pages 1--4 and visually checking pages 2 and 4 verifies Section~2,
+Eqs.~(2.1)--(2.3), (2.7), and (2.10), used below.
+These are \emph{v1 PDF locators}, not journal equation numbers.
+The separately rendered HTML numbers the corresponding expressions
+(3)--(5), (9), and (12). The later journal metadata is recorded in
+\cite{BHLjournal}; no journal-numbering equivalence is presumed.
+The inspected source is the working tree based on \code{bf40b5f}, including
+its pre-existing uncommitted changes. Current contact source, the circle
+example, and the named tests were inspected. Gap decompositions, vector chain rules, matrix
+blocks, and the edge calculation below are derivations adapted to the
+repository, not theorems quoted from the scalar paper. The earlier \LaTeX{}
+manuscript was compiled and its equation layout inspected; the boundary-space
+documentation update has not been rebuilt, and reports no new C++ tests or
+numerical experiments.
+
+\paragraph{Current boundary-space API.}
+The worked discretization below retains the default P0 specialization.
+The current operator instead borrows a \code{BoundaryMultiplierSpace}, whose
+null collection selects P0 and whose configurable collection accepts scalar,
+value-mapped discontinuous L2 elements. The argument after the obstacle is
+that boundary object, not the former attribute array; public contact accessors
+are unchanged. Ownership, basis-aware assembly, P1/Q1 regression constructions,
+and limits are documented in \code{docs/boundary-multiplier-space.md}.
+This extension is not a continuous/IGA implementation or new stability evidence.
+
+\section{Reference configuration, fields, and mechanical scope}
+\label{sec:scope}
+
+\subsection{Domain and admissible variations}
+Let $\Omega_0\subset\mathbb{R}^d$, $d\in\{2,3\}$, be the fixed
+reference body, and let $\Gc\subset\partial\Omega_0$ be the selected
+exterior candidate contact boundary. Candidate does not mean active:
+only part of this boundary may carry pressure in a given iterate.
+The reference mesh and this selection remain fixed during a solve.
+At a material point $\bX$, the placement is
+\begin{equation}
+ \bx(\bX)=\bX+\bu(\bX),\qquad
+ \bF=\Grad\bx=\bI+\Grad\bu.
+ \label{eq:placement}
+\end{equation}
+The mechanics considered here is quasi-static. The operator evaluates rigid
+contact only on $\Gc$, not in the body
+volume. It neither searches between two deformable meshes nor constructs
+slave/master pairs for mesh-to-mesh contact.
+
+Component-wise prescribed displacements are represented by sets
+$\Gamma_D^{(i)}\subset\partial\Omega_0$ and data $u_D^{(i)}$:
+\begin{align}
+ V_D&=\{\bu\in[H^1(\Omega_0)]^d:
+       u_i=u_D^{(i)}\text{ on }\Gamma_D^{(i)},\ i=1,\ldots,d\},\\
+ V_0&=\{\bv\in[H^1(\Omega_0)]^d:
+       v_i=0\text{ on }\Gamma_D^{(i)},\ i=1,\ldots,d\}.
+ \label{eq:spaces}
+\end{align}
+$V_D$ is affine, while $V_0$ is the associated homogeneous variation
+space. Sufficiently regular members are understood when signed-distance
+derivatives are evaluated pointwise. The total displacement belongs to
+$V_D$; a Newton correction $\Delta\bu$ and a test $\bv$ belong to $V_0$.
+They play different roles even though their finite element bases coincide.
+Nonzero prescribed displacement must remain in \eqref{eq:placement} when
+evaluating the gap.
+
+\subsection{Signed distance, normals, and dimensions}
+Assume $d_w$ is $C^2$ in a neighborhood of all evaluated trial positions.
+Define
+\begin{equation}
+ g(\bu;\bX)=d_w(\bX+\bu(\bX)),\qquad
+ \bn=\nabla_x d_w,\qquad \bH=\nabla_x^2 d_w,
+ \qquad \|\bn\|=1.
+ \label{eq:distance}
+\end{equation}
+The wall-side normal $\bn$ points into the admissible region. It is not
+the body outward reference normal $\bN$. Even the current body outward
+normal equals $-\bn$ only where the two surfaces are appropriately
+aligned. Confusing these normals changes the contact force sign.
+
+The ideal local unilateral conditions are
+\begin{equation}
+ g\geq0,\qquad \lambda\geq0,\qquad \lambda g=0.
+ \label{eq:complementarity}
+\end{equation}
+Frictionlessness means zero traction in every direction orthogonal to the
+\emph{local} wall normal: $(\bI-\bn\bn^T)(p\bn)=0$. On a curved wall,
+this traction can have a nonzero component along a fixed global horizontal
+direction, or along a reference-body tangent. Such a component is not a
+friction law. There is no tangential penalty, adhesion, slip history, or
+contact rate law in this formulation.
+
+\begin{table}[htbp]
+\centering
+\caption{Dimensions and roles. Stress denotes force per area; the 2D model
+uses the corresponding quantities per unit out-of-plane thickness.}
+\label{tab:units}
+\begin{tabular}{@{}p{0.26\linewidth}p{0.43\linewidth}p{0.22\linewidth}@{}}
+\toprule
+Quantity & Role & Dimension\\
+\midrule
+$\bX,\bx,\bu,\bv,g$ & Position, displacement, variation, gap & length\\
+$\lambda,p,\mu$ & Nominal multiplier, pressure, variation & stress\\
+$\bn,\bN$ & Unit normals with distinct meanings & dimensionless\\
+$\bH$ & Spatial signed-distance Hessian & inverse length\\
+$\gamma$ & Fixed augmentation compliance & length/stress\\
+$\delta$ & Fixed jump factor, $\delta\geq0$ & dimensionless\\
+$h_F$ & Reference contact mesh scale & length\\
+$dA_0,w_q$ & Reference boundary measure, quadrature weight & length$^{d-1}$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Bulk mechanics and nominal traction}
+For a hyperelastic body with stored-energy density $W(\bF)$ per reference
+volume and dead external loads, take
+\begin{align}
+ \Pibulk(\bu)&=\int_{\Omega_0}W(\bF)\,dV_0-\ell(\bu),\\
+ \Rbulk(\bu;\bv)&=D\Pibulk(\bu)[\bv]
+ =\int_{\Omega_0}\bP:\Grad\bv\,dV_0-\ell(\bv),
+ \qquad \bP=\frac{\partial W}{\partial\bF}.
+ \label{eq:bulk}
+\end{align}
+For example, $\ell(\bv)$ includes reference body-force and prescribed
+reference-traction integrals. These are dead loads; follower loads would
+need their own consistent derivatives. The stress in
+\eqref{eq:bulk} is first Piola--Kirchhoff stress. If the constitutive API
+returns second Piola--Kirchhoff stress $\bS$, then $\bP=\bF\bS$;
+the Cauchy stress is $\boldsymbol{\sigma}=J^{-1}\bF\bS\bF^T$, with
+$J=\det\bF>0$. The primal formulation, not the contact operator, must
+enforce admissible volume kinematics and supply its material and geometric
+tangent terms.
+
+Small-strain elasticity specializes this notation to
+\begin{equation}
+ \eps(\bu)=\tfrac12(\Grad\bu+\Grad\bu^T),\qquad
+ a(\bu,\bv)=\int_{\Omega_0}\eps(\bv):\bC:\eps(\bu)\,dV_0,
+ \qquad \Rbulk=a(\bu,\bv)-\ell(\bv).
+ \label{eq:smallstrain}
+\end{equation}
+The repository's ordinary 2D solid convention is plane strain, not an
+implicit plane-stress reduction. The circle example uses small-strain
+bulk elasticity but the exact nonlinear distance in \eqref{eq:distance}.
+This is a hybrid modeling choice: small bulk strains do not make a curved
+gap affine, nor do exact gap kinematics make the bulk law finite-strain
+objective for arbitrary large rotations.
+
+The applied contact traction $p\bn$ is per reference boundary measure.
+If the deformed surface is regular and $j_s=dA/dA_0$ is its surface ratio,
+the same force written per current area has magnitude
+\begin{equation}
+ p_{\mathrm{current}}=\frac{p}{j_s},\qquad
+ j_s=J\|\bF^{-T}\bN\|.
+ \label{eq:surfacepressure}
+\end{equation}
+The second expression assumes the finite-deformation surface map is
+applicable. Reported $p$ is therefore not automatically a physical
+current-area pressure. The assembly keeps $dA_0$ fixed and takes no
+displacement derivative of it; a current-area contact potential would be
+a different formulation with additional derivatives.
+
+\section{Initial gap and displacement-induced closure}
+\label{sec:gap}
+
+\subsection{Exact decomposition for a plane}
+Define the initial clearance and initial wall normal by
+\begin{equation}
+ g_0(\bX)=d_w(\bX),\qquad \bn_0(\bX)=\nabla_x d_w(\bX).
+ \label{eq:initialgap}
+\end{equation}
+For a plane through $\bx_w$ with unit admissible normal $\bn_0$,
+$d_w(\bx)=(\bx-\bx_w)\cdot\bn_0$. Consequently,
+\begin{equation}
+ \boxed{g(\bu;\bX)=g_0(\bX)+\bn_0\cdot\bu(\bX)},\qquad
+ \eta(\bu;\bX):=-g=-g_0-\bn_0\cdot\bu.
+ \label{eq:planegap}
+\end{equation}
+This identity is exact, not a first-order approximation. The signed
+penetration variable $\eta$ is positive inside the obstacle; its positive
+part is the penetration depth. The displacement trace is still a vector.
+Even for a plane, $\eta$ is not just a normal displacement when $g_0\ne0$.
+
+For a horizontal floor $y=y_0$ with the body above it, the admissible
+normal is $\bn_0=\boldsymbol{e}_y$, so
+\begin{equation}
+ g_0=X_y-y_0,\qquad g=X_y-y_0+u_y,\qquad
+ \eta=y_0-X_y-u_y.
+ \label{eq:floor}
+\end{equation}
+An initially separated point first touches when $u_y=-g_0$. Further
+downward motion makes $g<0$, and the contact force points upward.
+The body outward normal on an aligned lower horizontal boundary points
+downward, which explains the minus sign relating that normal to $\bn_0$.
+
+For small-strain bulk elasticity and this planar wall, substituting
+\eqref{eq:planegap} into \eqref{eq:counterpart} makes the vector counterpart
+of source Eq.~(2.3) completely explicit:
+\begin{equation}
+ \boxed{\begin{aligned}
+ a(\bu,\bv)
+ -\left\langle
+    \pos{\lambda-\frac{g_0+\bn_0\cdot\bu}{\gamma}},
+    \bn_0\cdot\bv
+  \right\rangle_{\Gc}&=\ell(\bv),\\
+ \left\langle
+    \lambda-\pos{\lambda-\frac{g_0+\bn_0\cdot\bu}{\gamma}},
+    \mu
+  \right\rangle_{\Gc}&=0.
+ \end{aligned}}
+ \label{eq:expandedplane}
+\end{equation}
+Here $\bu\in V_D$, $\bv\in V_0$, and the second row is still the
+\emph{unstabilized, normalized} multiplier equation. In particular,
+$g_0$ is prescribed geometric data, so its variation is zero; the wall-normal
+displacement $\bn_0\cdot\bu$ is the part varied in Newton. The implemented
+multiplier row is obtained by multiplying this second equation by
+$-\gamma$ and then adding $-s_h(\lambda_h,\mu_h)$ in the discrete problem.
+
+\subsection{Exact curved-wall identities and their restrictions}
+Fix $\bX$ and $\bu(\bX)$, and consider the scalar function
+$f(t)=d_w(\bX+t\bu)$ for $0\leq t\leq1$.
+If this entire segment lies in a smooth signed-distance neighborhood, the
+fundamental theorem of calculus gives
+\begin{equation}
+ g(\bu;\bX)=g_0(\bX)
+   +\int_0^1\bn(\bX+t\bu)\cdot\bu\,dt.
+ \label{eq:gapintegral}
+\end{equation}
+Here $\bn(\bx)$ denotes the spatial gradient of $d_w$ evaluated at the
+displayed spatial argument. A second integration gives the exact Taylor
+formula with integral remainder,
+\begin{equation}
+ \boxed{g(\bu;\bX)=g_0+\bn_0\cdot\bu
+ +\int_0^1(1-t)\,\bu^T\bH(\bX+t\bu)\bu\,dt.}
+ \label{eq:gapremainder}
+\end{equation}
+Indeed, $f'(t)=\bn(\bX+t\bu)\cdot\bu$ and
+$f''(t)=\bu^T\bH(\bX+t\bu)\bu$. These intermediate derivatives
+show exactly where curvature enters the closure. If
+$\|\bH\|\leq C_H$ on the segment, the remainder is bounded in magnitude
+by $C_H\|\bu\|^2/2$. Thus $g_0+\bn_0\cdot\bu$ is a first-order
+approximation under that local bound, not the nonlinear law used by the
+operator.
+
+In particular, the expression $g_0+\bn(\bX+\bu)\cdot\bu$ is
+\emph{not} an exact curved-wall decomposition. The end-point normal is
+neither the path average in \eqref{eq:gapintegral} nor the initial
+normal plus the correct integral remainder. Nor should the path assumption
+be imposed unnecessarily on assembly: the operator evaluates the distance
+at the current quadrature position. Its local Newton derivative requires
+smoothness near that position, whereas \eqref{eq:gapintegral} additionally
+requires smoothness along the whole reference-to-current segment.
+
+\subsection{Linearization at the current iterate}
+At a current displacement $\bu$, a small increment $\Delta\bu$ gives
+\begin{align}
+ g(\bu+\Delta\bu;\bX)
+  &=g(\bu;\bX)+\bn(\bu;\bX)\cdot\Delta\bu
+       +O(\|\Delta\bu\|^2),\label{eq:gapnewton}\\
+ Dg(\bu)[\bv]&=\bn\cdot\bv,\qquad
+ D\bn(\bu)[\bw]=\bH\bw,\qquad
+ D^2g(\bu)[\bv,\bw]=\bv^T\bH\bw.
+ \label{eq:gapderivatives}
+\end{align}
+These are current-iterate derivatives of the exact distance law, not an
+instruction to accumulate a linearized gap from accepted load increments.
+The implementation recomputes $g$ from the current total placement.
+
+For a circle in 2D or sphere in 3D, with center $\boldsymbol{c}$,
+radius $R>0$, and admissible exterior, let
+$\boldsymbol{r}=\bX+\bu-\boldsymbol{c}$ and $r=\|\boldsymbol{r}\|$.
+Then
+\begin{equation}
+ g=r-R,\qquad \bn=\frac{\boldsymbol{r}}r,\qquad
+ \bH=\frac{\bI-\bn\bn^T}{r},\qquad r>0.
+ \label{eq:sphere}
+\end{equation}
+The center is excluded because the distance is not differentiable there.
+General walls likewise require exclusion of cut loci and nonsmooth
+closest-point regions. The identities $\bH^T=\bH$ and $\bH\bn=0$
+follow for a smooth signed distance and are checked by the code, together
+with finiteness and unit gradient. These necessary identities do not
+independently prove that a custom obstacle's returned derivatives
+differentiate its returned gap.
+
+\section{From scalar contact algebra to the vector saddle functional}
+\label{sec:adaptation}
+
+\subsection{Sign and test-function map}
+Use a subscript $B$ for the scalar source variables. The verified source
+PDF Eq.~(2.1) and mixed pair (2.3) read, with its contact product understood,
+\begin{align}
+ \lambda_B&=-\frac1\gamma\pos{u_B-\gamma\lambda_B},
+ \label{eq:sourceprojection}\\
+ a_B(u_B,v_B)+\left\langle\frac1\gamma
+       \pos{u_B-\gamma\lambda_B},v_B\right\rangle_C
+       &=(f,v_B),\label{eq:sourcerow1}\\
+ \left\langle\lambda_B+\frac1\gamma
+       \pos{u_B-\gamma\lambda_B},\mu_B\right\rangle_C&=0.
+ \label{eq:sourcerow2}
+\end{align}
+These expressions are transcriptions with renamed symbols
+\cite[Section 2, PDF Eqs.~(2.1), (2.3)]{BHLv1}.
+Only their \emph{contact terms} are adapted by
+\begin{equation}
+ u_B=-g=\eta,\qquad \lambda_B=-\lambda,\qquad
+ v_B=D(-g)[\bv]=-\bn\cdot\bv,\qquad \mu_B=-\mu.
+ \label{eq:sourcemap}
+\end{equation}
+The test map is a chain-rule variation of the gap map. For curvature it
+depends on the current displacement, so differentiating it again cannot
+be omitted. The source bulk bilinear form $a_B$ is replaced by the
+mechanical residual of Section~\ref{sec:scope}; it is not transformed into
+elasticity by \eqref{eq:sourcemap}.
+
+Positive homogeneity for $\gamma>0$ gives
+\begin{equation}
+ P_B^+:=\pos{u_B-\gamma\lambda_B}
+       =\pos{-g+\gamma\lambda}=\gamma p.
+ \label{eq:positivehomogeneity}
+\end{equation}
+Substitution into the two source contact rows produces
+$-\ip{p}{\bn\cdot\bv}$ and $\ip{\lambda-p}{\mu}$,
+respectively, establishing \eqref{eq:counterpart} with the adopted
+bulk residual.
+
+Pointwise, $\lambda=p$ is equivalent to \eqref{eq:complementarity}:
+if $\lambda>0$, the positive-part branch gives $g=0$; if $\lambda=0$,
+the map requires $g\geq0$. Conversely, either complementary case satisfies
+the map. This is a pointwise algebraic equivalence, not a license to
+replace $p$ by $\lambda_h$ inside a discrete stabilized displacement row.
+Newton iterates of $\lambda_h$ are not clipped to be nonnegative; the
+projection is applied to $\lambda_h-g/\gamma$ to compute $p$.
+
+\subsection{First variation and multiplier-row normalization}
+Adapting the contact part of source PDF Eq.~(2.2), define formally
+\begin{equation}
+ \mathcal{L}_\gamma(\bu,\lambda)=\Pibulk(\bu)
+       +\frac\gamma2\bigl(\ip{p}{p}-\ip{\lambda}{\lambda}\bigr).
+ \label{eq:functional}
+\end{equation}
+The source term is $\|P_B^+\|_C^2/(2\gamma)
+-\gamma\|\lambda_B\|_C^2/2$; \eqref{eq:functional} follows from
+\eqref{eq:sourcemap}--\eqref{eq:positivehomogeneity}
+\cite[Section 2, PDF Eq.~(2.2)]{BHLv1}.
+The scalar function $z\mapsto\tfrac12\pos{z}^2$ is continuously
+differentiable at zero, with derivative $\pos{z}$. Consequently its first
+variation needs no arbitrary derivative choice at the kink:
+\begin{align}
+ D\mathcal{L}_\gamma[\bv,\mu]
+ &=\Rbulk(\bu;\bv)
+   +\gamma\ip{p}{\mu-\gamma^{-1}\bn\cdot\bv}
+   -\gamma\ip{\lambda}{\mu}\notag\\
+ &=\Rbulk(\bu;\bv)-\ip{p}{\bn\cdot\bv}
+                 +\gamma\ip{p-\lambda}{\mu}.
+ \label{eq:firstvariation}
+\end{align}
+The multiplier first variation is $-\gamma$ times the normalized second
+row of \eqref{eq:counterpart}. Although these unstabilized equations have
+the same zeros, only \eqref{eq:firstvariation} has the saddle-functional
+normalization used in the code.
+
+The stabilized contact term of source Formulation~1 is
+\begin{equation}
+ b_B=\left\langle\gamma^{-1}P_B^+,v_B-\gamma\mu_B\right\rangle_C
+       -\left\langle\gamma\mu_B,\lambda_B\right\rangle_C
+       -s_B(\lambda_B,\mu_B),
+ \label{eq:sourceb}
+\end{equation}
+as verified in PDF Eq.~(2.10) \cite{BHLv1}. The simultaneous sign changes
+in multiplier trial and test leave the bilinear jump product unchanged.
+Thus \eqref{eq:sourceb} gives exactly the contact part of
+\eqref{eq:firstvariation} minus $s_h(\lambda_h,\mu_h)$.
+Adding $-s_h(\lambda_h,\lambda_h)/2$ to the discrete functional yields
+this term directly. There is no extra, ad hoc $\gamma$ rescaling of the
+assembled stabilization matrix. A convention with a normalized second
+row would have to rescale \emph{that entire row}, including its jump term.
+
+The mixed formulation retains projected $p$ in the primal row. It is not
+the alternative formulation obtained by putting the multiplier itself
+there. Moreover, \eqref{eq:functional} is a saddle functional rather than
+a positive contact energy to minimize jointly over both unknowns.
+The implementation assembles derivatives but exposes no mixed energy
+evaluation API or proved energy-based globalization.
+
+\section{Finite element problem and reference quadrature}
+\label{sec:discrete}
+
+\subsection{Spaces, traces, and coefficient ordering}
+Let $\mathcal{T}_h$ be the conforming reference body mesh and
+$\mathcal{C}_h$ its selected boundary mesh. The H1 displacement spaces
+$V_{D,h}\subset V_D$ and $V_{0,h}\subset V_0$ use the same polynomial
+degree and the same essential constraints. The default P0 multiplier
+space developed here is
+\begin{equation}
+ M_h=\{\lambda_h\in L^2(\Gc):
+             \lambda_h|_e\in\mathbb{P}_0(e),\ e\in\mathcal{C}_h\}.
+ \label{eq:p0space}
+\end{equation}
+There is exactly one independent multiplier coefficient per selected
+boundary face. Writing $M_e$ for its indicator basis,
+\begin{equation}
+ \bu_h=\sum_a N_a\boldsymbol{u}_a,\qquad
+ \bv_h=\sum_a N_a\boldsymbol{v}_a,\qquad
+ \lambda_h=\sum_e M_e\Lambda_e,\qquad
+ \mu_h=\sum_f M_f\mathcal{M}_f.
+ \label{eq:febases}
+\end{equation}
+The vector test coefficients vanish on essential components; total
+displacement coefficients retain prescribed values. $\Delta\boldsymbol{u}_a$
+are Newton corrections, not test coefficients. Neither $\bv_h$ nor
+$\mu_h$ is an additional unknown field.
+
+On a particular contact face with $n_b$ scalar H1 trace functions, the
+component-major local vector and its evaluation matrix are
+\begin{equation}
+ U_e=\begin{bmatrix}
+ u_{1,1}&\cdots&u_{n_b,1}&u_{1,2}&\cdots&u_{n_b,d}
+ \end{bmatrix}^{T},\qquad
+ \mathsf N_q=\bI_d\otimes
+      \begin{bmatrix}N_1(X_q)&\cdots&N_{n_b}(X_q)\end{bmatrix}.
+ \label{eq:evalmatrix}
+\end{equation}
+Here $\mathsf N_q\in\mathbb{R}^{d\times dn_b}$ and
+$\bu_h(X_q)=\mathsf N_qU_e$. The scalar multiplier evaluation matrix
+is $\mathsf M_q\in\mathbb{R}^{1\times n_m}$ with $n_m=1$ and
+$\mathsf M_q=[1]$ locally for P0. The current configurable L2 implementation
+uses the same formulas with the full local basis row and its actual $n_m$;
+the face-moment and edge examples below remain P0-specific.
+
+The code obtains boundary vector DOFs and boundary H1 shapes, not all
+adjacent volume shape functions for assembly. Volume DOFs with zero trace
+therefore have no contact contribution. MFEM's local component-major
+layout is respected independently of the configured global vector ordering;
+global assembly uses the space's DOF maps. Contact uses trace values only:
+no surface derivative of a multiplier basis and no body displacement
+gradient occurs in its local residual. Gradients needed by the bulk law
+remain the responsibility of volume assembly.
+
+\subsection{Fixed reference quadrature and nonlinear evaluation}
+For reference quadrature points $\widehat{\xi}_q$ and weights
+$\widehat w_q$ on a selected face, define
+\begin{align}
+ w_q&=\widehat w_q J_{\Gamma_0}(\widehat{\xi}_q),\qquad
+ \iq{a}{b}=\sum_{e\in\mathcal C_h}\sum_{q\in e}w_q a_qb_q,
+ \label{eq:quadrature}\\
+ \bx_q&=\bX_q+\mathsf N_q U_e,\qquad
+ g_q=d_w(\bx_q),\qquad \lambda_q=\mathsf M_q\Lambda_e,\notag\\
+ z_q&=\lambda_q-g_q/\gamma,\qquad
+ p_q=\max(0,z_q),\qquad
+ \chi_q=\begin{cases}1,&z_q\geq0,\\0,&z_q<0.\end{cases}
+ \label{eq:pointkernel}
+\end{align}
+$J_{\Gamma_0}$ is the reference surface metric. In code $w_q$ is
+\code{integrationPoint.weight * boundaryTransformation->Weight()}.
+The integration point is set before geometry evaluation, and inverse
+boundary/mesh-face orientation aligns trace shapes with the selected
+mesh-face-coordinate rule, including nonsymmetric custom rules.
+The metric enters exactly once and has no derivative with respect to $U_e$.
+
+Displacement is interpolated first; distance, normal, Hessian, positive
+part, and activity are then evaluated at \emph{each} quadrature point.
+The algorithm does not interpolate a nodally computed contact pressure.
+Even though $\lambda_h$ is constant on a face, $g_q$, $p_q$, and $\chi_q$
+need not be constant there. Interpolation, averaging, and the positive-part
+operation cannot in general be interchanged.
+
+Residual and Jacobian must use the same fixed rule. The default rule order
+is based on adjacent-volume geometry and the maximum of displacement and
+multiplier orders (retaining the P0 policy), with the
+code's Pk increment; it is not a guarantee of accurate integration through
+a curved active-set boundary. A custom rule is borrowed and must remain
+alive. Changing samples during Newton changes the discrete residual being
+solved, rather than merely improving its linearization.
+
+\subsection{Boundary jump stabilization}
+Let $\mathcal F_h^c$ contain interior interfaces of the contact submesh,
+each counted once. For neighboring contact faces $e,f$ meeting at $F$,
+choose consistently oriented jumps
+$[\lambda_h]_F=\Lambda_e-\Lambda_f$ and
+$[\mu_h]_F=\mathcal M_e-\mathcal M_f$. Adapting the source PDF
+Eq.~(2.7), p.~4 \cite{BHLv1}, the code uses
+\begin{align}
+ s_h(\lambda_h,\mu_h)
+ &=\sum_{F\in\mathcal F_h^c}\delta\gamma h_F
+        \int_F[\lambda_h]_F[\mu_h]_F\,ds_0,
+ \label{eq:jump}\\
+ h_F&=\frac{|e|^{1/d_c}+|f|^{1/d_c}}2,\qquad d_c=d-1.
+ \label{eq:hface}
+\end{align}
+The local area-root length scale in \eqref{eq:hface} is the repository's
+specific choice. The measures are reference quantities. When $d=2$, an
+interface is a contact-mesh vertex with measure $|F|=1$; when $d=3$, it
+is an edge with integrated reference length. It is not a volume face or
+the area of a whole contact element.
+In the implementation, geometric measures are numerically evaluated and
+cached; in particular, a curved interface length is evaluated by quadrature,
+not generally exactly. The P0 reduction below is exact algebra for those
+computed coefficients, not a claim of exact curved-geometry integration.
+
+For P0, the interface contribution reduces exactly to
+\begin{equation}
+ c_F(\Lambda_e-\Lambda_f)(\mathcal M_e-\mathcal M_f),\qquad
+ c_F=\delta\gamma h_F|F|,\qquad
+ S_F=c_F\begin{bmatrix}1&-1\\-1&1\end{bmatrix}.
+ \label{eq:jumpmatrix}
+\end{equation}
+Globally, $s_h(\lambda_h,\mu_h)=\mathcal M^T S\Lambda$.
+$S$ is positive semidefinite for nonnegative $c_F$, has zero row sums,
+and leaves constant multipliers on each connected contact component
+unchanged. Reversing both jumps changes nothing. The residual contains
+$-S\Lambda$ and its multiplier derivative contains $-S$: the negative
+sign belongs to the saddle block, not to a negative body-stiffness penalty.
+The term acts across all selected interior interfaces, including
+active/inactive neighbors. $\delta=0$ disables it; the default $\delta=1$
+is an implementation choice, not a general stability guarantee.
+
+\subsection{Final mixed discrete weak form}
+The quadrature-defined saddle functional is
+\begin{equation}
+ \mathcal L_{\gamma,h}(\bu_h,\lambda_h)=\Pi_{\mathrm{bulk},h}(\bu_h)
+ +\frac\gamma2\bigl(\iq{p_h}{p_h}-\iq{\lambda_h}{\lambda_h}\bigr)
+ -\frac12s_h(\lambda_h,\lambda_h).
+ \label{eq:discretefunctional}
+\end{equation}
+For a conservative primal model its stationarity is the implemented
+discrete problem: find $(\bu_h,\lambda_h)\in V_{D,h}\times M_h$ such that
+\begin{equation}
+ \boxed{\begin{aligned}
+ r_u(\bv_h)&=R_{\mathrm{bulk},h}(\bu_h;\bv_h)
+                   -\iq{p_h}{\bn_h\cdot\bv_h}=0,\\
+ r_\lambda(\mu_h)&=\gamma\iq{p_h-\lambda_h}{\mu_h}
+                   -s_h(\lambda_h,\mu_h)=0,
+ \end{aligned}\quad
+ \begin{gathered}
+   \forall\,\bv_h\in V_{0,h},\\
+   \forall\,\mu_h\in M_h.
+ \end{gathered}}
+ \label{eq:finalweak}
+\end{equation}
+The bulk residual may also be supplied by a more general primal operator;
+then the contact functional still explains the contact rows, without
+asserting a potential for the entire primal problem. $\gamma$ and
+$\delta$ remain fixed parameters in every derivative.
+
+Testing by unit coefficient directions gives the unscaled assembled
+vectors, with face-to-global insertion understood:
+\begin{align}
+ r_U&=r_{\mathrm{bulk}}-\sum_{e,q}w_qp_q\mathsf N_q^T\bn_q,
+ \label{eq:vectorru}\\
+ r_\Lambda&=\gamma\sum_{e,q}w_q\mathsf M_q^T
+                          (p_q-\mathsf M_q\Lambda_e)-S\Lambda.
+ \label{eq:vectorrl}
+\end{align}
+The contact portions have local dimensions $dn_b$ and $n_m=1$,
+respectively. Displacement residual coefficients have units
+stress times length$^{d-1}$, whereas multiplier residual coefficients
+have units length$^d$. Pairing them with displacement and multiplier
+variations produces energy in 3D, or energy per thickness in 2D, in both
+cases. This distinction motivates explicit row scaling rather than
+comparing unlike raw coefficient norms.
+
+\section{Generalized linearization and the four matrix blocks}
+\label{sec:tangent}
+
+\subsection{Directional derivation}
+For an increment $(\Delta\bu_h,\Delta\lambda_h)$ at a fixed smooth
+geometry evaluation, the selected generalized pressure derivative is
+\begin{equation}
+ \Delta g=\bn\cdot\Delta\bu_h,\qquad
+ \Delta\bn=\bH\Delta\bu_h,\qquad
+ \Delta p=\chi\left(\Delta\lambda_h-
+                       \gamma^{-1}\bn\cdot\Delta\bu_h\right).
+ \label{eq:pointderivative}
+\end{equation}
+Away from $z=0$, this is the ordinary derivative on the current branch.
+At $z=0$, the positive part has generalized derivative interval $[0,1]$;
+the code selects $\chi=1$, the active-side value. It is not the ordinary
+directional derivative for every direction crossing the switching point.
+The squared positive part in the potential is differentiable, but its
+generalized Hessian still requires this choice.
+
+Keep test fields fixed while differentiating the residual. The product
+rule applied to $-p\bn\cdot\bv_h$ gives two terms, not one:
+\begin{align}
+ Dr_u[\Delta\bu_h,\Delta\lambda_h;\bv_h]
+ &=D R_{\mathrm{bulk},h}[\Delta\bu_h;\bv_h]
+   +\iq{\gamma^{-1}\chi\,\bn\cdot\Delta\bu_h}
+        {\bn\cdot\bv_h}\notag\\
+ &\quad-\iq{\chi\Delta\lambda_h}{\bn\cdot\bv_h}
+   -\iq{p}{\bv_h^T\bH\Delta\bu_h},
+ \label{eq:directionru}\\
+ Dr_\lambda[\Delta\bu_h,\Delta\lambda_h;\mu_h]
+ &=-\iq{\chi\,\bn\cdot\Delta\bu_h}{\mu_h}
+    +\gamma\iq{(\chi-1)\Delta\lambda_h}{\mu_h}
+    -s_h(\Delta\lambda_h,\mu_h).
+ \label{eq:directionrl}
+\end{align}
+The term involving $\chi/\gamma$ comes from pressure augmentation; the
+term involving $-p\bH$ comes from rotation of the wall normal. In
+particular, the displacement block is not merely the bulk tangent of
+an ordinary Lagrange-multiplier method.
+
+\subsection{Coefficient matrices}
+Substitution of the trace evaluation matrices into
+\eqref{eq:directionru}--\eqref{eq:directionrl} yields
+\begin{align}
+ K_{11}&=K_{\mathrm{bulk}}+K_{uu}^{c},\qquad
+ K_{uu}^{c}=\sum_{e,q}w_q\mathsf N_q^T
+       \left(\frac{\chi_q}{\gamma}\bn_q\bn_q^T-p_q\bH_q\right)
+       \mathsf N_q,\label{eq:k11}\\
+ K_{12}&=-\sum_{e,q}w_q\chi_q\mathsf N_q^T\bn_q\mathsf M_q,
+ \label{eq:k12}\\
+ K_{21}&=-\sum_{e,q}w_q\chi_q\mathsf M_q^T\bn_q^T\mathsf N_q,
+ \label{eq:k21}\\
+ K_{22}&=\gamma\sum_{e,q}w_q(\chi_q-1)\mathsf M_q^T\mathsf M_q-S.
+ \label{eq:k22}
+\end{align}
+Before global insertion the contact block dimensions are
+$dn_b\times dn_b$, $dn_b\times n_m$, $n_m\times dn_b$, and
+$n_m\times n_m$. The jump matrix is assembled separately between
+neighboring multiplier DOFs. For example, the scalar-index entry of the
+displacement contact block is
+\begin{equation}
+ (K_{uu}^c)_{(a,i),(b,j)}
+ =\sum_q w_q N_a(X_q)N_b(X_q)
+       \left(\frac{\chi_q}{\gamma}n_{q,i}n_{q,j}
+                        -p_qH_{q,ij}\right).
+ \label{eq:indexentry}
+\end{equation}
+The matching mixed entry is
+$-(\sum_qw_q\chi_qN_a n_{q,i}M_e)$, with its transpose in the
+other row before scaling. This accounts for both test/trial shape factors
+even though the local P0 factors are both the number one.
+
+If $K_{\mathrm{bulk}}$ is symmetric, these unscaled Galerkin blocks give
+a symmetric generalized Jacobian: $K_{21}=K_{12}^T$, $\bH$ is symmetric,
+and $S=S^T$. Symmetry does not imply positive definiteness. The multiplier
+block has a negative inactive mass term, the active system has saddle
+coupling, and the curvature term can be negative in tangential directions.
+For the sphere, $\bH=(\bI-\bn\bn^T)/r$ makes that last fact explicit.
+Zero friction does not imply a zero tangential derivative of a force whose
+normal rotates.
+
+For a plane, $\bH=0$. On a strictly inactive point, $p=\chi=0$, so
+all displacement/contact couplings vanish and the local multiplier block
+is negative $\gamma$ times its mass. On a fully active point, the
+local multiplier mass derivative vanishes, but the couplings and
+augmentation stiffness remain. At $\lambda=0$ and negative gap,
+$p=-g/\gamma$, and the displacement contact tangent reduces to the
+separate penalty expression
+$\gamma^{-1}(\bn\bn^T+g\bH)$. For nonzero multiplier, replacing
+$-p\bH$ by $(g/\gamma)\bH$ would drop a real curvature contribution.
+
+For finite-strain bulk mechanics, $K_{\mathrm{bulk}}$ in
+\eqref{eq:k11} must include the full derivative of $\bP$ with respect
+to placement. If implemented in second Piola--Kirchhoff form, that
+includes the geometric term arising from $\bP=\bF\bS$ as well as
+the constitutive derivative. Contact does not supply or repair missing
+bulk tangent terms.
+
+\section{What P0 equations enforce, and a hand-integrated edge}
+\label{sec:moments}
+
+\subsection{Face moments, not pointwise constraints}
+For a contact face $e$, let $A_e$ and $I_e$ denote its active and inactive
+quadrature points. Equation~\eqref{eq:vectorrl} at a root reads
+\begin{equation}
+ -\sum_{q\in A_e}w_qg_q
+ -\gamma\Lambda_e\sum_{q\in I_e}w_q
+ -(S\Lambda)_e=0.
+ \label{eq:facemoment}
+\end{equation}
+Thus a fully active unstabilized face enforces zero weighted mean gap,
+not zero gap at every point. With stabilization its integrated gap equals
+$-(S\Lambda)_e$. A fully inactive unstabilized face has $\Lambda_e=0$
+when its mass $m_e=\sum_{q\in e}w_q$ is positive; with jumps it instead
+satisfies $\gamma m_e\Lambda_e+(S\Lambda)_e=0$.
+A partially active face obeys the combined equation
+\eqref{eq:facemoment}, not one active flag attached to its P0 unknown.
+
+These distinctions explain why $p_h$ and $\lambda_h$ must be reported
+separately. In particular, an inactive face adjacent to loaded faces may
+have a nonzero multiplier while its applied pressure remains zero. This
+is not adhesive traction. The converged discrete equation does not impose
+the pointwise equality $p_h=\lambda_h$ used in the ideal complementarity
+argument. Nor does increasing the displacement degree automatically add
+multiplier moments when the boundary mesh and P0 space are unchanged.
+
+On a fully active face with no jump term, expanding the contact potential
+gives the useful identity
+\begin{equation}
+ \mathcal L_{c,e}=-\Lambda_e\sum_q w_qg_q
+                 +\frac1{2\gamma}\sum_qw_qg_q^2.
+ \label{eq:activepotential}
+\end{equation}
+For positive quadrature weights, write the weighted face average as
+$\overline g_e=m_e^{-1}\sum_qw_qg_q$. Then
+\begin{equation}
+ \sum_qw_qg_q^2=m_e\overline g_e^{\,2}
+                 +\sum_qw_q(g_q-\overline g_e)^2.
+ \label{eq:gapvariance}
+\end{equation}
+Even after the multiplier equation removes the mean, the within-face
+gap variation remains penalized by $1/\gamma$. P0 is therefore not an
+automatic cure for augmentation-driven overconstraint. This derivation
+assumes the fully active branch and positive weights; it is not an observed
+locking result or a proof of a particular limiting error.
+
+\subsection{Two-node straight edge}
+Consider a horizontal straight contact edge of reference length $L$ in
+2D, a plane normal $\bn=\boldsymbol e_y$, and a linear displacement
+trace. Set $s\in[0,L]$, $N_1=1-s/L$, $N_2=s/L$ and retain only its
+two normal displacement coefficients $U_1,U_2$ and one P0 multiplier
+$\Lambda$. Assume the edge remains fully active, so
+\begin{equation}
+ g(s)=g_0(s)+N_1(s)U_1+N_2(s)U_2,\qquad
+ p(s)=\Lambda-g(s)/\gamma>0.
+ \label{eq:edgegap}
+\end{equation}
+The plane decomposition is exact. Without bulk, stabilization, or row
+scaling, its residuals are
+\begin{equation}
+ r_i=-\int_0^L p(s)N_i(s)\,ds
+     =-\frac L2\Lambda+\frac1\gamma\int_0^L g(s)N_i(s)\,ds,
+ \quad i=1,2,\qquad
+ r_\Lambda=-\int_0^L g(s)\,ds.
+ \label{eq:edgeresidual}
+\end{equation}
+Using
+\begin{equation}
+ \int_0^L N_i\,ds=\frac L2,\qquad
+ \int_0^L N_i^2\,ds=\frac L3,\qquad
+ \int_0^L N_1N_2\,ds=\frac L6,
+ \label{eq:edgeintegrals}
+\end{equation}
+the exact local generalized Jacobian in ordering $(U_1,U_2,\Lambda)$ is
+\begin{equation}
+ \boxed{K_e=\begin{bmatrix}
+ L/(3\gamma)&L/(6\gamma)&-L/2\\
+ L/(6\gamma)&L/(3\gamma)&-L/2\\
+ -L/2&-L/2&0
+ \end{bmatrix}.}
+ \label{eq:edgematrix}
+\end{equation}
+The off-diagonal displacement entry requires the product of two trace
+shapes; a lumped or single-point rule would not reproduce this matrix.
+The last row couples the \emph{average} normal displacement to the
+multiplier. The first two rows also penalize the nonconstant normal mode,
+consistent with \eqref{eq:gapvariance}. Tangential displacement entries
+are zero for this straight plane, but bulk elasticity still contributes
+to both displacement components in a body solve.
+
+If instead the whole edge is strictly inactive, $p=0$ and its contact
+residual is $(0,0,-\gamma L\Lambda)^T$. Its only nonzero local tangent
+entry is
+\begin{equation}
+ (K_e)_{\Lambda\Lambda}=-\gamma L.
+ \label{eq:edgeinactive}
+\end{equation}
+Equations~\eqref{eq:edgematrix} and \eqref{eq:edgeinactive} are analytic
+calculations from the stated discrete law, not outputs from a newly run
+example or a full contact patch test.
+
+\subsection{Multiplier control is a global issue}
+The zero active multiplier diagonal in \eqref{eq:edgematrix} makes
+normal displacement coupling important. For two equal active linear
+collinear edges contacting the same plane with the same admissible normal,
+fix the two outer normal DOFs and leave
+only the middle normal DOF free. Each multiplier couples to that one
+DOF with magnitude $L/2$. With $\delta=0$, the alternating multiplier
+vector $(1,-1)^T$ then lies in the null space of the free-displacement
+row $K_{12}=-(L/2)\begin{bmatrix}1&1\end{bmatrix}$.
+Both edges individually retain a free normal variation, yet their
+combined coupling does not control every multiplier mode.
+
+The positive jump matrix controls this particular alternating mode but
+leaves the constant mode untouched. The primal coupling must still control
+constants and any other unpenalized modes. Neither the P0 count nor a
+per-face free-normal check proves a global inf-sup condition. Likewise,
+the compliance dimensions and the factor $\delta\gamma h_F$ do not
+transfer the scalar source's stability analysis to curved vector contact
+on arbitrary meshes. Parameter robustness, locking avoidance, and error
+rates need separate analysis and controlled numerical studies.
+
+\section{Monolithic Newton solution and operator composition}
+\label{sec:solver}
+
+\subsection{Simultaneous unknowns and accepted load steps}
+With displacement-only primal physics, write $Z=(U,\Lambda)^T$.
+At a fixed load or prescribed-displacement stage, a semismooth Newton
+iteration solves
+\begin{equation}
+ \begin{bmatrix}K_{11}&K_{12}\\K_{21}&K_{22}\end{bmatrix}_{Z^k}
+ \begin{bmatrix}\Delta U\\\Delta\Lambda\end{bmatrix}
+ =-\begin{bmatrix}r_U\\r_\Lambda\end{bmatrix}_{Z^k},\qquad
+ Z^{k+1}=Z^k+\alpha_k\Delta Z.
+ \label{eq:newton}
+\end{equation}
+$\alpha_k=1$ is a full Newton step; a solver may reduce it if an
+appropriate globalization is enabled. There is no staggered
+displacement solve followed by a separate multiplier or Uzawa update.
+Both fields are current total unknowns. Every evaluation recomputes
+activity from the trial vector; no committed active set is hidden in
+the contact operator.
+
+An accepted load step supplies an initial guess for the next stage, not
+a replacement for the total placement in the gap. A failed increment
+must restore both displacement and multiplier coefficients, the accepted
+load parameter, and any stateful primal histories. The contact wrapper's
+\code{GetChildOperators} exposes its primal operator to the repository's
+solver lifecycle traversal. A custom external driver must still implement
+the required begin/commit/rollback behavior; calling a residual is not a
+commit operation. All trial distance evaluations must remain in smooth
+geometry regions. Invalid-geometry assertions may abort rather than
+provide a recoverable load cutback.
+
+\subsection{Generic primal extraction and essential masking}
+The wrapped primal may contain fields besides displacement. Let
+$Y\in\mathbb R^{n_y}$ be its coefficient vector,
+$E\in\mathbb R^{n_u\times n_y}$ the fixed linear extraction $U=EY$,
+and $R_0(Y)$ its contact-free residual with tangent $J_0(Y)$.
+$E$ is not a test field or Young's modulus. Its transpose inserts contact
+forces into the corresponding primal coordinates.
+
+Let $Q_D$ be the diagonal displacement coefficient mask that retains
+free components. Denote the \emph{contact-only} displacement residual
+from \eqref{eq:vectorru} by $r_u^c$, and the unscaled contact matrices
+by $K_{uu}^c,K_{12},K_{21},K_{22}$. For positive row weights
+$s_u,s_\lambda$, set
+\begin{equation}
+ D_s=\operatorname{diag}(s_u I_{n_y},s_\lambda I_{n_\lambda}).
+ \label{eq:rowscaling}
+\end{equation}
+The returned residual and generalized Jacobian are
+\begin{align}
+ \widehat R(Y,\Lambda)
+ &=D_s\begin{bmatrix}
+       R_0(Y)+E^TQ_Dr_u^c(EY,\Lambda)\\
+       r_\Lambda(EY,\Lambda)
+       \end{bmatrix},\label{eq:extractionresidual}\\
+ \widehat J
+ &=D_s\begin{bmatrix}
+       J_0+E^TQ_DK_{uu}^cQ_DE&E^TQ_DK_{12}\\
+       K_{21}Q_DE&K_{22}
+       \end{bmatrix}.
+ \label{eq:extractionjacobian}
+\end{align}
+Prescribed coefficient \emph{values} are retained in $EY$ for gap
+evaluation; only residual test rows and Jacobian variations are masked.
+Equation~\eqref{eq:extractionjacobian} is the derivative on the essential
+constraint manifold, where $(I-Q_D)E\Delta Y=0$, not an unrestricted
+derivative with respect to prescribed data. The primal operator and solver
+must consistently enforce the prescribed values and their essential
+rows. Contact alone does not insert essential identity equations.
+
+The implementation checks matching essential lists for a direct
+\code{NonlinearForm} with identity extraction. More general primal
+operators and extractions must honor the same contract themselves.
+Every selected face must retain a free displacement trace DOF; during
+gradient assembly a fully sampled active face is also checked for remaining
+constant-mode normal coupling after masking, evaluated directly in
+\code{mElementConstantNormalCoupling}. These restrictive local checks are
+neither a global rank/inf-sup certificate nor necessary for every stabilized
+system to be nonsingular.
+
+Positive row weights preserve the zero set because $D_s$ is invertible.
+They change the residual stopping norm and may improve or worsen
+conditioning; no improvement follows from positivity alone. Unequal
+weights generally destroy Euclidean symmetry, even when the unscaled
+system is symmetric. Scaling includes the complete primal row and the
+complete multiplier row, including $-S\Lambda$ and $-S$, exactly once.
+
+\subsection{Residual evaluation versus solution, and the circle example}
+\code{Mult} evaluates \eqref{eq:extractionresidual} at the supplied vector.
+It does not perform Newton, solve for a multiplier, or update unknowns.
+\code{GetGradient} assembles the four contact blocks and refreshes the
+wrapped primal gradient for \eqref{eq:extractionjacobian}. The returned
+block operator and borrowed primal gradient reuse storage; another gradient
+evaluation invalidates a retained gradient reference. The global action
+uses sparse contact blocks and operator products, not a dense global
+matrix or a global contact energy minimization.
+
+The mixed branch of \code{examples/contact/circle.cpp} uses GMRES with a
+block-diagonal preconditioner inside
+\code{MultiNewtonAdaptive<NewtonLineSearch>}. The primal preconditioner
+is a copied, row-scaled bulk elasticity matrix, solved by UMFPACK when
+SuiteSparse is available or treated by a symmetric Gauss--Seidel smoother
+otherwise. It is not a factorization of the entire mixed Jacobian, nor
+does it include the full changing contact augmentation. The multiplier
+preconditioner uses a positive diagonal with entries
+\begin{equation}
+ d_{\lambda,e}=s_\lambda\gamma h_c
+ \label{eq:preconditioner}
+\end{equation}
+on the uniform 2D contact edges. This is the magnitude of the inactive
+P0 mass coefficient, not the exact active Schur complement or the
+stabilized multiplier block. GMRES accommodates the scaled indefinite
+operator; conjugate gradients is not justified for this saddle system.
+The example intentionally retains default P0, this preconditioner, and its
+one-multiplier-per-face count check; it is not a generic higher-degree solver.
+
+In this example the dimensionless CLI factor $\alpha$ sets
+$\kappa=\alpha E_Y/h_c$, where $E_Y$ is Young's modulus, and the mixed
+constructor receives
+\begin{equation}
+ \gamma=\kappa^{-1}=\frac{h_c}{\alpha E_Y},\qquad \delta=1.
+ \label{eq:examplegamma}
+\end{equation}
+The legacy flag \code{-gamma/--penalty-factor} names $\alpha$, not
+the paper compliance. The current mixed API takes $\gamma$ in the
+former positional stiffness slot: passing the old numerical stiffness
+unchanged would alter the model. The separate displacement-only penalty
+integrator still takes $\kappa$.
+
+The example scales the primal and multiplier rows by inverse reference
+residuals $E_Y u_{\max}W/H_b$ and $u_{\max}W$, respectively, for body
+width $W$ and height $H_b$. It applies bottom vertical displacement at
+trial pseudo-time while constraining left horizontal displacement
+component-wise. Adaptive load increments operate on the complete mixed
+vector. The example does not enable the optional line search; the use
+of a class bearing that name is not a claim of a proved contact merit
+globalization. The fixed contact rule has default order 127 and independent
+gap sampling includes face endpoints. These are example resolution choices,
+not a collision-detection bound or a library-wide quadrature guarantee.
+
+\section{Verification map and limits of interpretation}
+\label{sec:verification}
+
+\subsection{Existing source checks}
+The following are inspected test constructions in
+\code{tests/contact_test.cpp}, not newly executed results. Unless noted,
+the suite prefix is \code{SemismoothContact}. Long identifiers are given
+verbatim so the derivation can be traced to a specific regression.
+
+\testname{ActivePlaneResidualHasExpectedPrimalAndMultiplierResultants}
+Checks the active-plane residual sign and magnitude, zero tangential
+resultant, positive physical obstacle resultant, and the integrated gap
+in the multiplier row. Its companion
+\code{InactivePlaneConstrainsMultiplierWithoutDisplacementForce}
+checks zero displacement force and the negative compliance-scaled
+multiplier mass. \code{SupportsThreeDimensionalPlaneContact} checks
+reference area factors and a mixed directional derivative in 3D.
+
+\testname{GammaAndDeltaMatchIntegratedTwoFaceReference}
+Hand-integrates a two-face planar reference using a constant normal
+displacement direction and two P0 multiplier directions. It compares
+residuals and every projected matrix block for active/inactive cases,
+multiple compliance and jump-factor values, and unequal row scales.
+\code{RejectsInvalidComplianceAndJumpWeight} checks invalid parameters,
+including a positive compliance whose reciprocal overflows.
+
+\testname{CurvedMixedJacobianMatchesDirectionalDifferenceWithExtraPrimalField}
+Compares the full generalized Jacobian action with a centered residual
+difference on a curved active branch, including unequal row weights and
+three additional primal DOFs. This exercises the normal derivative and
+extraction without identifying extra fields as displacement.
+\code{EqualityUsesTheActiveOneSidedLinearization} instead uses an
+active-side perturbation at equality, as required by the selected kink
+derivative.
+
+\testname{HighOrderBoundaryTraceMatchesVolumeOracle}
+Compares trace assembly with an independent adjacent-volume-shape oracle
+for curved high-order triangles, quadrilaterals, tetrahedra, and hexahedra,
+both global orderings, and a nonsymmetric custom quadrature rule. It
+also checks trace-zero directions. Stabilization is disabled in this
+oracle; jump behavior is covered separately.
+
+\testname{BoundaryP0JumpStabilizationCouplesAdjacentFaces}
+Checks the jump sign, conservation of the sum of jump residuals, and an
+alternating multiplier tangent action on inactive faces.
+\code{CurvedThreeDimensionalJumpUsesIntegratedInterfaceMeasure}
+compares the stabilized-minus-unstabilized response against independently
+integrated curved edge measure. These are coefficient and assembly checks,
+not active-pair inf-sup tests.
+
+\testname{EssentialDisplacementDofsAreRemovedFromContactVariations}
+Checks eliminated contact directions while retaining their prescribed
+values in the gap. The guards
+\code{RejectsFullyActiveFaceWithoutFreeNormalVariation} and
+\code{RejectsEssentialDofsThatDifferFromPrimalForm} cover corresponding
+input contracts. \code{BoundaryP0HasOneMultiplierPerSelectedFace} and
+\code{WrapsBlockNonlinearPrimalOperator} cover P0 count and a composite
+primal with an unrelated scalar field. They do not prove stability of
+arbitrary extractions or multiphysics couplings.
+
+\subsection{Algebraic residual, sampled contact error, and missed contact}
+The diagnostic contact resultant is
+\begin{equation}
+ \boldsymbol f_c^Q=\sum_qw_qp_q\bn_q,
+ \qquad e_{\mathrm{map}}^Q=\gamma\max_q|p_q-\lambda_q|,
+ \qquad e_{\mathrm{pen}}^Q=\max_q\max(0,-g_q).
+ \label{eq:diagnostics}
+\end{equation}
+The latter two quantities have length units. The sampled contact-map
+error is not the assembled multiplier residual norm: projection and jumps
+allow it to remain nonzero at a discrete root. The minimum sampled gap
+is not the minimum over the continuous deformed trace.
+
+\code{CoarseQuadraticCircleNeedsResolvedQuadrature} constructs a
+two-by-two quadratic square mesh whose six default assembly samples
+miss a penetrating circle patch. Its prescribed upward translation is
+$0.02$, circle center $(0.65,1.26)$, and radius $0.25$; independent gap
+sampling detects a minimum of $-0.01$. These are the test's prescribed
+construction and analytic geometry, not a new simulation report. The
+test then checks resolved resultant integration and branchwise
+directional derivatives with higher-order rules.
+\code{IndependentGapSamplingUsesCurrentCurvedGeometry} separately
+checks evaluation of the deformed curved trace, including endpoints.
+
+Accordingly, successful Newton termination should be accompanied by
+separate reporting of reaction/resultant, sampled penetration,
+unprojected contact-map error, and quadrature/sampling sensitivity.
+Independent finite sampling improves detection but still cannot certify
+nonpenetration between samples. The circle example's permissive
+penetration/contact-map acceptance threshold is tied to the imposed
+displacement, so its acceptance is a smoke/resolution check rather than
+a tight pressure-accuracy criterion.
+
+\subsection{Supported scope and unresolved validation}
+The current contact implementation is serial, conforming, default-CPU,
+and based on fixed reference measures with analytic smooth rigid walls.
+It rejects parallel displacement spaces and nonconforming meshes and
+requires supported H1 traces without DOF transformations. It has no MPI
+contact assembly, GPU kernel, two-body search, self-contact, friction,
+or contact-history transfer. Borrowed primal, extraction, displacement
+space, obstacle, integration rule, and boundary multiplier object must outlive
+the operator. The boundary object owns its submesh geometry, collection, and
+FE space, not the solution, and borrows the parent mesh. Both it and contact
+prohibit copy/move. Scratch is mutable and not reentrant. Cached maps and jump
+matrices require reconstruction of the boundary object and its borrowers after
+mesh, geometry, or space changes. NURBS and curved \code{SubMesh} parents are
+unsupported; curved parent nodes must be uniform-order Gauss--Lobatto H1.
+Discontinuous geometry is rejected because MFEM's coefficient-copy geometry
+transfer can duplicate parent DOFs. Multiplier extrema
+are quadrature-sampled field values, not coefficient extrema or a between-sample
+positivity certificate.
+The wrapped primal must be contact-free to avoid counting the same
+interaction twice.
+
+Neither the source contact algebra nor the tests listed above establishes
+existence, uniqueness, mesh-independent inf-sup stability, locking
+avoidance, or a convergence rate for this vector formulation. No new
+flat-contact patch pressure-error study, curved reference-solution study,
+mesh-to-mesh comparison, or controlled parameter sweep is supplied here.
+Such studies should separate bulk approximation, geometry, multiplier
+resolution, quadrature, and nonlinear tolerances. Decreasing $\gamma$
+at fixed mesh strengthens augmentation while weakening the stated jump
+coefficient; it is not interchangeable with a justified mesh-dependent
+refinement sequence. An exact residual derivative is necessary for a
+reliable Newton method, but is not by itself a discretization theorem.
+
+\section{Short code map and closing perspective}
+\label{sec:codemap}
+
+The central implementation is \code{plugin::SemismoothRigidContactOperator}
+in \code{fem/Contact.h} and \code{fem/Contact.cpp}. Private methods and state
+are declared directly in the operator's header, with method definitions in
+the source file. Source locators use names rather than line numbers so that
+routine edits do not invalidate the map.
+
+\begin{table}[!ht]
+\centering
+\small
+\caption{Mathematical quantities and their implementation locations.}
+\label{tab:codemap}
+\begin{tabular}{@{}p{0.45\linewidth}p{0.50\linewidth}@{}}
+\toprule
+Location & Mathematical role\\
+\midrule
+\code{RigidPlaneObstacle::Evaluate}; \code{RigidSphereObstacle::Evaluate}
+ & $g,\bn,\bH$ in \eqref{eq:distance}, \eqref{eq:planegap}, and
+ \eqref{eq:sphere}.\\[4pt]
+\code{VerifyInput}; \code{BoundaryMultiplierSpace::VerifyElementMaps}
+ & Parameters, fields, constraints; boundary ownership and verified local
+ vertex/DOF maps in \code{fem/BoundaryMultiplierSpace.cpp}. Contact uses
+ \code{GetParentBoundaryElement} and \code{GetElementDofs}.\\[4pt]
+\code{VisitElementQuadraturePoints}; \code{BuildIntegrationRules}
+ & Trace interpolation, orientation, $\bx_q$, $w_q$, $p_q$, and
+  $\chi_q$ in \eqref{eq:quadrature}--\eqref{eq:pointkernel}. Per-element rule
+  pointers are cached at construction and rebuilt by \code{SetIntegrationRule};
+  residual, Jacobian, and diagnostics reuse them. Reconstruct after
+  mesh/geometry/space changes.\\[4pt]
+\code{AssembleContact}
+ & Explicit element loop: reset, integrate, scatter; then assemble jumps.\\[4pt]
+\code{AccumulateContactPointResidual}; \code{AccumulateContactPointJacobian}
+ & Contact residuals and the four blocks
+ \eqref{eq:k11}--\eqref{eq:k22}, excluding the separately assembled jumps.\\[4pt]
+\code{BuildMultiplierJumpStabilization}
+ & Direct interface quadrature and cached basis-product jump matrices;
+ \eqref{eq:hface}--\eqref{eq:jumpmatrix} is the default P0 reduction.\\[4pt]
+\code{AssembleMultiplierJumpStabilization}
+ & $-S\Lambda$, $-S$, and the multiplier row scale applied once.\\[4pt]
+\code{ScatterContactElement}; \code{MaskEssentialElementEntries}
+ & $Q_D$ in \eqref{eq:extractionresidual}--\eqref{eq:extractionjacobian};
+ free-normal validation and global insertion. Prescribed values are not
+ removed from gap evaluation.\\[4pt]
+\code{Mult}; \code{GetGradient}
+ & Residual evaluation and generalized Jacobian refresh, respectively;
+ neither performs a nonlinear solve.\\[4pt]
+\code{ComputeContactDiagnostics}
+ & Unscaled quadrature resultant, gap, multiplier, pressure, and
+ contact-map diagnostics in \eqref{eq:diagnostics}.\\[4pt]
+\code{examples/contact/circle.cpp}
+ & Small-strain bulk with nonlinear rigid-circle distance, row scales,
+ compliance conversion, GMRES/block preconditioner, adaptive loading.\\[4pt]
+\code{fem/Solvers.h}; \code{fem/Solvers.cpp}
+ & Nonlinear/load-step drivers and composite primal lifecycle support.\\[4pt]
+\code{tests/contact_test.cpp}
+ & Named geometry, residual, tangent, stabilization, constraint,
+ extraction, and quadrature checks in Section~\ref{sec:verification}.\\
+\bottomrule
+\end{tabular}
+\end{table}
+\FloatBarrier
+
+The essential translation is compact: the scalar source contact trace
+becomes the negative \emph{total gap}, its variation becomes
+$-\bn\cdot\bv$, and compression reverses the source multiplier sign.
+The rest follows from consistent differentiation and discretization.
+Initial clearance must not be discarded, the curved normal must be
+differentiated, the multiplier row must retain its saddle normalization,
+and the P0 equation must be interpreted as a stabilized moment.
+Those distinctions connect the prominent vector pair
+\eqref{eq:counterpart} to the actual discrete system
+\eqref{eq:finalweak} without attributing more to either the source paper
+or the implementation than has been established.
+
+\begingroup
+\small
+\begin{thebibliography}{9}
+\bibitem{BHLv1}
+E. Burman, P. Hansbo, M. G. Larson,
+Augmented Lagrangian finite element methods for contact problems,
+arXiv:1609.03326v1, 12 September 2016, 26 pp.
+\url{https://arxiv.org/abs/1609.03326v1};
+versioned PDF: \url{https://arxiv.org/pdf/1609.03326v1}.
+
+\bibitem{BHLjournal}
+E. Burman, P. Hansbo, M. G. Larson,
+Augmented Lagrangian finite element methods for contact problems,
+ESAIM: Mathematical Modelling and Numerical Analysis 53 (1) (2019)
+173--195.
+\url{https://doi.org/10.1051/m2an/2018047}.
+\end{thebibliography}
+\endgroup
+\end{document}

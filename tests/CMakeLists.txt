@@ -38,6 +38,12 @@ mfem_mechanics_add_executable(
     mfemMechanics::femplugin
 )
 mfem_mechanics_add_executable(
+    operator_sum_test
+    operator_sum_test.cpp
+    GTest::gtest_main
+    mfemMechanics::femplugin
+)
+mfem_mechanics_add_executable(
     phase_field_test
     phase_field_test.cpp
     GTest::gtest_main
@@ -50,4 +56,5 @@ gtest_discover_tests(czm_history_test)
 gtest_discover_tests(thermal_strain_test)
 gtest_discover_tests(j2_plasticity_test)
 gtest_discover_tests(contact_test)
+gtest_discover_tests(operator_sum_test)
 gtest_discover_tests(phase_field_test)

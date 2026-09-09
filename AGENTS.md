@@ -3,6 +3,16 @@
 These instructions apply to the entire repository. There are no more-specific
 agent instruction files below this directory.
 
+## CLI math formatting
+
+- Always present mathematics in CLI responses as readable plain text, not raw
+  LaTeX or notation that requires a math renderer.
+- Use simple ASCII expressions such as `F = I + grad(u)`, `sigma = E * epsilon`,
+  and `norm(r) <= tolerance`. Define symbols in words and explain complex
+  expressions in short steps; use fenced text blocks for multiline equations.
+- This rule applies to CLI explanations and progress messages, not mathematical
+  notation in source documents that support rendered math.
+
 ## Mission and priorities
 
 `mfemMechanics` is a C++17 research library and collection of MFEM examples for

@@ -51,18 +51,6 @@ public:
 };
 
 template <typename IntegratorWithLifecycle, typename Integrator>
-void ApplyIntegratorLifecycle( const mfem::Array<Integrator*>& integrators, void ( IntegratorWithLifecycle::*lifecycle )() )
-{
-    for ( int i = 0; i < integrators.Size(); i++ )
-    {
-        if ( auto with_lifecycle = dynamic_cast<IntegratorWithLifecycle*>( integrators[i] ) )
-        {
-            ( with_lifecycle->*lifecycle )();
-        }
-    }
-}
-
-template <typename IntegratorWithLifecycle, typename Integrator>
 void CollectIntegratorLifecycle( const mfem::Array<Integrator*>& integrators, std::vector<IntegratorWithLifecycle*>& lifecycle_integrators )
 {
     for ( int i = 0; i < integrators.Size(); i++ )
@@ -80,24 +68,52 @@ struct IntegratorLifecycle
     std::vector<BlockStepAwareNonlinearFormIntegrator*> block;
 };
 
-IntegratorLifecycle CollectIntegratorLifecycle( const mfem::Operator* oper )
+template <typename Visitor>
+void VisitOperatorTree( const mfem::Operator* oper, Visitor&& visitor, std::vector<const mfem::Operator*>& visited )
 {
-    IntegratorLifecycle result;
-    if ( auto nonlinearform = dynamic_cast<const mfem::NonlinearForm*>( oper ) )
+    if ( oper == nullptr || std::find( visited.begin(), visited.end(), oper ) != visited.end() )
     {
-        CollectIntegratorLifecycle( *nonlinearform->GetDNFI(), result.nonlinear );
-        CollectIntegratorLifecycle( *nonlinearform->GetBNFI(), result.nonlinear );
-        CollectIntegratorLifecycle( nonlinearform->GetInteriorFaceIntegrators(), result.nonlinear );
-        CollectIntegratorLifecycle( nonlinearform->GetBdrFaceIntegrators(), result.nonlinear );
+        return;
     }
 
-    if ( auto nonlinearform = dynamic_cast<const mfem::BlockNonlinearForm*>( oper ) )
+    visited.push_back( oper );
+    visitor( oper );
+    if ( const auto* composite = dynamic_cast<const CompositeNonlinearOperator*>( oper ) )
     {
-        CollectIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::DomainIntegrators(), result.block );
-        CollectIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::BoundaryIntegrators(), result.block );
-        CollectIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::InteriorFaceIntegrators(), result.block );
-        CollectIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::BoundaryFaceIntegrators(), result.block );
+        std::vector<const mfem::Operator*> children;
+        composite->GetChildOperators( children );
+        for ( const mfem::Operator* child : children )
+        {
+            VisitOperatorTree( child, visitor, visited );
+        }
     }
+}
+
+IntegratorLifecycle CollectIntegratorLifecycle( const mfem::Operator* root )
+{
+    IntegratorLifecycle result;
+    std::vector<const mfem::Operator*> visited;
+    VisitOperatorTree(
+        root,
+        [&result]( const mfem::Operator* oper )
+        {
+            if ( auto nonlinearform = dynamic_cast<const mfem::NonlinearForm*>( oper ) )
+            {
+                CollectIntegratorLifecycle( *nonlinearform->GetDNFI(), result.nonlinear );
+                CollectIntegratorLifecycle( *nonlinearform->GetBNFI(), result.nonlinear );
+                CollectIntegratorLifecycle( nonlinearform->GetInteriorFaceIntegrators(), result.nonlinear );
+                CollectIntegratorLifecycle( nonlinearform->GetBdrFaceIntegrators(), result.nonlinear );
+            }
+
+            if ( auto nonlinearform = dynamic_cast<const mfem::BlockNonlinearForm*>( oper ) )
+            {
+                CollectIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::DomainIntegrators(), result.block );
+                CollectIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::BoundaryIntegrators(), result.block );
+                CollectIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::InteriorFaceIntegrators(), result.block );
+                CollectIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::BoundaryFaceIntegrators(), result.block );
+            }
+        },
+        visited );
     return result;
 }
 
@@ -158,20 +174,14 @@ void ApplyIntegratorLifecycle( const mfem::Operator* oper,
                                void ( StepAwareNonlinearFormIntegrator::*nonlinear_lifecycle )(),
                                void ( BlockStepAwareNonlinearFormIntegrator::*block_lifecycle )() )
 {
-    if ( auto nonlinearform = dynamic_cast<const mfem::NonlinearForm*>( oper ) )
+    const IntegratorLifecycle integrators = CollectIntegratorLifecycle( oper );
+    for ( auto* integrator : integrators.nonlinear )
     {
-        ApplyIntegratorLifecycle( *nonlinearform->GetDNFI(), nonlinear_lifecycle );
-        ApplyIntegratorLifecycle( *nonlinearform->GetBNFI(), nonlinear_lifecycle );
-        ApplyIntegratorLifecycle( nonlinearform->GetInteriorFaceIntegrators(), nonlinear_lifecycle );
-        ApplyIntegratorLifecycle( nonlinearform->GetBdrFaceIntegrators(), nonlinear_lifecycle );
+        ( integrator->*nonlinear_lifecycle )();
     }
-
-    if ( auto nonlinearform = dynamic_cast<const mfem::BlockNonlinearForm*>( oper ) )
+    for ( auto* integrator : integrators.block )
     {
-        ApplyIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::DomainIntegrators(), block_lifecycle );
-        ApplyIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::BoundaryIntegrators(), block_lifecycle );
-        ApplyIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::InteriorFaceIntegrators(), block_lifecycle );
-        ApplyIntegratorLifecycle( nonlinearform->*BlockNonlinearFormAccess::BoundaryFaceIntegrators(), block_lifecycle );
+        ( integrator->*block_lifecycle )();
     }
 }
 
@@ -294,25 +304,32 @@ mfem::real_t JacobianDeterminant( const mfem::Operator& jacobian, const mfem::So
 
 void NonlinearStepContext::RegisterToIntegrators( const mfem::Operator* oper ) const
 {
-    if ( auto nonlinearform = dynamic_cast<const mfem::NonlinearForm*>( oper ) )
-    {
-        RegisterIntegrators<StepAwareNonlinearFormIntegrator>( *nonlinearform->GetDNFI(), this );
-        RegisterIntegrators<StepAwareNonlinearFormIntegrator>( *nonlinearform->GetBNFI(), this );
-        RegisterIntegrators<StepAwareNonlinearFormIntegrator>( nonlinearform->GetInteriorFaceIntegrators(), this );
-        RegisterIntegrators<StepAwareNonlinearFormIntegrator>( nonlinearform->GetBdrFaceIntegrators(), this );
-    }
+    std::vector<const mfem::Operator*> visited;
+    VisitOperatorTree(
+        oper,
+        [this]( const mfem::Operator* nestedOperator )
+        {
+            if ( auto nonlinearform = dynamic_cast<const mfem::NonlinearForm*>( nestedOperator ) )
+            {
+                RegisterIntegrators<StepAwareNonlinearFormIntegrator>( *nonlinearform->GetDNFI(), this );
+                RegisterIntegrators<StepAwareNonlinearFormIntegrator>( *nonlinearform->GetBNFI(), this );
+                RegisterIntegrators<StepAwareNonlinearFormIntegrator>( nonlinearform->GetInteriorFaceIntegrators(), this );
+                RegisterIntegrators<StepAwareNonlinearFormIntegrator>( nonlinearform->GetBdrFaceIntegrators(), this );
+            }
 
-    if ( auto nonlinearform = dynamic_cast<const mfem::BlockNonlinearForm*>( oper ) )
-    {
-        RegisterIntegrators<BlockStepAwareNonlinearFormIntegrator>(
-            nonlinearform->*BlockNonlinearFormAccess::DomainIntegrators(), this );
-        RegisterIntegrators<BlockStepAwareNonlinearFormIntegrator>(
-            nonlinearform->*BlockNonlinearFormAccess::BoundaryIntegrators(), this );
-        RegisterIntegrators<BlockStepAwareNonlinearFormIntegrator>(
-            nonlinearform->*BlockNonlinearFormAccess::InteriorFaceIntegrators(), this );
-        RegisterIntegrators<BlockStepAwareNonlinearFormIntegrator>(
-            nonlinearform->*BlockNonlinearFormAccess::BoundaryFaceIntegrators(), this );
-    }
+            if ( auto nonlinearform = dynamic_cast<const mfem::BlockNonlinearForm*>( nestedOperator ) )
+            {
+                RegisterIntegrators<BlockStepAwareNonlinearFormIntegrator>(
+                    nonlinearform->*BlockNonlinearFormAccess::DomainIntegrators(), this );
+                RegisterIntegrators<BlockStepAwareNonlinearFormIntegrator>(
+                    nonlinearform->*BlockNonlinearFormAccess::BoundaryIntegrators(), this );
+                RegisterIntegrators<BlockStepAwareNonlinearFormIntegrator>(
+                    nonlinearform->*BlockNonlinearFormAccess::InteriorFaceIntegrators(), this );
+                RegisterIntegrators<BlockStepAwareNonlinearFormIntegrator>(
+                    nonlinearform->*BlockNonlinearFormAccess::BoundaryFaceIntegrators(), this );
+            }
+        },
+        visited );
 }
 
 void NonlinearStepContext::BeginStep( const mfem::Operator* oper ) const

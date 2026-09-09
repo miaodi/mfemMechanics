@@ -10,6 +10,15 @@
 
 namespace plugin
 {
+/** @brief Exposes nonlinear operators nested inside a composite operator. */
+class CompositeNonlinearOperator
+{
+public:
+    virtual ~CompositeNonlinearOperator() = default;
+
+    virtual void GetChildOperators( std::vector<const mfem::Operator*>& children ) const = 0;
+};
+
 class NonlinearStepContext
 {
 public:
