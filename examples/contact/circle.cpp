@@ -1,8 +1,10 @@
 #include "Contact.h"
 #include "FEMPlugin.h"
 #include "GapSampling.h"
+#include "J2Plasticity.h"
 #include "Material.h"
 #include "PostProc.h"
+#include "SolidMechanicsIntegrator.h"
 #include "Solvers.h"
 
 #include <algorithm>
@@ -14,6 +16,7 @@
 #include <memory>
 #include <mfem.hpp>
 #include <stdexcept>
+#include <string>
 
 namespace
 {
@@ -130,6 +133,10 @@ int RunExample( int argc, char* argv[] )
     int refinementLevels = 0;
     int order = 1;
     int loadSteps = 4;
+    const char* loadPath = "load";
+    const char* materialName = "elastic";
+    mfem::real_t yieldStress = 1.;
+    mfem::real_t hardeningModulus = 100.;
     // 64 Gauss points/face: benchmark sensitivity at orders 127/255/511 is
     // recorded in docs/frictionless-penalty-contact.md. Not a collision bound.
     int contactIntegrationOrder = 127;
@@ -152,7 +159,12 @@ int RunExample( int argc, char* argv[] )
     options.AddOption( &elementsY, "-ny", "--elements-y", "Number of elements through the block height." );
     options.AddOption( &refinementLevels, "-r", "--refine-level", "Uniform mesh refinement levels." );
     options.AddOption( &order, "-o", "--order", "H1 displacement order." );
-    options.AddOption( &loadSteps, "-steps", "--load-steps", "Number of load increments." );
+    options.AddOption( &loadSteps, "-steps", "--load-steps",
+                       "Number of increments per stage (adaptive subdivision allowed)." );
+    options.AddOption( &loadPath, "-lp", "--load-path", "load or load-return; return retains supports." );
+    options.AddOption( &materialName, "-mat", "--material", "elastic or j2 (small-strain plane strain)." );
+    options.AddOption( &yieldStress, "-sy", "--yield-stress", "Initial J2 yield stress." );
+    options.AddOption( &hardeningModulus, "-H", "--hardening-modulus", "J2 isotropic hardening modulus." );
     options.AddOption( &contactIntegrationOrder, "-cq", "--contact-integration-order",
                        "Contact Gauss integration order (circle gap and active-set kink are nonpolynomial)." );
     options.AddOption( &gapSampleIntervals, "-gs", "--gap-sample-intervals",
@@ -181,6 +193,16 @@ int RunExample( int argc, char* argv[] )
         return 1;
     }
     options.PrintOptions( std::cout );
+    const bool returnToZero = std::string( loadPath ) == "load-return";
+    const bool useJ2 = std::string( materialName ) == "j2";
+    MFEM_VERIFY( returnToZero || std::string( loadPath ) == "load", "Use --load-path load|load-return." );
+    MFEM_VERIFY( useJ2 || std::string( materialName ) == "elastic", "Use --material elastic|j2." );
+    MFEM_VERIFY( std::isfinite( yieldStress ) && yieldStress > 0. && std::isfinite( hardeningModulus ) && hardeningModulus >= 0.,
+                 "Yield stress must be positive and hardening nonnegative, both finite." );
+    const mfem::real_t finalTime = returnToZero ? 2. : 1.;
+    const mfem::real_t finalBoundaryDisplacement = returnToZero ? 0. : maximumBottomDisplacement;
+    const auto prescribedMotion = [&]( const mfem::real_t time )
+    { return maximumBottomDisplacement * ( time <= 1. ? time : 2. - time ); };
 
     MFEM_VERIFY( elementsX > 0 && elementsY > 0 && order > 0 && loadSteps > 0,
                  "Element counts, displacement order, and load steps must be positive." );
@@ -254,6 +276,31 @@ int RunExample( int argc, char* argv[] )
     mfem::ConstantCoefficient poissonRatioCoefficient( poissonRatio );
     IsotropicElasticMaterial material( youngsModulusCoefficient, poissonRatioCoefficient );
     plugin::IntegrationPointStorage<> pointStorage( &mesh );
+    mfem::ConstantCoefficient yieldCoefficient( yieldStress ), hardeningCoefficient( hardeningModulus );
+    J2PlasticityMaterial plasticMaterial( youngsModulusCoefficient, poissonRatioCoefficient, yieldCoefficient, hardeningCoefficient );
+    plugin::SolidMechanicsPointStorage<J2PlasticityMaterial> plasticStorage( &mesh );
+    mfem::L2_FECollection plasticCollection( 0, mesh.Dimension() );
+    mfem::FiniteElementSpace plasticSpace( &mesh, &plasticCollection );
+    mfem::GridFunction equivalentPlasticStrain( &plasticSpace );
+    equivalentPlasticStrain = 0.;
+    const auto updatePlasticOutput = [&]()
+    {
+        if ( useJ2 )
+        {
+            plugin::ProjectCommittedEquivalentPlasticStrain( plasticStorage, equivalentPlasticStrain );
+        }
+    };
+    const auto reportResidualShape = [&]( const mfem::Vector& displacement )
+    {
+        updatePlasticOutput();
+        for ( int i = 0; i < leftHorizontalDofs.Size(); ++i )
+        {
+            MFEM_VERIFY( displacement( leftHorizontalDofs[i] ) == 0., "The left horizontal support moved." );
+        }
+        std::cout << std::scientific << std::setprecision( 8 )
+                  << "Final displacement infinity norm: " << displacement.Normlinf() << '\n'
+                  << "Maximum committed equivalent plastic strain (cell average): " << equivalentPlasticStrain.Max() << '\n';
+    };
     const mfem::real_t circleCenterY = height + initialClearance + circleRadius;
     const mfem::Vector circleCenter( MakeVector( { circleCenterX, circleCenterY } ) );
     plugin::RigidSphereObstacle obstacle( circleCenter, circleRadius );
@@ -262,9 +309,16 @@ int RunExample( int argc, char* argv[] )
     const auto& contactRule = mfem::IntRules.Get( mfem::Geometry::SEGMENT, contactIntegrationOrder );
 
     mfem::NonlinearForm residual( &displacementSpace );
-    auto* elasticityIntegrator = new plugin::NonlinearElasticityIntegrator( material, pointStorage );
-    elasticityIntegrator->setNonlinear( false );
-    residual.AddDomainIntegrator( elasticityIntegrator );
+    if ( useJ2 )
+    {
+        residual.AddDomainIntegrator( new plugin::SolidMechanicsIntegrator<J2PlasticityMaterial>( plasticMaterial, plasticStorage ) );
+    }
+    else
+    {
+        auto* elasticityIntegrator = new plugin::NonlinearElasticityIntegrator( material, pointStorage );
+        elasticityIntegrator->setNonlinear( false );
+        residual.AddDomainIntegrator( elasticityIntegrator );
+    }
 
     if ( semismoothContact )
     {
@@ -369,7 +423,7 @@ int RunExample( int argc, char* argv[] )
             [&]( const mfem::real_t pseudoTime, mfem::Vector& trialUnknown )
             {
                 mfem::Vector trialDisplacement( trialUnknown.GetData(), contactOperator.GetBlockOffsets()[1] );
-                const mfem::real_t prescribedDisplacement = pseudoTime * maximumBottomDisplacement;
+                const mfem::real_t prescribedDisplacement = prescribedMotion( pseudoTime );
                 for ( int index = 0; index < bottomVerticalDofs.Size(); index++ )
                 {
                     trialDisplacement( bottomVerticalDofs[index] ) = prescribedDisplacement;
@@ -384,12 +438,22 @@ int RunExample( int argc, char* argv[] )
             bodyParaview->SetDataFormat( mfem::VTKFormat::BINARY );
             bodyParaview->SetHighOrderOutput( true );
             bodyParaview->RegisterVCoeffField( "displacement", &paraviewDisplacement );
+            if ( useJ2 )
+            {
+                bodyParaview->RegisterField( "equivalent_plastic_strain", &equivalentPlasticStrain );
+            }
+            bodyParaview->SetCycle( 0 );
+            bodyParaview->SetTime( 0. );
+            SaveParaView( *bodyParaview );
 
             auto* contactSubMesh = &boundaryMultiplierSpace.GetMesh();
             multiplierParaview = std::make_unique<mfem::ParaViewDataCollection>( "semismooth_contact_multiplier", contactSubMesh );
             multiplierParaview->SetPrefixPath( outputDirectory );
             multiplierParaview->SetDataFormat( mfem::VTKFormat::BINARY );
             multiplierParaview->RegisterField( "boundary_multiplier", &boundaryMultiplier );
+            multiplierParaview->SetCycle( 0 );
+            multiplierParaview->SetTime( 0. );
+            SaveParaView( *multiplierParaview );
         }
 
         nonlinearSolver.SetDataCollectionFunc(
@@ -398,6 +462,7 @@ int RunExample( int argc, char* argv[] )
                 displacement.SetFromTrueDofs( unknown.GetBlock( 0 ) );
                 contactOperator.GetMultiplier( unknown, trueBoundaryMultiplier );
                 boundaryMultiplier.SetFromTrueDofs( trueBoundaryMultiplier );
+                updatePlasticOutput();
                 if ( !output )
                 {
                     return;
@@ -414,6 +479,21 @@ int RunExample( int argc, char* argv[] )
         mfem::Vector zeroRightHandSide;
         nonlinearSolver.Mult( zeroRightHandSide, unknown );
         MFEM_VERIFY( nonlinearSolver.GetConverged(), "The semismooth contact benchmark did not reach full load." );
+        const auto peakDiagnostics = contactOperator.ComputeContactDiagnostics( unknown );
+        std::cout << std::scientific << std::setprecision( 8 )
+                  << "Peak displacement infinity norm: " << unknown.GetBlock( 0 ).Normlinf() << '\n'
+                  << "Peak contact pressure: " << peakDiagnostics.MaximumPressure << '\n';
+        // Separate solves stop exactly at reversal; the same operator/storage owns
+        // committed history throughout. Adaptive failed trials are rolled back by
+        // the solver lifecycle, including through the mixed primal operator.
+        if ( returnToZero )
+        {
+            nonlinearSolver.SetPseudoTimeInterval( 1., 2. );
+            nonlinearSolver.SetDelta( 1. / loadSteps );
+            nonlinearSolver.Mult( zeroRightHandSide, unknown );
+            MFEM_VERIFY( nonlinearSolver.GetConverged(), "Semismooth return stage failed." );
+        }
+        reportResidualShape( unknown.GetBlock( 0 ) );
         displacement.SetFromTrueDofs( unknown.GetBlock( 0 ) );
         contactOperator.GetMultiplier( unknown, trueBoundaryMultiplier );
         boundaryMultiplier.SetFromTrueDofs( trueBoundaryMultiplier );
@@ -430,9 +510,9 @@ int RunExample( int argc, char* argv[] )
         {
             maximumBottomDisplacementError =
                 std::max( maximumBottomDisplacementError,
-                          std::abs( unknown.GetBlock( 0 )( bottomVerticalDofs[index] ) - maximumBottomDisplacement ) );
+                          std::abs( unknown.GetBlock( 0 )( bottomVerticalDofs[index] ) - finalBoundaryDisplacement ) );
         }
-        const bool reachedFullLoad = std::abs( nonlinearSolver.GetCurrentPseudoTime() - 1. ) <= relativeVerificationTolerance;
+        const bool reachedFullLoad = std::abs( nonlinearSolver.GetCurrentPseudoTime() - finalTime ) <= relativeVerificationTolerance;
         const mfem::real_t residualVerificationTolerance =
             10. * std::max( nonlinearAbsoluteTolerance, nonlinearRelativeTolerance * residualScale );
         const bool residualConverged = finalResidual.Norml2() <= residualVerificationTolerance;
@@ -440,8 +520,8 @@ int RunExample( int argc, char* argv[] )
             maximumBottomDisplacementError <= relativeVerificationTolerance * ( 1. + maximumBottomDisplacement );
         const bool initiallySeparated = initialDiagnostics.MinimumGap > 0. && initialDiagnostics.MaximumPressure == 0. &&
                                         initialDiagnostics.MinimumMultiplier == 0. && initialDiagnostics.MaximumMultiplier == 0.;
-        const bool contactActive = diagnostics.ActiveQuadraturePointCount > 0 && diagnostics.MaximumPressure > 0. &&
-                                   diagnostics.MaximumMultiplier > 0.;
+        const bool contactActive = peakDiagnostics.ActiveQuadraturePointCount > 0 &&
+                                   peakDiagnostics.MaximumPressure > 0. && peakDiagnostics.MaximumMultiplier > 0.;
         const mfem::real_t multiplierTolerance =
             relativeVerificationTolerance * std::max( mfem::real_t{ 1. }, diagnostics.MaximumMultiplier );
         const bool multiplierAdmissible = std::isfinite( diagnostics.MinimumMultiplier ) &&
@@ -454,7 +534,7 @@ int RunExample( int argc, char* argv[] )
         const bool complementaritySatisfied = std::isfinite( diagnostics.MaximumComplementarityResidual ) &&
                                               diagnostics.MaximumComplementarityResidual <= penetrationTolerance;
         const bool multiplierCountCorrect = trueBoundaryMultiplier.Size() == expectedContactFaceCount;
-        const bool contactOpposesMotion = diagnostics.Resultant( 1 ) < 0.;
+        const bool contactOpposesMotion = peakDiagnostics.Resultant( 1 ) < 0.;
         const bool verificationPassed = reachedFullLoad && residualConverged && bottomDisplacementSatisfied &&
                                         initiallySeparated && contactActive && multiplierAdmissible && penetrationControlled &&
                                         complementaritySatisfied && multiplierCountCorrect && contactOpposesMotion;
@@ -510,8 +590,8 @@ int RunExample( int argc, char* argv[] )
             mfem::ParaViewDataCollection obstacleParaview( "semismooth_contact_obstacle", &obstacleMesh );
             obstacleParaview.SetPrefixPath( outputDirectory );
             obstacleParaview.SetDataFormat( mfem::VTKFormat::BINARY );
-            obstacleParaview.SetCycle( outputCycle );
-            obstacleParaview.SetTime( 1. );
+            obstacleParaview.SetCycle( 0 );
+            obstacleParaview.SetTime( 0. );
             SaveParaView( obstacleParaview );
 
             std::cout << "ParaView body: " << outputDirectory << "/semismooth_contact/semismooth_contact.pvd\n";
@@ -563,7 +643,7 @@ int RunExample( int argc, char* argv[] )
     nonlinearSolver.SetTrialStateFunc(
         [&]( const mfem::real_t pseudoTime, mfem::Vector& trialDisplacement )
         {
-            const mfem::real_t prescribedDisplacement = pseudoTime * maximumBottomDisplacement;
+            const mfem::real_t prescribedDisplacement = prescribedMotion( pseudoTime );
             for ( int index = 0; index < bottomVerticalDofs.Size(); index++ )
             {
                 trialDisplacement( bottomVerticalDofs[index] ) = prescribedDisplacement;
@@ -577,10 +657,54 @@ int RunExample( int argc, char* argv[] )
         MeasureContact( mesh, displacementSpace, displacement, obstacle, penalty, topBoundary, contactRule );
     mfem::Vector trueDisplacement;
     displacement.GetTrueDofs( trueDisplacement );
+    std::unique_ptr<mfem::ParaViewDataCollection> paraview;
+    int outputCycle = 0;
+    if ( output )
+    {
+        paraview = std::make_unique<mfem::ParaViewDataCollection>( "penalty_contact", &mesh );
+        paraview->SetPrefixPath( outputDirectory );
+        paraview->SetLevelsOfDetail( order );
+        paraview->SetDataFormat( mfem::VTKFormat::BINARY );
+        paraview->SetHighOrderOutput( true );
+        paraview->RegisterVCoeffField( "displacement", &paraviewDisplacement );
+        if ( useJ2 )
+        {
+            paraview->RegisterField( "equivalent_plastic_strain", &equivalentPlasticStrain );
+        }
+        paraview->SetCycle( 0 );
+        paraview->SetTime( 0. );
+        SaveParaView( *paraview );
+    }
+    nonlinearSolver.SetDataCollectionFunc(
+        [&]( int, int, const mfem::real_t time )
+        {
+            displacement.SetFromTrueDofs( trueDisplacement );
+            updatePlasticOutput();
+            if ( paraview )
+            {
+                paraview->SetCycle( ++outputCycle );
+                paraview->SetTime( time );
+                SaveParaView( *paraview );
+            }
+        } );
     mfem::Vector zeroRightHandSide;
     nonlinearSolver.Mult( zeroRightHandSide, trueDisplacement );
     MFEM_VERIFY( nonlinearSolver.GetConverged(), "The penalty contact benchmark did not reach full load." );
     displacement.SetFromTrueDofs( trueDisplacement );
+    const auto peakDiagnostics =
+        MeasureContact( mesh, displacementSpace, displacement, obstacle, penalty, topBoundary, contactRule );
+    std::cout << std::scientific << std::setprecision( 8 )
+              << "Peak displacement infinity norm: " << trueDisplacement.Normlinf() << '\n'
+              << "Peak contact pressure: " << peakDiagnostics.MaximumPressure << '\n';
+    if ( returnToZero )
+    {
+        nonlinearSolver.SetPseudoTimeInterval( 1., 2. );
+        nonlinearSolver.SetDelta( 1. / loadSteps );
+        nonlinearSolver.Mult( zeroRightHandSide, trueDisplacement );
+        MFEM_VERIFY( nonlinearSolver.GetConverged(), "Penalty return stage failed." );
+        displacement.SetFromTrueDofs( trueDisplacement );
+    }
+    reportResidualShape( trueDisplacement );
 
     mfem::Vector finalResidual( residual.Height() );
     residual.Mult( trueDisplacement, finalResidual );
@@ -595,21 +719,21 @@ int RunExample( int argc, char* argv[] )
     {
         maximumBottomDisplacementError =
             std::max( maximumBottomDisplacementError,
-                      std::abs( trueDisplacement( bottomVerticalDofs[index] ) - maximumBottomDisplacement ) );
+                      std::abs( trueDisplacement( bottomVerticalDofs[index] ) - finalBoundaryDisplacement ) );
     }
-    const mfem::real_t pressureCentroidX = diagnostics.PressureIntegral > 0.
-                                               ? diagnostics.PressureMomentX / diagnostics.PressureIntegral
+    const mfem::real_t pressureCentroidX = peakDiagnostics.PressureIntegral > 0.
+                                               ? peakDiagnostics.PressureMomentX / peakDiagnostics.PressureIntegral
                                                : std::numeric_limits<mfem::real_t>::quiet_NaN();
-    const bool reachedFullLoad = std::abs( nonlinearSolver.GetCurrentPseudoTime() - 1. ) <= relativeVerificationTolerance;
+    const bool reachedFullLoad = std::abs( nonlinearSolver.GetCurrentPseudoTime() - finalTime ) <= relativeVerificationTolerance;
     const mfem::real_t residualVerificationTolerance =
         10. * std::max( nonlinearAbsoluteTolerance, nonlinearRelativeTolerance * residualScale );
     const bool residualConverged = finalResidual.Norml2() <= residualVerificationTolerance;
     const bool bottomDisplacementSatisfied =
         maximumBottomDisplacementError <= relativeVerificationTolerance * ( 1. + maximumBottomDisplacement );
     const bool initiallySeparated = initialDiagnostics.MinimumGap > 0. && initialDiagnostics.MaximumPressure == 0.;
-    const bool contactActive = diagnostics.ActiveQuadraturePointCount > 0 && diagnostics.MaximumPressure > 0. &&
-                               diagnostics.MaximumPenetration > 0.;
-    const bool contactOpposesMotion = diagnostics.Resultant( 1 ) < 0.;
+    const bool contactActive = peakDiagnostics.ActiveQuadraturePointCount > 0 && peakDiagnostics.MaximumPressure > 0. &&
+                               peakDiagnostics.MaximumPenetration > 0.;
+    const bool contactOpposesMotion = peakDiagnostics.Resultant( 1 ) < 0.;
     const bool contactLocalizedNearCircle =
         std::isfinite( pressureCentroidX ) &&
         pressureCentroidX >= circleCenterX - circleRadius - relativeVerificationTolerance * width &&
@@ -628,23 +752,13 @@ int RunExample( int argc, char* argv[] )
     std::cout << "Pressure range: [" << diagnostics.MinimumPressure << ", " << diagnostics.MaximumPressure << "]\n";
     std::cout << "Active contact quadrature points: " << diagnostics.ActiveQuadraturePointCount << "/"
               << diagnostics.QuadraturePointCount << '\n';
-    std::cout << "Pressure centroid x: " << pressureCentroidX << '\n';
+    std::cout << "Peak pressure centroid x: " << pressureCentroidX << '\n';
     std::cout << "Contact resultant: [" << diagnostics.Resultant( 0 ) << ", " << diagnostics.Resultant( 1 ) << "]\n";
     std::cout << "Maximum bottom displacement error: " << maximumBottomDisplacementError << '\n';
     std::cout << "Final residual norm: " << finalResidual.Norml2() << '\n';
 
     if ( output )
     {
-        mfem::ParaViewDataCollection paraview( "penalty_contact", &mesh );
-        paraview.SetPrefixPath( outputDirectory );
-        paraview.SetLevelsOfDetail( order );
-        paraview.SetDataFormat( mfem::VTKFormat::BINARY );
-        paraview.SetHighOrderOutput( true );
-        paraview.RegisterVCoeffField( "displacement", &paraviewDisplacement );
-        paraview.SetCycle( 1 );
-        paraview.SetTime( 1. );
-        SaveParaView( paraview );
-
         // Contact uses the exact analytic circle; this closed polyline is only
         // its independent visualization geometry.
         constexpr int obstacleSegments = 128;
@@ -665,8 +779,8 @@ int RunExample( int argc, char* argv[] )
         mfem::ParaViewDataCollection obstacleParaview( "penalty_contact_obstacle", &obstacleMesh );
         obstacleParaview.SetPrefixPath( outputDirectory );
         obstacleParaview.SetDataFormat( mfem::VTKFormat::BINARY );
-        obstacleParaview.SetCycle( 1 );
-        obstacleParaview.SetTime( 1. );
+        obstacleParaview.SetCycle( 0 );
+        obstacleParaview.SetTime( 0. );
         SaveParaView( obstacleParaview );
 
         std::cout << "ParaView body: " << outputDirectory << "/penalty_contact/penalty_contact.pvd\n";

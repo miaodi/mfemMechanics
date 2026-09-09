@@ -747,6 +747,10 @@ circle as a separate obstacle dataset. The mixed mode writes separate body,
 boundary-multiplier, and obstacle datasets. `Warp By Vector` moves only the
 deformable body dataset and leaves the obstacle fixed.
 
+The optional [load-return and J2 example](contact-load-return.md) retains these
+defaults, adds a support-preserving return stage and committed plastic-strain
+output, and checks peak contact separately from final boundary recovery.
+
 ### Circle quadrature resolution and independent gap sampling
 
 The example (both enforcement modes) explicitly sets one fixed segment Gauss

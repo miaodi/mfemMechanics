@@ -3,6 +3,13 @@ mfem_mechanics_add_executable(penalty_contact circle.cpp mfemMechanics::femplugi
 if(BUILD_TESTING)
     foreach(method IN ITEMS Penalty Semismooth)
         add_test(
+            NAME ${method}Contact.LoadReturn
+            COMMAND ${CMAKE_COMMAND}
+                "-DEXECUTABLE=$<TARGET_FILE:penalty_contact>"
+                "-DMETHOD=${method}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/verify_load_return.cmake"
+        )
+        add_test(
             NAME ${method}Contact.OutputVerification
             COMMAND
                 ${CMAKE_COMMAND}

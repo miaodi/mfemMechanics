@@ -21,7 +21,9 @@ foreach(blocked IN ITEMS none prefix ${collections})
         file(WRITE "${prefix}/${blocked}" "This file deliberately blocks a collection directory.\n")
     endif()
     execute_process(
-        COMMAND "${EXECUTABLE}" "--${method}" -nx 2 -ny 2 -steps 4 -output -odir "${prefix}"
+        COMMAND "${EXECUTABLE}" "--${method}" -nx 2 -ny 2 -steps 8
+            --load-path load-return --material j2 --yield-stress 1 --hardening-modulus 100
+            -output -odir "${prefix}"
         WORKING_DIRECTORY "${directory}"
         RESULT_VARIABLE result
         OUTPUT_VARIABLE output
@@ -51,6 +53,12 @@ foreach(blocked IN ITEMS none prefix ${collections})
         if(NOT datasets)
             message(FATAL_ERROR "No datasets in ${pvd}")
         endif()
+        if(NOT collection MATCHES "_obstacle$")
+            list(LENGTH datasets count)
+            if(count LESS 17 OR NOT pvd_text MATCHES "timestep=\"0\"" OR NOT pvd_text MATCHES "timestep=\"2\"")
+                message(FATAL_ERROR "Missing initial/accepted/return frames in ${pvd}")
+            endif()
+        endif()
         foreach(dataset IN LISTS datasets)
             string(REGEX REPLACE "^file=\"|\"$" "" relative_path "${dataset}")
             set(pvtu "${prefix}/${collection}/${relative_path}")
@@ -68,6 +76,12 @@ foreach(blocked IN ITEMS none prefix ${collections})
                 file(READ "${cycle_directory}/${relative_path}" vtu_text)
                 if(NOT vtu_text MATCHES "</VTKFile>")
                     message(FATAL_ERROR "Incomplete VTU piece ${cycle_directory}/${relative_path}")
+                endif()
+                if(collection STREQUAL "${method}_contact")
+                    if(NOT vtu_text MATCHES "Name=\"equivalent_plastic_strain\""
+                       OR NOT vtu_text MATCHES "Name=\"displacement\" NumberOfComponents=\"3\"")
+                        message(FATAL_ERROR "Missing plastic strain or 3-component warp vector")
+                    endif()
                 endif()
                 if(collection MATCHES "_multiplier$" AND NOT vtu_text MATCHES "Name=\"boundary_multiplier\"")
                     message(FATAL_ERROR "Missing multiplier field in ${collection}")

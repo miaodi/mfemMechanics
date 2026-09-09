@@ -1,3 +1,4 @@
+#include "Contact.h"
 #include "J2Plasticity.h"
 #include "PostProc.h"
 #include "SolidMechanicsIntegrator.h"
@@ -1154,6 +1155,82 @@ TEST( NonlinearStepLifecycle, CompositeOperatorForwardsLifecycleToNestedForm )
     context.RollbackStep( &composite );
     EXPECT_EQ( integrator->Commits(), 1 );
     EXPECT_EQ( integrator->Rollbacks(), 1 );
+}
+
+TEST( NonlinearStepLifecycle, ContactWithJ2PreservesCommittedHistoryAcrossRejectedTrial )
+{
+    for ( const bool mixed : { false, true } )
+    {
+        SCOPED_TRACE( mixed ? "semismooth" : "penalty" );
+        mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL );
+        mfem::H1_FECollection collection( 1, 2 );
+        mfem::FiniteElementSpace space( &mesh, &collection, 2 );
+        mfem::ConstantCoefficient young( 200. ), poisson( .25 ), yield( 1. ), hardening( 10. );
+        J2PlasticityMaterial material( young, poisson, yield, hardening );
+        J2PointStorage storage( &mesh );
+        mfem::Vector origin( 2 ), normal( 2 );
+        origin = 0.;
+        origin( 1 ) = 1.;
+        normal = 0.;
+        normal( 1 ) = -1.;
+        plugin::RigidPlaneObstacle obstacle( origin, normal );
+        mfem::Array<int> marker( 4 ), attributes( 1 ), essential;
+        marker = 0;
+        marker[2] = 1;
+        attributes[0] = 3;
+        plugin::BoundaryMultiplierSpace multipliers( mesh, attributes );
+        mfem::IdentityOperator identity( space.GetTrueVSize() );
+        mfem::NonlinearForm form( &space );
+        form.AddDomainIntegrator( new plugin::SolidMechanicsIntegrator<J2PlasticityMaterial>( material, storage ) );
+        if ( !mixed )
+        {
+            form.AddBoundaryIntegrator( new plugin::FrictionlessPenaltyContactIntegrator( obstacle, 1000. ), marker );
+        }
+        form.SetEssentialTrueDofs( essential );
+        plugin::SemismoothRigidContactOperator contact( form, identity, space, obstacle, multipliers, essential, .001 );
+        mfem::Operator* op = mixed ? static_cast<mfem::Operator*>( &contact ) : &form;
+        mfem::GridFunction displacement( &space );
+        mfem::real_t strain = .03;
+        mfem::VectorFunctionCoefficient affine( 2,
+                                                [&]( const mfem::Vector& x, mfem::Vector& u )
+                                                {
+                                                    u.SetSize( 2 );
+                                                    u( 0 ) = strain * x( 0 );
+                                                    u( 1 ) = strain * x( 1 );
+                                                } );
+        mfem::Vector unknown( op->Width() ), residual( op->Height() );
+        const auto evaluate = [&]()
+        {
+            displacement.ProjectCoefficient( affine );
+            unknown = 0.;
+            mfem::Vector primal( unknown.GetData(), space.GetTrueVSize() );
+            displacement.GetTrueDofs( primal );
+            op->Mult( unknown, residual );
+        };
+        mfem::L2_FECollection outputCollection( 0, 2 );
+        mfem::FiniteElementSpace outputSpace( &mesh, &outputCollection );
+        mfem::GridFunction plasticity( &outputSpace );
+        FixedStepContext context;
+        context.BeginStep( op );
+        evaluate();
+        ASSERT_TRUE( context.CommitStep( op ) );
+        plugin::ProjectCommittedEquivalentPlasticStrain( storage, plasticity );
+        const auto committed = plasticity( 0 );
+        ASSERT_GT( committed, 0. );
+        const mfem::Vector acceptedResidual( residual );
+        context.BeginStep( op );
+        strain = .08;
+        evaluate();
+        context.RollbackStep( op );
+        plugin::ProjectCommittedEquivalentPlasticStrain( storage, plasticity );
+        EXPECT_EQ( plasticity( 0 ), committed );
+        context.BeginStep( op );
+        strain = .03;
+        evaluate();
+        residual -= acceptedResidual;
+        EXPECT_LT( residual.Normlinf(), kTightTolerance );
+        context.RollbackStep( op );
+    }
 }
 
 TEST( NewtonLineSearch, FailedSolveRestoresInputSolution )
