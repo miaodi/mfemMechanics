@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(mfemMechanics LANGUAGES CXX)
+project(mfemMechanics LANGUAGES C CXX)
 
 include(FetchContent)
 include(CTest)
 
-find_package(MPI REQUIRED COMPONENTS CXX)
+find_package(MPI REQUIRED COMPONENTS C CXX)
 find_package(MFEM CONFIG REQUIRED)
 
 if(NOT TARGET mfem)
