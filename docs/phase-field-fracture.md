@@ -16,9 +16,11 @@ agreement is claimed. The comparison target is Borden et al., ICES Report 11-14
   `-rs 3 -rp 2 -o 1` configuration has nominal `h=15.625 µm` and Q1 elements,
   versus the report's `h_min=3.906 µm` and cubic C2 T-splines. This investigated
   configuration is not the current MPI refinement default.
-- Interpretation of the benchmark boundary symbols, its numerical residual
-  stiffness, load stepping, and reaction-force thickness normalization are not
-  fully verified against the implementation. The code uses `k=1e-9` and reports
+- The MPI example interprets the side rollers in the journal paper's Figure 5(a)
+  as vertical restraints with horizontal motion free; the serial example still
+  leaves those edges traction-free. The journal paper states in §2.2 that all
+  calculations use `k=0`. Load stepping and reaction-force thickness normalization
+  still require comparison. The code uses `k=1e-9` and reports
   2D reactions in N/m; a direct comparison to a plotted force needs an explicit
   thickness and unit conversion.
 
@@ -272,8 +274,15 @@ rejections. Exhaustion or failure to reach the final coordinate is reported.
 Both examples set `E=210e9 Pa`, `nu=0.3`, use the spectral split, and require a
 2D planar mesh with domain attribute 1 and bottom/top attributes 11/12. Bottom
 and top vertical displacement are zero; bottom horizontal displacement is zero
-and top horizontal displacement ramps to `-disp`. All other mechanical faces
-are traction-free. There is no prescribed phase boundary or initial diffuse
+and top horizontal displacement ramps to `-disp`. The MPI example additionally
+requires right attribute 13 and left attributes 14/15 and imposes zero vertical
+displacement there, leaving horizontal motion free, following the side rollers
+in Borden et al. (2012), §4.1, Figure 5(a), p. 85
+([journal article](https://doi.org/10.1016/j.cma.2012.01.008)). It combines
+component-specific owned true-DOF lists for both residual elimination and trial
+boundary values. The serial example still leaves the outer sides traction-free,
+so the two examples currently solve different boundary-value problems. Crack
+faces are traction-free in both. There is no prescribed phase boundary or initial diffuse
 crack; the supplied mesh defines the notch.
 
 The serial default mesh is `data/crack_square2d.msh`; MPI defaults to

@@ -15,6 +15,9 @@ namespace
 {
 constexpr int kBottomBoundary = 11;
 constexpr int kTopBoundary = 12;
+constexpr int kRightBoundary = 13;
+constexpr int kLeftTopBoundary = 14;
+constexpr int kLeftBottomBoundary = 15;
 
 class TimedBoomerAMG final : public mfem::HypreBoomerAMG
 {
@@ -186,6 +189,9 @@ void VerifyMesh( const mfem::Mesh& mesh )
                  "pPhaseField_shear requires domain attribute 1." );
     MFEM_VERIFY( mesh.bdr_attributes.Find( kBottomBoundary ) >= 0 && mesh.bdr_attributes.Find( kTopBoundary ) >= 0,
                  "pPhaseField_shear requires bottom boundary attribute 11 and top boundary attribute 12." );
+    MFEM_VERIFY( mesh.bdr_attributes.Find( kRightBoundary ) >= 0 && mesh.bdr_attributes.Find( kLeftTopBoundary ) >= 0 &&
+                     mesh.bdr_attributes.Find( kLeftBottomBoundary ) >= 0,
+                 "pPhaseField_shear requires right boundary attribute 13 and left boundary attributes 14 and 15." );
 }
 
 mfem::real_t GlobalReduction( mfem::real_t value, const MPI_Op operation, MPI_Comm communicator )
@@ -352,14 +358,24 @@ int RunExample( int argc, char* argv[], MPI_Comm communicator )
     displacementBoundaryMarker = 0;
     displacementBoundaryMarker[kBottomBoundary - 1] = 1;
     displacementBoundaryMarker[kTopBoundary - 1] = 1;
-    mfem::Array<int> phaseBoundaryMarker( mesh.bdr_attributes.Max() );
-    phaseBoundaryMarker = 0;
+    mfem::Array<int> sideBoundaryMarker( mesh.bdr_attributes.Max() );
+    sideBoundaryMarker = 0;
+    sideBoundaryMarker[kRightBoundary - 1] = 1;
+    sideBoundaryMarker[kLeftTopBoundary - 1] = 1;
+    sideBoundaryMarker[kLeftBottomBoundary - 1] = 1;
     mfem::Array<int> topBoundaryMarker( mesh.bdr_attributes.Max() );
     topBoundaryMarker = 0;
     topBoundaryMarker[kTopBoundary - 1] = 1;
     mfem::Array<int> constrainedDisplacementDofs;
     mfem::Array<int> loadedHorizontalDofs;
     displacementSpace.GetEssentialTrueDofs( displacementBoundaryMarker, constrainedDisplacementDofs );
+    // Borden et al. (2012), Section 4.1, Fig. 5(a): outer side rollers
+    // restrain vertical motion only. Crack faces remain traction-free.
+    mfem::Array<int> sideVerticalDofs;
+    displacementSpace.GetEssentialTrueDofs( sideBoundaryMarker, sideVerticalDofs, 1 );
+    constrainedDisplacementDofs.Append( sideVerticalDofs );
+    constrainedDisplacementDofs.Sort();
+    constrainedDisplacementDofs.Unique();
     displacementSpace.GetEssentialTrueDofs( topBoundaryMarker, loadedHorizontalDofs, 0 );
     int globalLoadedDofs = 0;
     const int localLoadedDofs = loadedHorizontalDofs.Size();
@@ -387,12 +403,13 @@ int RunExample( int argc, char* argv[], MPI_Comm communicator )
 
     mfem::ParBlockNonlinearForm residual( spaces );
     residual.AddDomainIntegrator( new plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage>( material, pointStorage ) );
-    mfem::Array<mfem::Array<int>*> essentialBoundaryMarkers( 2 );
-    essentialBoundaryMarkers[0] = &displacementBoundaryMarker;
-    essentialBoundaryMarkers[1] = &phaseBoundaryMarker;
+    mfem::Array<int> constrainedPhaseDofs;
+    mfem::Array<mfem::Array<int>*> essentialTrueDofs( 2 );
+    essentialTrueDofs[0] = &constrainedDisplacementDofs;
+    essentialTrueDofs[1] = &constrainedPhaseDofs;
     mfem::Array<mfem::Vector*> essentialRightHandSides( 2 );
     essentialRightHandSides = nullptr;
-    residual.SetEssentialBC( essentialBoundaryMarkers, essentialRightHandSides );
+    residual.SetEssentialTrueDofs( essentialTrueDofs, essentialRightHandSides );
     residual.SetGradientType( mfem::Operator::Type::Hypre_ParCSR );
 
     mfem::ParBlockNonlinearForm internalResidual( spaces );
