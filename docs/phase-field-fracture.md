@@ -35,7 +35,9 @@ trees, not proof that later source/default edits were tested. In particular,
 the current MPI defaults are 15 nonlinear sweeps, double-precision relative
 tolerance `1e-5`, maximum continuation increment `1e-2`, and `-rs 3 -rp 4`;
 older descriptions of 12/25 sweeps, `1e-7`, or `1e-3` do not describe these
-defaults. Fresh commit-time checks are reported separately from those records.
+defaults. The MPI example now uses relative-only nonlinear convergence
+(`abs_tol=0` for both blocks); historical checks below predate this change.
+Fresh commit-time checks are reported separately from those records.
 
 ### Fresh commit-time checks, 2026-09-05
 
@@ -259,9 +261,13 @@ within tolerance can skip its current solve, but its convergence is never
 latched: an update to the other field can reactivate it. Acceptance requires
 both current residuals to pass simultaneously. The shared
 absolute tolerance acts on blocks with different units and may need problem-
-specific scaling. The examples use 25 iterations, relative tolerance `1e-7`
-in double precision (`1e-4` in single), and absolute tolerance
-`max(real_min,100*machine_epsilon*E*max(maximum_displacement,1e-12))`.
+specific scaling. The MPI example uses 15 sweeps by default, relative tolerance
+`1e-5` in double precision (`1e-4` in single), and zero absolute tolerance for
+both blocks. Its references reset for each attempted increment. This avoids
+skipping phase updates because of a displacement-derived absolute threshold,
+but very small reference residuals can demand accuracy below floating-point
+resolution. Full-fracture convergence with this setting remains to be verified.
+The serial example retains its existing absolute-tolerance policy.
 
 Adaptive continuation restores the accepted solution before prescribing each
 trial boundary value. Failed solves halve the increment; successful solves

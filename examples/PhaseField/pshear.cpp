@@ -464,9 +464,9 @@ int RunExample( int argc, char* argv[], MPI_Comm communicator )
     nonlinearSolver.SetOperator( residual );
     nonlinearSolver.SetRelTol( std::is_same_v<mfem::real_t, float> ? 1e-4f : 1e-5 );
     const mfem::real_t precisionTolerance = mfem::real_t( 100 ) * std::numeric_limits<mfem::real_t>::epsilon();
-    nonlinearSolver.SetAbsTol( std::max(
-        std::numeric_limits<mfem::real_t>::min(),
-        precisionTolerance * youngsModulus.constant * std::max( maximumDisplacement, mfem::real_t( 1e-12 ) ) ) );
+    // Each block uses its own first nonzero residual as its relative reference.
+    // Avoid applying a displacement-derived absolute scale to the phase equation.
+    nonlinearSolver.SetAbsTol( 0. );
     nonlinearSolver.SetMaxIter( maximumSweeps );
     nonlinearSolver.SetPseudoTimeInterval( 0., finalPseudoTime );
     nonlinearSolver.SetDelta( initialPseudoTimeStep );
