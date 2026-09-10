@@ -4,15 +4,54 @@
 
 #include <Eigen/Dense>
 #include <cmath>
+#include <functional>
 #include <gtest/gtest.h>
 #include <type_traits>
 
 namespace
 {
-constexpr bool kSinglePrecision = std::is_same_v<mfem::real_t, float>;
-constexpr mfem::real_t kStressTolerance = kSinglePrecision ? 2e-4f : 2e-10;
-constexpr mfem::real_t kTangentTolerance = kSinglePrecision ? 8e-2f : 3e-5;
-constexpr mfem::real_t kFiniteDifferenceStep = kSinglePrecision ? 2e-3f : 1e-6;
+using Split = PhaseFieldElasticMaterial::StrainEnergySplit;
+constexpr bool kSingle = std::is_same_v<mfem::real_t, float>;
+constexpr mfem::real_t kStressTol = kSingle ? 2e-4f : 2e-10;
+constexpr mfem::real_t kTangentTol = kSingle ? 8e-2f : 3e-5;
+constexpr mfem::real_t kDifferenceStep = kSingle ? 2e-3f : 1e-6;
+constexpr Split kSplits[] = { Split::MieheSpectral, Split::AmorVolumetricDeviatoric, Split::Isotropic };
+
+mfem::Array<mfem::FiniteElementSpace*> Spaces( mfem::FiniteElementSpace& u, mfem::FiniteElementSpace& phi )
+{
+    mfem::Array<mfem::FiniteElementSpace*> spaces( 2 );
+    spaces[0] = &u;
+    spaces[1] = &phi;
+    return spaces;
+}
+
+struct MaterialPoint
+{
+    mfem::Mesh mesh{ mfem::Mesh::MakeCartesian3D( 1, 1, 1, mfem::Element::HEXAHEDRON, 1., 1., 1. ) };
+    mfem::ConstantCoefficient youngs{ 10. }, poisson{ .25 };
+
+    void Set( PhaseFieldElasticMaterial& material, const Eigen::Vector6r& strain, mfem::real_t phi )
+    {
+        auto& transformation = *mesh.GetElementTransformation( 0 );
+        const auto& point = mfem::Geometries.GetCenter( mfem::Geometry::CUBE );
+        transformation.SetIntPoint( &point );
+        material.at( transformation, point );
+        material.setMechanicalStrain( util::InverseVoigt( strain, true ) );
+        material.setPhaseField( phi );
+    }
+};
+
+class CountingCoefficient : public mfem::ConstantCoefficient
+{
+public:
+    using mfem::ConstantCoefficient::ConstantCoefficient;
+    int calls{ 0 };
+    mfem::real_t Eval( mfem::ElementTransformation& transformation, const mfem::IntegrationPoint& point ) override
+    {
+        ++calls;
+        return mfem::ConstantCoefficient::Eval( transformation, point );
+    }
+};
 
 class FixedStepContext final : public plugin::NonlinearStepContext
 {
@@ -23,917 +62,628 @@ public:
     }
 };
 
-class IdentitySolver final : public mfem::Solver
+struct ElementProblem
 {
-public:
-    explicit IdentitySolver( mfem::real_t correctionScale = 1. ) : mCorrectionScale( correctionScale )
+    mfem::Mesh mesh{ mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL, true, 1., 1. ) };
+    mfem::H1_FECollection collection{ 1, 2 };
+    mfem::FiniteElementSpace uSpace{ &mesh, &collection, 2, mfem::Ordering::byVDIM };
+    mfem::FiniteElementSpace phiSpace{ &mesh, &collection };
+    CountingCoefficient youngs{ 10. }, poisson{ .25 };
+    PhaseFieldElasticMaterial material;
+    plugin::PhaseFieldPointStorage storage{ &mesh };
+    FixedStepContext context;
+    mfem::Array<mfem::FiniteElementSpace*> spaces{ Spaces( uSpace, phiSpace ) };
+    mfem::BlockNonlinearForm form{ spaces };
+    mfem::BlockVector state{ form.GetBlockTrueOffsets() };
+    plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage>* integrator;
+
+    explicit ElementProblem( Split split ) : material( youngs, poisson, split, { 2.5, .3, .01 } )
     {
+        integrator = new plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage>( material, storage );
+        form.AddDomainIntegrator( integrator ); // Form owns the integrator.
+        integrator->SetStepContext( &context );
+        mfem::GridFunction u( &uSpace ), phi( &phiSpace );
+        mfem::VectorFunctionCoefficient displacement( 2,
+                                                      []( const mfem::Vector& x, mfem::Vector& value )
+                                                      {
+                                                          value.SetSize( 2 );
+                                                          value( 0 ) = .018 * x( 0 ) + .004 * x( 1 );
+                                                          value( 1 ) = .004 * x( 0 ) - .007 * x( 1 );
+                                                      } );
+        mfem::FunctionCoefficient damage( []( const mfem::Vector& x ) { return .2 + .03 * x( 0 ) + .02 * x( 1 ); } );
+        u.ProjectCoefficient( displacement );
+        phi.ProjectCoefficient( damage );
+        u.GetTrueDofs( state.GetBlock( 0 ) );
+        phi.GetTrueDofs( state.GetBlock( 1 ) );
     }
 
-    void SetOperator( const mfem::Operator& op ) override
+    void CheckJacobian( bool activeHistory )
     {
-        MFEM_VERIFY( op.Height() == op.Width(), "IdentitySolver requires a square operator." );
-        height = op.Height();
-        width = op.Width();
-    }
+        youngs.calls = poisson.calls = 0;
+        auto& jacobian = form.GetGradient( state );
+        const int points = mfem::IntRules.Get( mfem::Geometry::SQUARE, 3 ).GetNPoints();
+        EXPECT_EQ( youngs.calls, points );
+        EXPECT_EQ( poisson.calls, points );
+        mfem::Vector residual( state.Size() );
+        youngs.calls = poisson.calls = 0;
+        form.Mult( state, residual );
+        EXPECT_EQ( youngs.calls, points );
+        EXPECT_EQ( poisson.calls, points );
 
-    void Mult( const mfem::Vector& rightHandSide, mfem::Vector& solution ) const override
-    {
-        ++calls;
-        lastRightHandSide = rightHandSide( 0 );
-        solution = rightHandSide;
-        solution *= mCorrectionScale;
-    }
-
-    mutable int calls{ 0 };
-    mutable mfem::real_t lastRightHandSide{ 0. };
-
-private:
-    mfem::real_t mCorrectionScale;
-};
-
-class AffineTwoBlockForm final : public mfem::BlockNonlinearForm
-{
-public:
-    AffineTwoBlockForm( mfem::Array<mfem::FiniteElementSpace*>& spaces, const mfem::Vector& target, mfem::real_t coupling = 0. )
-        : mfem::BlockNonlinearForm( spaces ),
-          mTarget( target ),
-          mFirstDiagonal( 1 ),
-          mSecondDiagonal( 1 ),
-          mCoupling( 1 ),
-          mGradient( GetBlockTrueOffsets() )
-    {
-        MFEM_VERIFY( Height() == 2 && target.Size() == Height(), "The test form requires two scalar blocks." );
-        mFirstDiagonal = 1.;
-        mSecondDiagonal = 1.;
-        mCoupling = coupling;
-        mGradient.SetDiagonalBlock( 0, &mFirstDiagonal );
-        mGradient.SetDiagonalBlock( 1, &mSecondDiagonal );
-        mGradient.SetBlock( 0, 1, &mCoupling );
-        mGradient.SetBlock( 1, 0, &mCoupling );
-    }
-
-    void Mult( const mfem::Vector& state, mfem::Vector& residual ) const override
-    {
-        residual.SetSize( state.Size() );
-        mGradient.Mult( state, residual );
-        residual -= mTarget;
-    }
-
-    mfem::Operator& GetGradient( const mfem::Vector& ) const override
-    {
-        return mGradient;
-    }
-
-private:
-    mfem::Vector mTarget;
-    mutable mfem::DenseMatrix mFirstDiagonal;
-    mutable mfem::DenseMatrix mSecondDiagonal;
-    mutable mfem::DenseMatrix mCoupling;
-    mutable mfem::BlockOperator mGradient;
-};
-
-struct MaterialPoint
-{
-    mfem::Mesh mesh{ mfem::Mesh::MakeCartesian3D( 1, 1, 1, mfem::Element::HEXAHEDRON, 1., 1., 1. ) };
-    mfem::ConstantCoefficient youngsModulus{ 10. };
-    mfem::ConstantCoefficient poissonRatio{ .25 };
-    mfem::ElementTransformation& transformation{ *mesh.GetElementTransformation( 0 ) };
-    const mfem::IntegrationPoint& integrationPoint{ mfem::Geometries.GetCenter( mfem::Geometry::CUBE ) };
-};
-
-class CountingCoefficient : public mfem::ConstantCoefficient
-{
-public:
-    using mfem::ConstantCoefficient::ConstantCoefficient;
-    mfem::real_t Eval( mfem::ElementTransformation& transformation, const mfem::IntegrationPoint& point ) override
-    {
-        ++calls;
-        return mfem::ConstantCoefficient::Eval( transformation, point );
-    }
-    int calls{ 0 };
-};
-
-void SetStrain( PhaseFieldElasticMaterial& material, MaterialPoint& point, const Eigen::Vector6r& engineeringStrain, const mfem::real_t phase )
-{
-    point.transformation.SetIntPoint( &point.integrationPoint );
-    material.at( point.transformation, point.integrationPoint );
-    material.setMechanicalStrain( util::InverseVoigt( engineeringStrain, true ) );
-    material.setPhaseField( phase );
-}
-
-mfem::Vector AssembleElementResidual( plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage>& integrator,
-                                      const mfem::Array<const mfem::FiniteElement*>& elements,
-                                      mfem::ElementTransformation& transformation,
-                                      const mfem::Vector& state,
-                                      const int displacementSize )
-{
-    mfem::Vector displacement( const_cast<mfem::real_t*>( state.GetData() ), displacementSize );
-    mfem::Vector phase( const_cast<mfem::real_t*>( state.GetData() ) + displacementSize, state.Size() - displacementSize );
-    mfem::Array<const mfem::Vector*> elementState( 2 );
-    elementState[0] = &displacement;
-    elementState[1] = &phase;
-
-    mfem::Vector displacementResidual;
-    mfem::Vector phaseResidual;
-    mfem::Array<mfem::Vector*> elementResidual( 2 );
-    elementResidual[0] = &displacementResidual;
-    elementResidual[1] = &phaseResidual;
-    integrator.AssembleElementVector( elements, transformation, elementState, elementResidual );
-
-    mfem::Vector residual( state.Size() );
-    for ( int i = 0; i < displacementResidual.Size(); i++ )
-    {
-        residual( i ) = displacementResidual( i );
-    }
-    for ( int i = 0; i < phaseResidual.Size(); i++ )
-    {
-        residual( displacementSize + i ) = phaseResidual( i );
-    }
-    return residual;
-}
-
-mfem::DenseMatrix AssembleElementJacobian( plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage>& integrator,
-                                           const mfem::Array<const mfem::FiniteElement*>& elements,
-                                           mfem::ElementTransformation& transformation,
-                                           mfem::Vector& state,
-                                           const int displacementSize )
-{
-    mfem::Vector displacement( state.GetData(), displacementSize );
-    mfem::Vector phase( state.GetData() + displacementSize, state.Size() - displacementSize );
-    mfem::Array<const mfem::Vector*> elementState( 2 );
-    elementState[0] = &displacement;
-    elementState[1] = &phase;
-
-    mfem::DenseMatrix blocks[2][2];
-    mfem::Array2D<mfem::DenseMatrix*> elementJacobian( 2, 2 );
-    for ( int row = 0; row < 2; row++ )
-    {
-        for ( int column = 0; column < 2; column++ )
+        // Excite each input block separately and check both output blocks.
+        for ( int input = 0; input < 2; ++input )
         {
-            elementJacobian( row, column ) = &blocks[row][column];
-        }
-    }
-    integrator.AssembleElementGrad( elements, transformation, elementState, elementJacobian );
-
-    mfem::DenseMatrix jacobian( state.Size() );
-    jacobian = 0.;
-    for ( int blockRow = 0; blockRow < 2; blockRow++ )
-    {
-        const int rowOffset = blockRow == 0 ? 0 : displacementSize;
-        for ( int blockColumn = 0; blockColumn < 2; blockColumn++ )
-        {
-            const int columnOffset = blockColumn == 0 ? 0 : displacementSize;
-            const auto& block = blocks[blockRow][blockColumn];
-            for ( int column = 0; column < block.Width(); column++ )
+            mfem::BlockVector direction( form.GetBlockTrueOffsets() );
+            direction = 0.;
+            auto& block = direction.GetBlock( input );
+            for ( int i = 0; i < block.Size(); ++i )
             {
-                for ( int row = 0; row < block.Height(); row++ )
-                {
-                    jacobian( rowOffset + row, columnOffset + column ) = block( row, column );
-                }
+                block( i ) = ( i % 7 ) - 3.;
+            }
+            direction /= direction.Norml2();
+            mfem::Vector plus( state ), minus( state ), rp( state.Size() ), rm( state.Size() );
+            mfem::BlockVector analytical( form.GetBlockTrueOffsets() ), numerical( form.GetBlockTrueOffsets() );
+            jacobian.Mult( direction, analytical );
+            plus.Add( kDifferenceStep, direction );
+            minus.Add( -kDifferenceStep, direction );
+            form.Mult( plus, rp );
+            form.Mult( minus, rm );
+            subtract( rp, rm, numerical );
+            numerical /= 2 * kDifferenceStep;
+            if ( input == 0 && !activeHistory )
+            {
+                EXPECT_EQ( analytical.GetBlock( 1 ).Norml2(), 0. );
+            }
+            for ( int output = 0; output < 2; ++output )
+            {
+                const mfem::real_t scale = 1. + numerical.GetBlock( output ).Norml2();
+                analytical.GetBlock( output ) -= numerical.GetBlock( output );
+                EXPECT_LE( analytical.GetBlock( output ).Norml2(), kTangentTol * scale );
             }
         }
     }
-    return jacobian;
-}
+};
+
+// Small algebraic problems isolate solver convergence and transaction behavior
+// from constitutive/assembly errors. All diagonal blocks are scalar.
+class ScalarSolver final : public mfem::Solver
+{
+public:
+    explicit ScalarSolver( mfem::real_t fraction = 1. ) : fraction( fraction )
+    {
+    }
+    std::function<void()> beforeSolve;
+    mutable int calls{ 0 };
+    mutable mfem::real_t lastRhs{ 0. };
+    void SetOperator( const mfem::Operator& op ) override
+    {
+        MFEM_VERIFY( op.Height() == 1 && op.Width() == 1, "Expected scalar test block." );
+        mfem::Vector one( 1 ), value( 1 );
+        one = 1.;
+        op.Mult( one, value );
+        diagonal = value( 0 );
+    }
+    void Mult( const mfem::Vector& rhs, mfem::Vector& x ) const override
+    {
+        if ( beforeSolve )
+        {
+            beforeSolve();
+        }
+        ++calls;
+        lastRhs = rhs( 0 );
+        x = rhs;
+        x *= fraction / diagonal;
+    }
+
+private:
+    mfem::real_t fraction, diagonal{ 1. };
+};
+
+class HistoryProbe final : public plugin::BlockStepAwareNonlinearFormIntegrator
+{
+public:
+    plugin::PhaseFieldHistory history;
+    int begins{ 0 }, commits{ 0 }, rollbacks{ 0 };
+    void BeginStep() noexcept override
+    {
+        BlockStepAwareNonlinearFormIntegrator::BeginStep();
+        ++begins;
+        history.BeginStep();
+    }
+    void CommitStep() noexcept override
+    {
+        ++commits;
+        history.CommitStep();
+        BlockStepAwareNonlinearFormIntegrator::CommitStep();
+    }
+    void RollbackStep() noexcept override
+    {
+        ++rollbacks;
+        history.RollbackStep();
+        BlockStepAwareNonlinearFormIntegrator::RollbackStep();
+    }
+};
+
+class TwoBlockForm final : public mfem::BlockNonlinearForm
+{
+public:
+    HistoryProbe* probe;
+    mutable mfem::real_t currentU{ 0. }, currentPhi{ 0. };
+    TwoBlockForm( mfem::Array<mfem::FiniteElementSpace*>& spaces, mfem::real_t coupling = 0., bool nonlinear = false )
+        : mfem::BlockNonlinearForm( spaces ), coupling( coupling ), nonlinear( nonlinear ), gradient( GetBlockTrueOffsets() )
+    {
+        probe = new HistoryProbe;
+        AddDomainIntegrator( probe );
+        uu = pp = 1.;
+        up = nonlinear ? -1. : coupling;
+        pu = nonlinear ? -.2 : coupling;
+        gradient.SetBlock( 0, 0, &uu );
+        gradient.SetBlock( 0, 1, &up );
+        gradient.SetBlock( 1, 0, &pu );
+        gradient.SetBlock( 1, 1, &pp );
+    }
+    void Mult( const mfem::Vector& x, mfem::Vector& r ) const override
+    {
+        r.SetSize( 2 );
+        r( 0 ) = nonlinear ? x( 0 ) + std::pow( x( 0 ), 3 ) - 1. - x( 1 ) : x( 0 ) + coupling * x( 1 );
+        r( 1 ) = x( 1 ) + ( nonlinear ? -.2 : coupling ) * x( 0 );
+        probe->history.EvaluateTrial( x( 0 ) * x( 0 ) );
+    }
+    mfem::Operator& GetGradient( const mfem::Vector& x ) const override
+    {
+        currentU = x( 0 );
+        currentPhi = x( 1 );
+        uu = nonlinear ? 1. + 3. * x( 0 ) * x( 0 ) : 1.;
+        return gradient;
+    }
+
+private:
+    mfem::real_t coupling;
+    bool nonlinear;
+    mutable mfem::DenseMatrix uu{ 1 }, up{ 1 }, pu{ 1 }, pp{ 1 };
+    mutable mfem::BlockOperator gradient;
+};
+
+class PhaseFieldSolverTest : public testing::Test
+{
+protected:
+    mfem::Mesh mesh{ mfem::Mesh::MakeCartesian1D( 1 ) };
+    mfem::L2_FECollection collection{ 0, 1 };
+    mfem::FiniteElementSpace uSpace{ &mesh, &collection }, phiSpace{ &mesh, &collection };
+    mfem::Array<mfem::FiniteElementSpace*> spaces{ Spaces( uSpace, phiSpace ) };
+    mfem::Vector state, rhs;
+    const mfem::real_t tolerance = kSingle ? 1e-4f : 1e-9;
+    void SetUp() override
+    {
+        state.SetSize( 2 );
+        rhs.SetSize( 2 );
+        state = 0.;
+        rhs = 0.;
+    }
+};
 
 static_assert( !std::is_copy_constructible_v<PhaseFieldElasticMaterial> );
 } // namespace
 
-TEST( PhaseFieldMaterial, SpectralSplitPreservesEngineeringShearScaling )
+TEST( PhaseFieldMaterial, EngineeringShearAndCompressionLimits )
 {
     MaterialPoint point;
-    PhaseFieldElasticMaterial material( point.youngsModulus, point.poissonRatio,
-                                        PhaseFieldElasticMaterial::StrainEnergySplit::MieheSpectral );
-    constexpr mfem::real_t engineeringShear = .04;
-    const mfem::real_t shearModulus = point.youngsModulus.constant / ( 2. * ( 1. + point.poissonRatio.constant ) );
-    Eigen::Vector6r strain = Eigen::Vector6r::Zero();
-    strain( 3 ) = engineeringShear;
-    SetStrain( material, point, strain, 0. );
-
-    const Eigen::Vector6r stress = material.getPK2StressVector();
-    material.updateRefModuli();
-
-    EXPECT_NEAR( stress( 3 ), shearModulus * engineeringShear,
-                 kStressTolerance * ( 1. + std::abs( shearModulus * engineeringShear ) ) );
-    EXPECT_NEAR( material.getRefModuli()( 3, 3 ), shearModulus, kStressTolerance * ( 1. + std::abs( shearModulus ) ) );
-    EXPECT_NEAR( material.getPsiPos(), shearModulus * engineeringShear * engineeringShear / 4.,
-                 kStressTolerance * ( 1. + shearModulus * engineeringShear * engineeringShear ) );
+    constexpr mfem::real_t gamma = .04, mu = 4., phi = .6, k = .03;
+    const mfem::real_t g = ( 1. - k ) * ( 1. - phi ) * ( 1. - phi ) + k;
+    for ( Split split : kSplits )
+    {
+        PhaseFieldElasticMaterial material( point.youngs, point.poisson, split, { 2700., .015e-3, k } );
+        Eigen::Vector6r strain = Eigen::Vector6r::Zero();
+        for ( int shear = 3; shear < 6; ++shear )
+        {
+            strain.setZero();
+            strain( shear ) = gamma;
+            point.Set( material, strain, 0. );
+            EXPECT_NEAR( material.getPK2StressVector()( shear ), mu * gamma, kStressTol );
+            material.updateRefModuli();
+            EXPECT_NEAR( material.getRefModuli()( shear, shear ), mu, kStressTol );
+            EXPECT_NEAR( material.getPsiPos(), mu * gamma * gamma / ( split == Split::MieheSpectral ? 4. : 2. ), kStressTol );
+            point.Set( material, strain, phi );
+            EXPECT_NEAR( material.getPK2StressVector()( shear ),
+                         mu * gamma * ( split == Split::MieheSpectral ? ( 1. + g ) / 2. : g ), kStressTol );
+        }
+        strain.setZero();
+        strain.head<3>().setConstant( -.01 );
+        point.Set( material, strain, 0. );
+        const Eigen::Vector6r intact = material.getPK2StressVector();
+        point.Set( material, strain, phi );
+        EXPECT_LE( ( material.getPK2StressVector() - ( split == Split::Isotropic ? g : 1. ) * intact ).norm(), kStressTol );
+        if ( split != Split::Isotropic )
+        {
+            EXPECT_NEAR( material.getPsiPos(), 0., kStressTol );
+        }
+    }
 }
 
-TEST( PhaseFieldMaterial, BatchedResponseMatchesGettersAndOwnsOptionalTangent )
+TEST( PhaseFieldMaterial, ResponseSnapshotAndIntactZeroStrainTangent )
 {
     MaterialPoint point;
+    Eigen::Matrix6r elastic = Eigen::Matrix6r::Zero();
+    elastic.topLeftCorner<3, 3>().setConstant( 4. );
+    elastic.diagonal().head<3>().setConstant( 12. );
+    elastic.diagonal().tail<3>().setConstant( 4. );
     Eigen::Vector6r strain;
     strain << .018, -.007, .003, .008, .002, -.004;
-    for ( const auto split : { PhaseFieldElasticMaterial::StrainEnergySplit::Isotropic,
-                               PhaseFieldElasticMaterial::StrainEnergySplit::AmorVolumetricDeviatoric,
-                               PhaseFieldElasticMaterial::StrainEnergySplit::MieheSpectral } )
+    for ( Split split : kSplits )
     {
-        PhaseFieldElasticMaterial material( point.youngsModulus, point.poissonRatio, split );
-        SetStrain( material, point, strain, .3 );
+        PhaseFieldElasticMaterial material( point.youngs, point.poisson, split );
+        point.Set( material, Eigen::Vector6r::Zero(), 0. );
+        const auto zero = material.EvaluateResponse( true );
+        EXPECT_LE( zero.stress.norm(), kStressTol );
+        EXPECT_NEAR( zero.positiveEnergy, 0., kStressTol );
+        ASSERT_TRUE( zero.tangent );
+        EXPECT_LE( ( *zero.tangent - elastic ).norm(), kStressTol * elastic.norm() );
+        point.Set( material, strain, .3 );
         const auto response = material.EvaluateResponse( true );
-        ASSERT_TRUE( response.tangent.has_value() );
         const auto stressOnly = material.EvaluateResponse( false );
-        EXPECT_FALSE( stressOnly.tangent.has_value() );
+        ASSERT_TRUE( response.tangent );
+        EXPECT_FALSE( stressOnly.tangent );
         EXPECT_EQ( response.positiveEnergy, material.getPsiPos() );
         EXPECT_EQ( stressOnly.positiveEnergy, response.positiveEnergy );
-        EXPECT_LE( ( response.stress - material.getPK2StressVector() ).norm(), kStressTolerance );
-        EXPECT_LE( ( response.positiveStress - material.getPositiveStressVector() ).norm(), kStressTolerance );
-        EXPECT_LE( ( response.phaseStressDerivative - material.getPhaseStressDerivative() ).norm(), kStressTolerance );
-        EXPECT_LE( ( stressOnly.stress - response.stress ).norm(), kStressTolerance );
-        EXPECT_LE( ( stressOnly.positiveStress - response.positiveStress ).norm(), kStressTolerance );
-        EXPECT_LE( ( stressOnly.phaseStressDerivative - response.phaseStressDerivative ).norm(), kStressTolerance );
+        EXPECT_LE( ( response.stress - material.getPK2StressVector() ).norm(), kStressTol );
+        EXPECT_LE( ( response.positiveStress - material.getPositiveStressVector() ).norm(), kStressTol );
+        EXPECT_LE( ( response.phaseStressDerivative - material.getPhaseStressDerivative() ).norm(), kStressTol );
+        EXPECT_LE( ( stressOnly.stress - response.stress ).norm(), kStressTol );
+        EXPECT_LE( ( stressOnly.positiveStress - response.positiveStress ).norm(), kStressTol );
+        EXPECT_LE( ( stressOnly.phaseStressDerivative - response.phaseStressDerivative ).norm(), kStressTol );
         material.updateRefModuli();
-        EXPECT_LE( ( *response.tangent - material.getRefModuli() ).norm(), kStressTolerance );
+        EXPECT_LE( ( *response.tangent - material.getRefModuli() ).norm(), kStressTol );
         material.setPhaseField( .7 );
-        EXPECT_GT( ( material.EvaluateResponse( false ).stress - response.stress ).norm(), kStressTolerance );
+        EXPECT_GT( ( material.EvaluateResponse( false ).stress - response.stress ).norm(), kStressTol );
     }
 }
 
-TEST( PhaseFieldMaterial, NamedSplitsHaveTheirDocumentedCompressionBehavior )
+TEST( PhaseFieldMaterial, TangentsMatchCenteredDifferencesIncludingRepeatedRoots )
 {
     MaterialPoint point;
-    PhaseFieldFractureParameters parameters;
-    parameters.residualStiffness = .02;
-    Eigen::Vector6r compression = Eigen::Vector6r::Zero();
-    compression.head<3>().setConstant( -.01 );
-
-    PhaseFieldElasticMaterial spectral( point.youngsModulus, point.poissonRatio,
-                                        PhaseFieldElasticMaterial::StrainEnergySplit::MieheSpectral, parameters );
-    SetStrain( spectral, point, compression, 0. );
-    const Eigen::Vector6r intactSpectralStress = spectral.getPK2StressVector();
-    SetStrain( spectral, point, compression, .8 );
-    EXPECT_LE( spectral.getPsiPos(), kStressTolerance );
-    EXPECT_LE( ( spectral.getPK2StressVector() - intactSpectralStress ).norm(), kStressTolerance );
-
-    PhaseFieldElasticMaterial amor( point.youngsModulus, point.poissonRatio,
-                                    PhaseFieldElasticMaterial::StrainEnergySplit::AmorVolumetricDeviatoric, parameters );
-    SetStrain( amor, point, compression, 0. );
-    const Eigen::Vector6r intactAmorStress = amor.getPK2StressVector();
-    SetStrain( amor, point, compression, .8 );
-    EXPECT_LE( amor.getPsiPos(), kStressTolerance );
-    EXPECT_LE( ( amor.getPK2StressVector() - intactAmorStress ).norm(), kStressTolerance );
-
-    PhaseFieldElasticMaterial isotropic( point.youngsModulus, point.poissonRatio,
-                                         PhaseFieldElasticMaterial::StrainEnergySplit::Isotropic, parameters );
-    SetStrain( isotropic, point, compression, 0. );
-    const Eigen::Vector6r intactIsotropicStress = isotropic.getPK2StressVector();
-    SetStrain( isotropic, point, compression, .8 );
-    const mfem::real_t degradation = ( 1. - parameters.residualStiffness ) * .2 * .2 + parameters.residualStiffness;
-    EXPECT_LE( ( isotropic.getPK2StressVector() - degradation * intactIsotropicStress ).norm(), kStressTolerance );
-}
-
-TEST( PhaseFieldMaterial, AmorSplitDegradesDeviatoricShear )
-{
-    MaterialPoint point;
-    PhaseFieldFractureParameters parameters;
-    parameters.residualStiffness = .03;
-    PhaseFieldElasticMaterial material( point.youngsModulus, point.poissonRatio,
-                                        PhaseFieldElasticMaterial::StrainEnergySplit::AmorVolumetricDeviatoric, parameters );
-    constexpr mfem::real_t phase = .6;
-    constexpr mfem::real_t engineeringShear = .04;
-    const mfem::real_t shearModulus = point.youngsModulus.constant / ( 2. * ( 1. + point.poissonRatio.constant ) );
-    const mfem::real_t degradation =
-        ( 1. - parameters.residualStiffness ) * ( 1. - phase ) * ( 1. - phase ) + parameters.residualStiffness;
-    Eigen::Vector6r strain = Eigen::Vector6r::Zero();
-    strain( 3 ) = engineeringShear;
-    SetStrain( material, point, strain, phase );
-
-    EXPECT_NEAR( material.getPK2StressVector()( 3 ), degradation * shearModulus * engineeringShear,
-                 kStressTolerance * ( 1. + shearModulus * engineeringShear ) );
-    EXPECT_NEAR( material.getPsiPos(), shearModulus * engineeringShear * engineeringShear / 2., kStressTolerance );
-    EXPECT_NEAR( material.getPositiveStressVector()( 3 ), shearModulus * engineeringShear, kStressTolerance );
-    material.updateRefModuli();
-    for ( int column = 3; column < 6; column++ )
-    {
-        const Eigen::Vector6r expected = degradation * shearModulus * Eigen::Vector6r::Unit( column );
-        EXPECT_LE( ( material.getRefModuli().col( column ) - expected ).norm(), kStressTolerance * ( 1. + expected.norm() ) );
-    }
-}
-
-TEST( PhaseFieldMaterial, AmorVolumetricTangentsUseComplementarySlopes )
-{
-    MaterialPoint point;
-    PhaseFieldFractureParameters parameters;
-    parameters.residualStiffness = .03;
-    PhaseFieldElasticMaterial material( point.youngsModulus, point.poissonRatio,
-                                        PhaseFieldElasticMaterial::StrainEnergySplit::AmorVolumetricDeviatoric, parameters );
-    constexpr mfem::real_t phase = .6;
-    const mfem::real_t degradation =
-        ( 1. - parameters.residualStiffness ) * ( 1. - phase ) * ( 1. - phase ) + parameters.residualStiffness;
-    const mfem::real_t bulkModulus = point.youngsModulus.constant / ( 3. * ( 1. - 2. * point.poissonRatio.constant ) );
-    Eigen::Vector6r direction = Eigen::Vector6r::Zero();
-    direction.head<3>().setOnes();
-    for ( const mfem::real_t dilation : { -.02, 0., .02 } )
-    {
-        SCOPED_TRACE( dilation );
-        Eigen::Vector6r strain = dilation * direction;
-        strain( 3 ) = .04; // Pure shear at zero trace; it must retain bulk response.
-        const mfem::real_t weight = dilation > 0. ? degradation : ( dilation < 0. ? 1. : ( 1. + degradation ) / 2. );
-        const Eigen::Vector6r expected = 3. * bulkModulus * weight * direction;
-        SetStrain( material, point, strain, phase );
-        material.updateRefModuli();
-        EXPECT_LE( ( material.getRefModuli() * direction - expected ).norm(), kStressTolerance * ( 1. + expected.norm() ) );
-        SetStrain( material, point, strain + kFiniteDifferenceStep * direction, phase );
-        const Eigen::Vector6r plusStress = material.getPK2StressVector();
-        SetStrain( material, point, strain - kFiniteDifferenceStep * direction, phase );
-        const Eigen::Vector6r minusStress = material.getPK2StressVector();
-        const Eigen::Vector6r numerical = ( plusStress - minusStress ) / ( 2. * kFiniteDifferenceStep );
-        EXPECT_LE( ( numerical - expected ).norm(), kTangentTolerance * ( 1. + expected.norm() ) );
-    }
-}
-
-TEST( PhaseFieldMaterial, EverySplitRecoversIntactZeroStrainTangent )
-{
-    MaterialPoint point;
-    // For E=10, nu=1/4: lambda=mu=4, normal diagonal=12, shear diagonal=4.
-    Eigen::Matrix6r expected = Eigen::Matrix6r::Zero();
-    expected.topLeftCorner<3, 3>().setConstant( 4. );
-    expected.diagonal().head<3>().setConstant( 12. );
-    expected.diagonal().tail<3>().setConstant( 4. );
-    for ( const auto split : { PhaseFieldElasticMaterial::StrainEnergySplit::MieheSpectral,
-                               PhaseFieldElasticMaterial::StrainEnergySplit::AmorVolumetricDeviatoric,
-                               PhaseFieldElasticMaterial::StrainEnergySplit::Isotropic } )
-    {
-        SCOPED_TRACE( static_cast<int>( split ) );
-        PhaseFieldElasticMaterial material( point.youngsModulus, point.poissonRatio, split );
-        SetStrain( material, point, Eigen::Vector6r::Zero(), 0. );
-        EXPECT_LE( material.getPK2StressVector().norm(), kStressTolerance );
-        EXPECT_LE( material.getPositiveStressVector().norm(), kStressTolerance );
-        EXPECT_NEAR( material.getPsiPos(), 0., kStressTolerance );
-        material.updateRefModuli();
-        EXPECT_LE( ( material.getRefModuli() - expected ).norm(), kStressTolerance * ( 1. + expected.norm() ) );
-    }
-}
-
-TEST( PhaseFieldMaterial, TangentsMatchDirectionalFiniteDifferencesForEverySplit )
-{
-    MaterialPoint point;
-    const Eigen::Vector6r strain = ( Eigen::Vector6r() << .018, -.007, .004, .006, -.003, .002 ).finished();
-    Eigen::Vector6r direction = ( Eigen::Vector6r() << -.2, .3, .1, .4, -.25, .15 ).finished();
-    direction.normalize();
-
-    for ( const auto split : { PhaseFieldElasticMaterial::StrainEnergySplit::MieheSpectral,
-                               PhaseFieldElasticMaterial::StrainEnergySplit::AmorVolumetricDeviatoric,
-                               PhaseFieldElasticMaterial::StrainEnergySplit::Isotropic } )
-    {
-        PhaseFieldElasticMaterial material( point.youngsModulus, point.poissonRatio, split );
-        SetStrain( material, point, strain, .35 );
-        material.updateRefModuli();
-        const Eigen::Vector6r analyticalDerivative = material.getRefModuli() * direction;
-
-        SetStrain( material, point, strain + kFiniteDifferenceStep * direction, .35 );
-        const Eigen::Vector6r plusStress = material.getPK2StressVector();
-        SetStrain( material, point, strain - kFiniteDifferenceStep * direction, .35 );
-        const Eigen::Vector6r minusStress = material.getPK2StressVector();
-        const Eigen::Vector6r numericalDerivative = ( plusStress - minusStress ) / ( 2. * kFiniteDifferenceStep );
-
-        EXPECT_LE( ( analyticalDerivative - numericalDerivative ).norm(), kTangentTolerance * ( 1. + numericalDerivative.norm() ) );
-    }
-}
-
-TEST( PhaseFieldMaterial, RepeatedPrincipalStrainsHaveFiniteConsistentTangents )
-{
-    MaterialPoint point;
-    PhaseFieldElasticMaterial material( point.youngsModulus, point.poissonRatio );
     Eigen::Vector6r direction;
-    direction << .2, -.1, .3, .4, -.2, .1;
-    for ( const mfem::real_t dilation : { -.02, .02 } )
+    direction << -.2, .3, .1, .4, -.25, .15;
+    direction.normalize();
+    Eigen::Vector6r mixed;
+    mixed << .018, -.007, .004, .006, -.003, .002;
+    for ( Split split : kSplits )
     {
-        Eigen::Vector6r strain = Eigen::Vector6r::Zero();
-        strain.head<3>().setConstant( dilation );
-        SetStrain( material, point, strain, .4 );
-        material.updateRefModuli();
-        const Eigen::Vector6r analytical = material.getRefModuli() * direction;
-        ASSERT_TRUE( analytical.allFinite() );
-        SetStrain( material, point, strain + kFiniteDifferenceStep * direction, .4 );
-        const Eigen::Vector6r plus = material.getPK2StressVector();
-        SetStrain( material, point, strain - kFiniteDifferenceStep * direction, .4 );
-        const Eigen::Vector6r minus = material.getPK2StressVector();
-        const Eigen::Vector6r numerical = ( plus - minus ) / ( 2. * kFiniteDifferenceStep );
-        EXPECT_LE( ( analytical - numerical ).norm(), kTangentTolerance * ( 1. + numerical.norm() ) );
+        PhaseFieldElasticMaterial material( point.youngs, point.poisson, split );
+        for ( int mode = 0; mode < 3; ++mode )
+        {
+            Eigen::Vector6r strain = mixed;
+            if ( mode > 0 )
+            {
+                strain.setZero();
+                strain.head<3>().setConstant( mode == 1 ? -.02 : .02 );
+            }
+            point.Set( material, strain, .35 );
+            const auto response = material.EvaluateResponse( true );
+            ASSERT_TRUE( response.tangent->allFinite() );
+            EXPECT_LE( ( *response.tangent - response.tangent->transpose() ).norm(),
+                       kStressTol * ( 1. + response.tangent->norm() ) );
+            point.Set( material, strain + kDifferenceStep * direction, .35 );
+            const Eigen::Vector6r plus = material.getPK2StressVector();
+            point.Set( material, strain - kDifferenceStep * direction, .35 );
+            const Eigen::Vector6r minus = material.getPK2StressVector();
+            const Eigen::Vector6r numerical = ( plus - minus ) / ( 2 * kDifferenceStep );
+            EXPECT_LE( ( *response.tangent * direction - numerical ).norm(), kTangentTol * ( 1. + numerical.norm() ) );
+        }
     }
-    SetStrain( material, point, Eigen::Vector6r::Zero(), 0. );
-    EXPECT_LE( material.getPK2StressVector().norm(), kStressTolerance );
-    material.updateRefModuli();
-    EXPECT_TRUE( material.getRefModuli().allFinite() );
 }
 
-TEST( PhaseFieldMaterial, FullyCrackedTensionRetainsSmallResidualStiffness )
+TEST( PhaseFieldMaterial, AmorVolumetricSwitchAndFullyCrackedSpectralLimit )
 {
     MaterialPoint point;
-    PhaseFieldFractureParameters parameters;
-    parameters.residualStiffness = 1e-20;
-    PhaseFieldElasticMaterial material( point.youngsModulus, point.poissonRatio,
-                                        PhaseFieldElasticMaterial::StrainEnergySplit::MieheSpectral, parameters );
-    Eigen::Vector6r strain = Eigen::Vector6r::Zero();
-    strain.head<3>().setConstant( .02 );
-    SetStrain( material, point, strain, 0. );
-    const Eigen::Vector6r intactStress = material.getPK2StressVector();
-    material.updateRefModuli();
-    const Eigen::Matrix6r intactTangent = material.getRefModuli();
-    material.setPhaseField( 1. );
-    const Eigen::Vector6r scaledStress = material.getPK2StressVector() / parameters.residualStiffness;
-    material.updateRefModuli();
-    const Eigen::Matrix6r scaledTangent = material.getRefModuli() / parameters.residualStiffness;
-    EXPECT_LE( ( scaledStress - intactStress ).norm(), kStressTolerance * intactStress.norm() );
-    EXPECT_LE( ( scaledTangent - intactTangent ).norm(), kStressTolerance * intactTangent.norm() );
+    PhaseFieldElasticMaterial amor( point.youngs, point.poisson, Split::AmorVolumetricDeviatoric, { 2700., .015e-3, .03 } );
+    Eigen::Vector6r volumetric = Eigen::Vector6r::Zero();
+    volumetric.head<3>().setOnes();
+    const mfem::real_t g = .97 * .4 * .4 + .03;
+    const mfem::real_t bulk = 10. / ( 3 * ( 1 - 2 * .25 ) );
+    for ( mfem::real_t dilation : { -.02, 0., .02 } )
+    {
+        Eigen::Vector6r strain = dilation * volumetric;
+        strain( 3 ) = .04;
+        point.Set( amor, strain, .6 );
+        const auto response = amor.EvaluateResponse( true );
+        const mfem::real_t weight = dilation > 0. ? g : ( dilation < 0. ? 1. : ( 1. + g ) / 2 );
+        const Eigen::Vector6r expected = 3 * bulk * weight * volumetric;
+        EXPECT_LE( ( *response.tangent * volumetric - expected ).norm(), kStressTol * ( 1. + expected.norm() ) );
+        point.Set( amor, strain + kDifferenceStep * volumetric, .6 );
+        const Eigen::Vector6r plus = amor.getPK2StressVector();
+        point.Set( amor, strain - kDifferenceStep * volumetric, .6 );
+        EXPECT_LE( ( ( plus - amor.getPK2StressVector() ) / ( 2 * kDifferenceStep ) - expected ).norm(),
+                   kTangentTol * ( 1. + expected.norm() ) );
+    }
+    PhaseFieldElasticMaterial spectral( point.youngs, point.poisson, Split::MieheSpectral, { 2700., .015e-3, 1e-20 } );
+    point.Set( spectral, .02 * volumetric, 0. );
+    const auto intact = spectral.EvaluateResponse( true );
+    spectral.setPhaseField( 1. );
+    const auto cracked = spectral.EvaluateResponse( true );
+    EXPECT_LE( ( cracked.stress / spectral.getK() - intact.stress ).norm(), kStressTol * intact.stress.norm() );
+    EXPECT_LE( ( *cracked.tangent / spectral.getK() - *intact.tangent ).norm(), kStressTol * intact.tangent->norm() );
 }
 
-TEST( PhaseFieldIntegrator, AllFourJacobianBlocksMatchDirectionalFiniteDifference )
+TEST( PhaseFieldIntegrator, AllFourJacobianBlocksOnLoadingAndUnloading )
 {
-    for ( const auto split : { PhaseFieldElasticMaterial::StrainEnergySplit::Isotropic,
-                               PhaseFieldElasticMaterial::StrainEnergySplit::AmorVolumetricDeviatoric,
-                               PhaseFieldElasticMaterial::StrainEnergySplit::MieheSpectral } )
+    for ( Split split : kSplits )
     {
-        mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL, true, 1., 1. );
-        mfem::H1_FECollection collection( 1, mesh.Dimension() );
-        mfem::FiniteElementSpace displacementSpace( &mesh, &collection, mesh.Dimension(), mfem::Ordering::byVDIM );
-        mfem::FiniteElementSpace phaseSpace( &mesh, &collection );
-        const auto* displacementElement = displacementSpace.GetFE( 0 );
-        const auto* phaseElement = phaseSpace.GetFE( 0 );
-        auto* transformation = mesh.GetElementTransformation( 0 );
-        ASSERT_NE( displacementElement, nullptr );
-        ASSERT_NE( phaseElement, nullptr );
-        ASSERT_NE( transformation, nullptr );
-
-        CountingCoefficient youngsModulus( 10. );
-        CountingCoefficient poissonRatio( .25 );
-        PhaseFieldFractureParameters parameters{ 2.5, .3, .01 };
-        PhaseFieldElasticMaterial material( youngsModulus, poissonRatio, split, parameters );
-        plugin::PhaseFieldPointStorage pointStorage( &mesh );
-        plugin::PhaseFieldIntegrator<plugin::PhaseFieldPointStorage> integrator( material, pointStorage );
-        FixedStepContext context;
-        integrator.SetStepContext( &context );
-
-        mfem::Array<const mfem::FiniteElement*> elements( 2 );
-        elements[0] = displacementElement;
-        elements[1] = phaseElement;
-        const int displacementDofs = displacementElement->GetDof();
-        const int displacementSize = displacementDofs * mesh.Dimension();
-        mfem::Vector state( displacementSize + phaseElement->GetDof() );
-        for ( int node = 0; node < displacementDofs; node++ )
-        {
-            mfem::Vector position;
-            transformation->Transform( displacementElement->GetNodes().IntPoint( node ), position );
-            state( node ) = .018 * position( 0 ) + .004 * position( 1 );
-            state( displacementDofs + node ) = .004 * position( 0 ) - .007 * position( 1 );
-            state( displacementSize + node ) = .2 + .03 * position( 0 ) + .02 * position( 1 );
-        }
-
-        integrator.BeginStep();
-        mfem::DenseMatrix jacobian = AssembleElementJacobian( integrator, elements, *transformation, state, displacementSize );
-        const int points = mfem::IntRules.Get( displacementElement->GetGeomType(), 3 ).GetNPoints();
-        EXPECT_EQ( youngsModulus.calls, points );
-        EXPECT_EQ( poissonRatio.calls, points );
-        youngsModulus.calls = poissonRatio.calls = 0;
-        AssembleElementResidual( integrator, elements, *transformation, state, displacementSize );
-        EXPECT_EQ( youngsModulus.calls, points );
-        EXPECT_EQ( poissonRatio.calls, points );
-        Eigen::Map<const Eigen::MatrixXr> jacobianMap( jacobian.Data(), jacobian.Height(), jacobian.Width() );
-        EXPECT_GT( jacobianMap.block( 0, displacementSize, displacementSize, phaseElement->GetDof() ).norm(), 0. );
-        EXPECT_GT( jacobianMap.block( displacementSize, 0, phaseElement->GetDof(), displacementSize ).norm(), 0. );
-
-        mfem::Vector direction( state.Size() );
-        for ( int i = 0; i < direction.Size(); i++ )
-        {
-            direction( i ) = static_cast<mfem::real_t>( ( i % 7 ) - 3 );
-        }
-        direction /= direction.Norml2();
-        mfem::Vector plus( state );
-        mfem::Vector minus( state );
-        plus.Add( kFiniteDifferenceStep, direction );
-        minus.Add( -kFiniteDifferenceStep, direction );
-        const mfem::Vector plusResidual = AssembleElementResidual( integrator, elements, *transformation, plus, displacementSize );
-        const mfem::Vector minusResidual = AssembleElementResidual( integrator, elements, *transformation, minus, displacementSize );
-        mfem::Vector numericalDerivative( plusResidual );
-        numericalDerivative -= minusResidual;
-        numericalDerivative /= 2. * kFiniteDifferenceStep;
-        mfem::Vector analyticalDerivative( state.Size() );
-        jacobian.Mult( direction, analyticalDerivative );
-        analyticalDerivative -= numericalDerivative;
-
-        EXPECT_LE( analyticalDerivative.Norml2(), kTangentTolerance * ( 1. + numericalDerivative.Norml2() ) );
-        // Commit the loaded state, then unload well away from the history switch.
-        AssembleElementResidual( integrator, elements, *transformation, state, displacementSize );
-        integrator.CommitStep();
-        integrator.BeginStep();
-        for ( int i = 0; i < displacementSize; i++ )
-        {
-            state( i ) *= .5;
-        }
-        youngsModulus.calls = poissonRatio.calls = 0;
-        jacobian = AssembleElementJacobian( integrator, elements, *transformation, state, displacementSize );
-        EXPECT_EQ( youngsModulus.calls, points );
-        EXPECT_EQ( poissonRatio.calls, points );
-        youngsModulus.calls = poissonRatio.calls = 0;
-        AssembleElementResidual( integrator, elements, *transformation, state, displacementSize );
-        EXPECT_EQ( youngsModulus.calls, points );
-        EXPECT_EQ( poissonRatio.calls, points );
-        Eigen::Map<const Eigen::MatrixXr> unloadedJacobian( jacobian.Data(), jacobian.Height(), jacobian.Width() );
-        EXPECT_EQ( unloadedJacobian.block( displacementSize, 0, phaseElement->GetDof(), displacementSize ).norm(), 0. );
-        plus = state;
-        minus = state;
-        plus.Add( kFiniteDifferenceStep, direction );
-        minus.Add( -kFiniteDifferenceStep, direction );
-        numericalDerivative = AssembleElementResidual( integrator, elements, *transformation, plus, displacementSize );
-        numericalDerivative -= AssembleElementResidual( integrator, elements, *transformation, minus, displacementSize );
-        numericalDerivative /= 2. * kFiniteDifferenceStep;
-        jacobian.Mult( direction, analyticalDerivative );
-        analyticalDerivative -= numericalDerivative;
-        EXPECT_LE( analyticalDerivative.Norml2(), kTangentTolerance * ( 1. + numericalDerivative.Norml2() ) );
-        integrator.RollbackStep();
+        ElementProblem problem( split );
+        problem.integrator->BeginStep();
+        problem.CheckJacobian( true );
+        mfem::Vector residual( problem.state.Size() );
+        problem.form.Mult( problem.state, residual );
+        problem.integrator->CommitStep();
+        problem.integrator->BeginStep();
+        problem.state.GetBlock( 0 ) *= .5;
+        problem.CheckJacobian( false );
+        problem.integrator->RollbackStep();
     }
 }
 
-TEST( NewtonForPhaseField, DoesNotIgnoreInitialPhaseResidual )
+TEST( PhaseFieldIntegrator, HomogeneousAT2BalanceUsesCorrectLengthConvention )
 {
-    mfem::Mesh mesh = mfem::Mesh::MakeCartesian1D( 1 );
-    mfem::L2_FECollection collection( 0, mesh.Dimension() );
-    mfem::FiniteElementSpace firstSpace( &mesh, &collection );
-    mfem::FiniteElementSpace secondSpace( &mesh, &collection );
-    mfem::Array<mfem::FiniteElementSpace*> spaces( 2 );
-    spaces[0] = &firstSpace;
-    spaces[1] = &secondSpace;
-    mfem::Vector target( 2 );
-    target( 0 ) = 0.;
-    target( 1 ) = 2.;
-    AffineTwoBlockForm form( spaces, target );
-    IdentitySolver linearSolver;
-    plugin::NewtonForPhaseField solver;
-    solver.SetOperator( form );
-    solver.SetSolver( linearSolver );
-    solver.SetRelTol( 1e-12 );
-    solver.SetAbsTol( 1e-12 );
-    solver.SetMaxIter( 3 );
-    solver.iterative_mode = true;
-    mfem::Vector solution( form.Height() );
-    solution = 0.;
-    mfem::Vector zeroRightHandSide;
-
-    solver.Mult( zeroRightHandSide, solution );
-
-    EXPECT_TRUE( solver.GetConverged() );
-    EXPECT_NEAR( solution( 0 ), 0., kStressTolerance );
-    EXPECT_NEAR( solution( 1 ), 2., kStressTolerance );
-    EXPECT_NEAR( solver.GetFinalNorm(), 0., kStressTolerance );
+    ElementProblem problem( Split::MieheSpectral );
+    // The prescribed affine u has eps_xx=.018, eps_yy=-.007, eps_xy=.004,
+    // eps_zz=0. With lambda=mu=4, its only positive principal strain is:
+    const mfem::real_t positivePrincipal = ( .011 + std::sqrt( .025 * .025 + 4 * .004 * .004 ) ) / 2;
+    const mfem::real_t history = 2 * .011 * .011 + 4 * positivePrincipal * positivePrincipal;
+    const mfem::real_t driving = 2 * ( 1 - problem.material.getK() ) * history;
+    const mfem::real_t equilibriumPhase = driving / ( problem.material.getGc() / problem.material.getL0() + driving );
+    mfem::BlockVector residual( problem.form.GetBlockTrueOffsets() );
+    problem.integrator->BeginStep();
+    problem.state.GetBlock( 1 ) = 0.;
+    problem.form.Mult( problem.state, residual );
+    EXPECT_NEAR( residual.GetBlock( 1 ).Sum(), -driving, kStressTol );
+    problem.state.GetBlock( 1 ) = equilibriumPhase;
+    problem.form.Mult( problem.state, residual );
+    EXPECT_LE( residual.GetBlock( 1 ).Norml2(), kStressTol );
+    problem.integrator->RollbackStep();
 }
 
-TEST( NewtonForPhaseField, AppliesRightHandSideToBothBlocksAtEveryEvaluation )
+TEST_F( PhaseFieldSolverTest, InitialPhaseResidualAndNonzeroRhsUseConfiguredSolvers )
 {
-    mfem::Mesh mesh = mfem::Mesh::MakeCartesian1D( 1 );
-    mfem::L2_FECollection collection( 0, mesh.Dimension() );
-    mfem::FiniteElementSpace firstSpace( &mesh, &collection );
-    mfem::FiniteElementSpace secondSpace( &mesh, &collection );
-    mfem::Array<mfem::FiniteElementSpace*> spaces( 2 );
-    spaces[0] = &firstSpace;
-    spaces[1] = &secondSpace;
-    mfem::Vector target( 2 );
-    target = 0.;
-    AffineTwoBlockForm form( spaces, target );
-    IdentitySolver linearSolver;
+    TwoBlockForm form( spaces );
+    ScalarSolver uSolver, phiSolver, sharedSolver;
     plugin::NewtonForPhaseField solver;
     solver.SetOperator( form );
-    solver.SetSolver( linearSolver );
-    solver.SetRelTol( 1e-12 );
-    solver.SetAbsTol( 1e-12 );
+    solver.SetBlockSolvers( uSolver, phiSolver );
+    solver.SetRelTol( 0. );
+    solver.SetAbsTol( tolerance );
     solver.SetMaxIter( 3 );
     solver.iterative_mode = true;
-    mfem::Vector solution( form.Height() );
-    solution = 0.;
-    mfem::BlockVector rightHandSide( form.GetBlockTrueOffsets() );
-    rightHandSide( 0 ) = 1.;
-    rightHandSide( 1 ) = 2.;
-
-    solver.Mult( rightHandSide, solution );
-
-    EXPECT_TRUE( solver.GetConverged() );
-    EXPECT_NEAR( solution( 0 ), 1., kStressTolerance );
-    EXPECT_NEAR( solution( 1 ), 2., kStressTolerance );
-    EXPECT_NEAR( solver.GetFinalNorm(), 0., kStressTolerance );
-}
-
-TEST( NewtonForPhaseField, RoutesEachBlockToItsConfiguredSolver )
-{
-    mfem::Mesh mesh = mfem::Mesh::MakeCartesian1D( 1 );
-    mfem::L2_FECollection collection( 0, mesh.Dimension() );
-    mfem::FiniteElementSpace firstSpace( &mesh, &collection );
-    mfem::FiniteElementSpace secondSpace( &mesh, &collection );
-    mfem::Array<mfem::FiniteElementSpace*> spaces( 2 );
-    spaces[0] = &firstSpace;
-    spaces[1] = &secondSpace;
-    mfem::Vector target( 2 );
-    target = 0.;
-    AffineTwoBlockForm form( spaces, target );
-    IdentitySolver displacementSolver;
-    IdentitySolver phaseSolver;
-    plugin::NewtonForPhaseField solver;
-    solver.SetOperator( form );
-    solver.SetBlockSolvers( displacementSolver, phaseSolver );
-    solver.SetRelTol( 1e-12 );
-    solver.SetAbsTol( 1e-12 );
-    solver.SetMaxIter( 3 );
-    solver.iterative_mode = true;
-    mfem::Vector solution( form.Height() );
-    solution = 0.;
-    mfem::BlockVector rightHandSide( form.GetBlockTrueOffsets() );
-    rightHandSide( 0 ) = 1.;
-    rightHandSide( 1 ) = 2.;
-
-    solver.Mult( rightHandSide, solution );
-
-    EXPECT_TRUE( solver.GetConverged() );
-    EXPECT_NEAR( solution( 0 ), 1., kStressTolerance );
-    EXPECT_NEAR( solution( 1 ), 2., kStressTolerance );
-    EXPECT_NEAR( solver.GetFinalNorm(), 0., kStressTolerance );
-    EXPECT_EQ( displacementSolver.calls, 1 );
-    EXPECT_EQ( phaseSolver.calls, 1 );
-    EXPECT_NEAR( displacementSolver.lastRightHandSide, -1., kStressTolerance );
-    EXPECT_NEAR( phaseSolver.lastRightHandSide, -2., kStressTolerance );
-
-    // Calling SetSolver afterwards restores the shared-solver contract.
-    IdentitySolver sharedSolver;
+    rhs( 1 ) = 2.;
+    solver.Mult( rhs, state );
+    ASSERT_TRUE( solver.GetConverged() );
+    EXPECT_EQ( state( 0 ), 0. );
+    EXPECT_EQ( state( 1 ), 2. );
+    EXPECT_EQ( uSolver.calls, 0 );
+    EXPECT_EQ( phiSolver.calls, 1 );
+    EXPECT_EQ( phiSolver.lastRhs, -2. );
+    state = 0.;
+    rhs( 0 ) = 1.;
     solver.SetSolver( sharedSolver );
-    solution = 0.;
-    solver.Mult( rightHandSide, solution );
+    solver.Mult( rhs, state );
     EXPECT_TRUE( solver.GetConverged() );
     EXPECT_EQ( sharedSolver.calls, 2 );
-    EXPECT_EQ( phaseSolver.calls, 1 );
+    EXPECT_EQ( phiSolver.calls, 1 );
+    EXPECT_EQ( state( 0 ), 1. );
+    EXPECT_EQ( state( 1 ), 2. );
 }
 
-TEST( NewtonForPhaseField, CoupledUpdatesReactivateInitiallyConvergedBlocks )
+TEST_F( PhaseFieldSolverTest, BothCoupledResidualsMustPassAndRejectedStepsRollBack )
 {
-    mfem::Mesh mesh = mfem::Mesh::MakeCartesian1D( 1 );
-    mfem::L2_FECollection collection( 0, mesh.Dimension() );
-    mfem::FiniteElementSpace displacementSpace( &mesh, &collection );
-    mfem::FiniteElementSpace phaseSpace( &mesh, &collection );
-    mfem::Array<mfem::FiniteElementSpace*> spaces( 2 );
-    spaces[0] = &displacementSpace;
-    spaces[1] = &phaseSpace;
-    constexpr mfem::real_t tolerance = kSinglePrecision ? 2e-5f : 1e-11;
-    mfem::Vector zeroRightHandSide;
-
-    for ( int drivenBlock = 0; drivenBlock < 2; ++drivenBlock )
-    {
-        SCOPED_TRACE( drivenBlock );
-        mfem::Vector target( 2 );
-        target = 0.;
-        target( drivenBlock ) = 1.;
-        // Ru = u + phi/2 - target_u, Rphi = phi + u/2 - target_phi.
-        // At the zero initial state the other block is exactly converged.
-        AffineTwoBlockForm form( spaces, target, .5 );
-        IdentitySolver displacementSolver;
-        IdentitySolver phaseSolver;
-        plugin::NewtonForPhaseField solver;
-        solver.SetOperator( form );
-        solver.SetBlockSolvers( displacementSolver, phaseSolver );
-        solver.SetRelTol( 0. );
-        solver.SetAbsTol( tolerance );
-        solver.iterative_mode = true;
-        mfem::Vector solution( form.Height() );
-        solution = 0.;
-
-        // Neither loading direction can converge in one sweep: the latest
-        // phase update disturbs displacement equilibrium. Reject and restore.
-        solver.SetMaxIter( 1 );
-        solver.Mult( zeroRightHandSide, solution );
-        EXPECT_FALSE( solver.GetConverged() );
-        EXPECT_GT( solver.GetFinalNorm(), tolerance );
-        EXPECT_EQ( solution.Norml2(), 0. );
-
-        displacementSolver.calls = 0;
-        phaseSolver.calls = 0;
-        solver.SetMaxIter( 40 );
-        solver.Mult( zeroRightHandSide, solution );
-        ASSERT_TRUE( solver.GetConverged() );
-        EXPECT_GT( displacementSolver.calls, 0 );
-        EXPECT_GT( phaseSolver.calls, 0 );
-        EXPECT_GT( solver.GetNumIterations(), 1 );
-        mfem::Vector residual;
-        form.Mult( solution, residual );
-        EXPECT_LE( std::abs( residual( 0 ) ), tolerance );
-        EXPECT_LE( std::abs( residual( 1 ) ), tolerance );
-        EXPECT_NEAR( solution( drivenBlock ), 4. / 3., 3. * tolerance );
-        EXPECT_NEAR( solution( 1 - drivenBlock ), -2. / 3., 3. * tolerance );
-    }
-}
-
-TEST( NewtonForPhaseField, ExactBlockSolvesDoNotGuaranteeCoupledConvergence )
-{
-    mfem::Mesh mesh = mfem::Mesh::MakeCartesian1D( 1 );
-    mfem::L2_FECollection collection( 0, mesh.Dimension() );
-    mfem::FiniteElementSpace displacementSpace( &mesh, &collection );
-    mfem::FiniteElementSpace phaseSpace( &mesh, &collection );
-    mfem::Array<mfem::FiniteElementSpace*> spaces( 2 );
-    spaces[0] = &displacementSpace;
-    spaces[1] = &phaseSpace;
-    mfem::Vector target( 2 );
-    target( 0 ) = 1.;
-    target( 1 ) = 0.;
-    constexpr mfem::real_t coupling = .999;
-    constexpr int sweeps = 20;
-    AffineTwoBlockForm form( spaces, target, coupling );
-    IdentitySolver displacementSolver;
-    IdentitySolver phaseSolver;
+    constexpr mfem::real_t coupling = .9;
+    TwoBlockForm form( spaces, coupling );
+    ScalarSolver linear;
     plugin::NewtonForPhaseField solver;
     solver.SetOperator( form );
-    solver.SetBlockSolvers( displacementSolver, phaseSolver );
-    solver.SetRelTol( 0. );
-    solver.SetAbsTol( kStressTolerance );
-    solver.SetMaxIter( sweeps );
-    solver.iterative_mode = true;
-    mfem::Vector solution( form.Height() );
-    solution = 0.;
-    mfem::Vector zeroRightHandSide;
-
-    solver.Mult( zeroRightHandSide, solution );
-
-    // Original scalar model: Ru = u + a*phi - 1, Rphi = phi + a*u.
-    // Both diagonal Jacobians are exactly 1 and the coupled matrix is SPD.
-    // Each phase solve gives Rphi = 0, but after n sweeps Ru = -a^(2*n).
-    // This near-stagnation is coupling error, not linear-solver or tangent error.
-    EXPECT_FALSE( solver.GetConverged() );
-    EXPECT_EQ( solver.GetNumIterations(), sweeps );
-    EXPECT_EQ( displacementSolver.calls, sweeps );
-    EXPECT_EQ( phaseSolver.calls, sweeps );
-    EXPECT_NEAR( solver.GetFinalNorm(), std::pow( coupling, 2 * sweeps ), 10. * kStressTolerance );
-    EXPECT_GT( solver.GetFinalNorm(), .95 );
-    EXPECT_EQ( solution.Norml2(), 0. ); // The rejected trial is rolled back.
-}
-
-TEST( NewtonForPhaseField, LargerSweepBudgetResolvesStrongCouplingWithoutRelaxingTolerance )
-{
-    mfem::Mesh mesh = mfem::Mesh::MakeCartesian1D( 1 );
-    mfem::L2_FECollection collection( 0, mesh.Dimension() );
-    mfem::FiniteElementSpace displacementSpace( &mesh, &collection );
-    mfem::FiniteElementSpace phaseSpace( &mesh, &collection );
-    mfem::Array<mfem::FiniteElementSpace*> spaces( 2 );
-    spaces[0] = &displacementSpace;
-    spaces[1] = &phaseSpace;
-    mfem::Vector target( 2 );
-    target( 0 ) = 1.;
-    target( 1 ) = 0.;
-    constexpr mfem::real_t coupling = .99;
-    constexpr mfem::real_t tolerance = kSinglePrecision ? 2e-4f : 1e-8;
-    AffineTwoBlockForm form( spaces, target, coupling );
-    IdentitySolver linearSolver;
-    plugin::NewtonForPhaseField solver;
-    solver.SetOperator( form );
-    solver.SetSolver( linearSolver );
+    solver.SetSolver( linear );
     solver.SetRelTol( 0. );
     solver.SetAbsTol( tolerance );
     solver.iterative_mode = true;
-    mfem::Vector solution( form.Height() );
-    solution = 0.;
-    mfem::Vector zeroRightHandSide;
-
-    solver.SetMaxIter( 12 );
-    solver.Mult( zeroRightHandSide, solution );
-    EXPECT_FALSE( solver.GetConverged() );
-    EXPECT_EQ( solution.Norml2(), 0. );
-
-    // Only the work budget changes. Check both actual residuals at the returned
-    // state, not merely the solver flag or the last exact phase subsolve.
-    solver.SetMaxIter( 1200 );
-    solver.Mult( zeroRightHandSide, solution );
-    ASSERT_TRUE( solver.GetConverged() );
-    EXPECT_GT( solver.GetNumIterations(), 12 );
-    mfem::Vector residual;
-    form.Mult( solution, residual );
-    EXPECT_LE( std::abs( residual( 0 ) ), tolerance );
-    EXPECT_LE( std::abs( residual( 1 ) ), tolerance );
-    EXPECT_NEAR( solver.GetFinalNorm(), residual.Norml2(), kStressTolerance );
-    // The smallest eigenvalue is 1-a, so residual tolerances must be scaled
-    // by the inverse eigenvalue when checking the solution itself.
-    const mfem::real_t solutionTolerance = 2. * tolerance / ( 1. - coupling );
-    EXPECT_NEAR( solution( 0 ), 1. / ( 1. - coupling * coupling ), solutionTolerance );
-    EXPECT_NEAR( solution( 1 ), -coupling / ( 1. - coupling * coupling ), solutionTolerance );
-}
-
-TEST( NewtonForPhaseField, RelativeOnlyToleranceForInitiallyZeroBlocks )
-{
-    mfem::Mesh mesh = mfem::Mesh::MakeCartesian1D( 1 );
-    mfem::L2_FECollection collection( 0, mesh.Dimension() );
-    mfem::FiniteElementSpace displacementSpace( &mesh, &collection );
-    mfem::FiniteElementSpace phaseSpace( &mesh, &collection );
-    mfem::Array<mfem::FiniteElementSpace*> spaces( 2 );
-    spaces[0] = &displacementSpace;
-    spaces[1] = &phaseSpace;
-    constexpr mfem::real_t relativeTolerance = mfem::real_t( 1 ) / 128;
-    mfem::Vector zeroRightHandSide;
-
-    for ( int drivenBlock = 0; drivenBlock < 2; ++drivenBlock )
+    for ( int driven = 0; driven < 2; ++driven )
     {
-        SCOPED_TRACE( drivenBlock );
-        mfem::Vector target( 2 );
-        target = 0.;
-        target( drivenBlock ) = 1.;
-        AffineTwoBlockForm form( spaces, target, .5 );
-        // Half corrections deliberately leave nonzero residuals in both blocks;
-        // exact affine phase solves could mask a permanently zero phase goal.
-        IdentitySolver linearSolver( .5 );
-        plugin::NewtonForPhaseField solver;
-        solver.SetOperator( form );
-        solver.SetSolver( linearSolver );
-        solver.SetRelTol( relativeTolerance );
-        solver.SetAbsTol( 0. );
-        solver.SetMaxIter( 40 );
-        solver.iterative_mode = true;
-        mfem::Vector solution( form.Height() );
-        solution = 0.;
-
-        solver.Mult( zeroRightHandSide, solution );
-
+        state = 0.;
+        rhs = 0.;
+        rhs( driven ) = 1.;
+        solver.SetMaxIter( 1 );
+        solver.Mult( rhs, state );
+        EXPECT_FALSE( solver.GetConverged() );
+        EXPECT_EQ( state.Norml2(), 0. );
+        solver.SetMaxIter( 150 );
+        solver.Mult( rhs, state );
         ASSERT_TRUE( solver.GetConverged() );
         EXPECT_GT( solver.GetNumIterations(), 1 );
         mfem::Vector residual;
-        form.Mult( solution, residual );
-        // The driven block starts at norm 1; the other first activates at
-        // norm .25 (coupling .5 times the first half correction .5).
-        EXPECT_LE( std::abs( residual( drivenBlock ) ), relativeTolerance );
-        EXPECT_LE( std::abs( residual( 1 - drivenBlock ) ), relativeTolerance * mfem::real_t( .25 ) );
-        EXPECT_GT( std::abs( residual( 0 ) ), 0. );
-        EXPECT_GT( std::abs( residual( 1 ) ), 0. );
-        EXPECT_NEAR( solver.GetFinalNorm(), residual.Norml2(), kStressTolerance );
+        form.Mult( state, residual );
+        residual -= rhs;
+        EXPECT_LE( std::abs( residual( 0 ) ), tolerance );
+        EXPECT_LE( std::abs( residual( 1 ) ), tolerance );
+        EXPECT_NEAR( solver.GetFinalNorm(), residual.Norml2(), kStressTol );
+        EXPECT_NEAR( state( driven ), 1. / ( 1 - coupling * coupling ), 2 * tolerance / ( 1 - coupling ) );
     }
+}
+
+TEST_F( PhaseFieldSolverTest, BlockAbsoluteFloorsAndSharedFallback )
+{
+    TwoBlockForm form( spaces );
+    ScalarSolver linear;
+    plugin::NewtonForPhaseField solver;
+    solver.SetOperator( form );
+    solver.SetSolver( linear );
+    solver.SetRelTol( 0. );
+    solver.SetAbsTol( 0. );
+    solver.SetMaxIter( 0 );
+    solver.iterative_mode = true;
+    rhs( 0 ) = 1e-3;
+    rhs( 1 ) = 1e-7;
+    solver.SetBlockAbsTol( 1e-2, 1e-6 );
+    solver.Mult( rhs, state );
+    EXPECT_TRUE( solver.GetConverged() );
+    solver.SetBlockAbsTol( 1e-2, 1e-9 );
+    solver.Mult( rhs, state );
+    EXPECT_FALSE( solver.GetConverged() );
+    solver.SetBlockAbsTol( 1e-4, 1e-6 );
+    solver.Mult( rhs, state );
+    EXPECT_FALSE( solver.GetConverged() );
+    solver.ClearBlockAbsTol();
+    solver.SetAbsTol( 1e-2 );
+    solver.Mult( rhs, state );
+    EXPECT_TRUE( solver.GetConverged() );
+    solver.SetBlockAbsTol( 1e-5, 1e-6 );
+    solver.SetMaxIter( 2 );
+    solver.SetMechanicsNewton( 2, 0., 1. ); // Inner goal must be capped by the outer goal.
+    solver.Mult( rhs, state );
+    EXPECT_TRUE( solver.GetConverged() );
+    EXPECT_EQ( solver.GetNumMechanicsIterations(), 1 );
+    EXPECT_EQ( state( 0 ), rhs( 0 ) );
+}
+
+TEST_F( PhaseFieldSolverTest, InnerNewtonHoldsPhaseFixedAndCommitsOnlyAfterOuterConvergence )
+{
+    TwoBlockForm form( spaces, 0., true );
+    ScalarSolver uSolver, phiSolver;
+    plugin::NewtonForPhaseField solver;
+    solver.SetOperator( form );
+    solver.SetBlockSolvers( uSolver, phiSolver );
+    solver.SetRelTol( 0. );
+    solver.SetBlockAbsTol( tolerance, tolerance );
+    solver.SetMechanicsNewton( 30, 0., tolerance / 10 );
+    solver.SetMaxIter( 40 );
+    solver.iterative_mode = true;
+    int previousPhaseSolves = -1;
+    mfem::real_t fixedPhase = 0.;
+    uSolver.beforeSolve = [&]()
+    {
+        if ( previousPhaseSolves != phiSolver.calls )
+        {
+            previousPhaseSolves = phiSolver.calls;
+            fixedPhase = form.currentPhi;
+        }
+        EXPECT_EQ( form.currentPhi, fixedPhase );
+        EXPECT_EQ( form.probe->commits, 0 );
+    };
+    phiSolver.beforeSolve = [&]()
+    {
+        const auto u = form.currentU;
+        EXPECT_LE( std::abs( u + u * u * u - 1. - form.currentPhi ), tolerance / 10 );
+        EXPECT_EQ( form.probe->commits, 0 );
+    };
+    solver.Mult( rhs, state );
+    ASSERT_TRUE( solver.GetConverged() );
+    EXPECT_GT( solver.GetMaxMechanicsIterationsUsed(), 1 );
+    EXPECT_GT( solver.GetNumIterations(), 1 );
+    EXPECT_EQ( solver.GetNumMechanicsIterations(), uSolver.calls );
+    EXPECT_EQ( form.probe->begins, 1 );
+    EXPECT_EQ( form.probe->commits, 1 );
+    EXPECT_EQ( form.probe->rollbacks, 0 );
+    mfem::Vector residual;
+    form.Mult( state, residual );
+    EXPECT_LE( std::abs( residual( 0 ) ), tolerance );
+    EXPECT_LE( std::abs( residual( 1 ) ), tolerance );
+    EXPECT_EQ( form.probe->history.CommittedValue(), state( 0 ) * state( 0 ) );
+}
+
+TEST_F( PhaseFieldSolverTest, InnerFailureRestoresUnknownsAndHistoryBeforePhaseSolve )
+{
+    TwoBlockForm form( spaces, 0., true );
+    ScalarSolver uSolver, phiSolver;
+    plugin::NewtonForPhaseField solver;
+    solver.SetOperator( form );
+    solver.SetBlockSolvers( uSolver, phiSolver );
+    solver.SetRelTol( 0. );
+    solver.SetAbsTol( tolerance );
+    solver.SetMechanicsNewton( 1, 0., tolerance );
+    solver.SetMaxIter( 20 );
+    solver.iterative_mode = true;
+    solver.Mult( rhs, state );
+    EXPECT_FALSE( solver.GetConverged() );
+    EXPECT_EQ( state.Norml2(), 0. );
+    EXPECT_EQ( uSolver.calls, 1 );
+    EXPECT_EQ( phiSolver.calls, 0 );
+    EXPECT_EQ( form.probe->begins, 1 );
+    EXPECT_EQ( form.probe->commits, 0 );
+    EXPECT_EQ( form.probe->rollbacks, 1 );
+    EXPECT_EQ( form.probe->history.CommittedValue(), 0. );
+    EXPECT_EQ( form.probe->history.TrialValue(), 0. );
+}
+
+TEST_F( PhaseFieldSolverTest, PhaseReferenceUsesTheCompletedMechanicalSubsolve )
+{
+    TwoBlockForm form( spaces, 0., true );
+    ScalarSolver uSolver, phiSolver( .4 );
+    plugin::NewtonForPhaseField solver;
+    solver.SetOperator( form );
+    solver.SetBlockSolvers( uSolver, phiSolver );
+    solver.SetAbsTol( 0. );
+    solver.SetRelTol( .5 );
+    solver.SetMaxIter( 1 );
+    solver.SetMechanicsNewton( 30, 0., kSingle ? 1e-5f : 1e-12 );
+    solver.iterative_mode = true;
+    solver.Mult( rhs, state );
+    // u=1 after the first correction would give phase goal .1. The converged
+    // u~.6823 gives goal ~.0682, which rejects the deliberately partial phi solve.
+    EXPECT_FALSE( solver.GetConverged() );
+    EXPECT_GT( solver.GetMaxMechanicsIterationsUsed(), 1 );
+    EXPECT_EQ( phiSolver.calls, 1 );
+    EXPECT_EQ( state.Norml2(), 0. );
 }
 
 TEST( StressCoefficient, UsesCurrentPhaseFieldValue )
 {
-    mfem::Mesh mesh = mfem::Mesh::MakeCartesian2D( 1, 1, mfem::Element::QUADRILATERAL, true, 1., 1. );
-    mfem::H1_FECollection collection( 1, mesh.Dimension() );
-    mfem::FiniteElementSpace displacementSpace( &mesh, &collection, mesh.Dimension(), mfem::Ordering::byVDIM );
-    mfem::FiniteElementSpace phaseSpace( &mesh, &collection );
-    mfem::GridFunction displacement( &displacementSpace );
-    mfem::GridFunction phase( &phaseSpace );
-    mfem::VectorFunctionCoefficient displacementCoefficient( mesh.Dimension(),
-                                                             []( const mfem::Vector& position, mfem::Vector& value )
-                                                             {
-                                                                 value.SetSize( 2 );
-                                                                 value( 0 ) = .01 * position( 0 );
-                                                                 value( 1 ) = 0.;
-                                                             } );
-    displacement.ProjectCoefficient( displacementCoefficient );
-
-    mfem::ConstantCoefficient youngsModulus( 10. );
-    mfem::ConstantCoefficient poissonRatio( .25 );
-    PhaseFieldFractureParameters parameters;
-    parameters.residualStiffness = .02;
-    PhaseFieldElasticMaterial material( youngsModulus, poissonRatio,
-                                        PhaseFieldElasticMaterial::StrainEnergySplit::MieheSpectral, parameters );
-    plugin::StressCoefficient stressCoefficient( mesh.Dimension(), material );
-    stressCoefficient.SetDisplacement( displacement );
-    stressCoefficient.SetPhaseField( phase );
-    auto& transformation = *mesh.GetElementTransformation( 0 );
-    const auto& integrationPoint = mfem::Geometries.GetCenter( mfem::Geometry::SQUARE );
-    mfem::Vector intactStress;
-    mfem::Vector degradedStress;
-
+    ElementProblem problem( Split::MieheSpectral );
+    mfem::GridFunction displacement( &problem.uSpace ), phase( &problem.phiSpace );
+    mfem::VectorFunctionCoefficient prescribed( 2,
+                                                []( const mfem::Vector& x, mfem::Vector& u )
+                                                {
+                                                    u.SetSize( 2 );
+                                                    u( 0 ) = .01 * x( 0 );
+                                                    u( 1 ) = 0.;
+                                                } );
+    displacement.ProjectCoefficient( prescribed );
+    plugin::StressCoefficient coefficient( 2, problem.material );
+    coefficient.SetDisplacement( displacement );
+    coefficient.SetPhaseField( phase );
+    auto& transformation = *problem.mesh.GetElementTransformation( 0 );
+    const auto& point = mfem::Geometries.GetCenter( mfem::Geometry::SQUARE );
+    mfem::Vector intact, degraded;
     phase = 0.;
-    stressCoefficient.Eval( intactStress, transformation, integrationPoint );
+    coefficient.Eval( intact, transformation, point );
     phase = .75;
-    stressCoefficient.Eval( degradedStress, transformation, integrationPoint );
-
-    const mfem::real_t degradation = ( 1. - parameters.residualStiffness ) * .25 * .25 + parameters.residualStiffness;
-    for ( int component = 0; component < 6; component++ )
+    coefficient.Eval( degraded, transformation, point );
+    const auto k = problem.material.getK();
+    const auto g = ( 1 - k ) * .25 * .25 + k;
+    for ( int i = 0; i < 6; ++i )
     {
-        EXPECT_NEAR( degradedStress( component ), degradation * intactStress( component ),
-                     kStressTolerance * ( 1. + std::abs( intactStress( component ) ) ) );
+        EXPECT_NEAR( degraded( i ), g * intact( i ), kStressTol * ( 1. + std::abs( intact( i ) ) ) );
     }
 }
 
 TEST( StressCoefficient, VonMisesIncludesEveryShearComponent )
 {
-    mfem::Mesh mesh = mfem::Mesh::MakeCartesian3D( 1, 1, 1, mfem::Element::HEXAHEDRON, 1., 1., 1. );
-    mfem::H1_FECollection collection( 1, mesh.Dimension() );
-    mfem::FiniteElementSpace displacementSpace( &mesh, &collection, mesh.Dimension(), mfem::Ordering::byVDIM );
-    mfem::GridFunction displacement( &displacementSpace );
-    mfem::VectorFunctionCoefficient displacementCoefficient( mesh.Dimension(),
-                                                             []( const mfem::Vector& position, mfem::Vector& value )
-                                                             {
-                                                                 value.SetSize( 3 );
-                                                                 value( 0 ) = .02 * position( 1 );
-                                                                 value( 1 ) = .03 * position( 2 );
-                                                                 value( 2 ) = .04 * position( 0 );
-                                                             } );
-    displacement.ProjectCoefficient( displacementCoefficient );
-
-    mfem::ConstantCoefficient youngsModulus( 10. );
-    mfem::ConstantCoefficient poissonRatio( .25 );
-    IsotropicElasticMaterial material( youngsModulus, poissonRatio );
-    plugin::StressCoefficient stressCoefficient( mesh.Dimension(), material );
-    stressCoefficient.SetDisplacement( displacement );
-    auto& transformation = *mesh.GetElementTransformation( 0 );
-    const auto& integrationPoint = mfem::Geometries.GetCenter( mfem::Geometry::CUBE );
+    MaterialPoint point;
+    mfem::H1_FECollection collection( 1, 3 );
+    mfem::FiniteElementSpace space( &point.mesh, &collection, 3, mfem::Ordering::byVDIM );
+    mfem::GridFunction u( &space );
+    mfem::VectorFunctionCoefficient prescribed( 3,
+                                                []( const mfem::Vector& x, mfem::Vector& value )
+                                                {
+                                                    value.SetSize( 3 );
+                                                    value( 0 ) = .02 * x( 1 );
+                                                    value( 1 ) = .03 * x( 2 );
+                                                    value( 2 ) = .04 * x( 0 );
+                                                } );
+    u.ProjectCoefficient( prescribed );
+    IsotropicElasticMaterial material( point.youngs, point.poisson );
+    plugin::StressCoefficient coefficient( 3, material );
+    coefficient.SetDisplacement( u );
     mfem::Vector stress;
-
-    stressCoefficient.Eval( stress, transformation, integrationPoint );
-
-    const mfem::real_t expected =
+    coefficient.Eval( stress, *point.mesh.GetElementTransformation( 0 ), mfem::Geometries.GetCenter( mfem::Geometry::CUBE ) );
+    const auto expected =
         std::sqrt( .5 * ( std::pow( stress( 0 ) - stress( 1 ), 2 ) + std::pow( stress( 1 ) - stress( 2 ), 2 ) +
                           std::pow( stress( 2 ) - stress( 0 ), 2 ) ) +
-                   3. * ( std::pow( stress( 3 ), 2 ) + std::pow( stress( 4 ), 2 ) + std::pow( stress( 5 ), 2 ) ) );
+                   3 * ( std::pow( stress( 3 ), 2 ) + std::pow( stress( 4 ), 2 ) + std::pow( stress( 5 ), 2 ) ) );
     EXPECT_GT( std::abs( stress( 3 ) ) + std::abs( stress( 4 ) ), 0. );
-    EXPECT_NEAR( stress( 6 ), expected, kStressTolerance * ( 1. + expected ) );
+    EXPECT_NEAR( stress( 6 ), expected, kStressTol * ( 1. + expected ) );
 }

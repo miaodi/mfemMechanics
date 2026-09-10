@@ -1,501 +1,333 @@
 # Small-strain AT2 phase-field fracture
 
-## Commit status: more verification is needed
-
-The current shear example is **not an identical, verified reproduction of the
-Borden benchmark**, and no full fracture convergence or published reaction-curve
-agreement is claimed. The comparison target is Borden et al., ICES Report 11-14
-(2011), [author report](https://www.oden.utexas.edu/media/reports/2011/1114.pdf),
-§4.1 and Figures 5–7; the convention conversion uses §2.2, equations (6)–(7).
-
-- The material values `E=210 GPa`, `nu=0.3`, `Gc=2700 J/m²`, and `l=15 µm`
-  match the report's `epsilon=7.5 µm` convention through `l=2 epsilon`.
-  Agreement of these inputs alone does not establish benchmark equivalence.
-- The supplied quadrilateral mesh has a finite triangular notch with a 10 µm
-  opening, rather than the report's discrete slit. The investigated
-  `-rs 3 -rp 2 -o 1` configuration has nominal `h=15.625 µm` and Q1 elements,
-  versus the report's `h_min=3.906 µm` and cubic C2 T-splines. This investigated
-  configuration is not the current MPI refinement default.
-- The MPI example interprets the side rollers in the journal paper's Figure 5(a)
-  as vertical restraints with horizontal motion free; the serial example still
-  leaves those edges traction-free. The journal paper states in §2.2 that all
-  calculations use `k=0`. Load stepping and reaction-force thickness normalization
-  still require comparison. The code uses `k=1e-9` and reports
-  2D reactions in N/m; a direct comparison to a plotted force needs an explicit
-  thickness and unit conversion.
-
-More verification is needed for these problem-definition differences,
-mesh/order/quadrature and load-increment sensitivity, phase admissibility, and
-the complete fracture history. No geometry or numerical-method change is made
-as part of this commit preparation.
-
-The dated verification records below and in the companion solver notes and
-`phase-field-formulation.tex` are historical snapshots of intermediate dirty
-trees, not proof that later source/default edits were tested. In particular,
-the current MPI defaults are 15 nonlinear sweeps, double-precision relative
-tolerance `1e-5`, maximum continuation increment `1e-2`, and `-rs 3 -rp 4`;
-older descriptions of 12/25 sweeps, `1e-7`, or `1e-3` do not describe these
-defaults. The MPI example now uses relative-only nonlinear convergence
-(`abs_tol=0` for both blocks); historical checks below predate this change.
-Fresh commit-time checks are reported separately from those records.
-
-### Fresh commit-time checks, 2026-09-05
-
-Using the existing workspace Debug/Release configurations, after the current
-source/default edits:
-
-```bash
-cmake --build build/debug --parallel 4
-ctest --test-dir build/debug --output-on-failure
-cmake --build build/release --target pPhaseField_shear PhaseField_shear \
-  phase_field_test eigen_decomp_test autodiff_test czm_history_test --parallel 4
-ctest --test-dir build/release \
-  -R 'PhaseField|EigenDecomp|autodiff|StressCoefficient' --output-on-failure
-```
-
-The full Debug suite passed **125/125**; the selected Release suite passed
-**39/39**, including serial, one-rank, and two-rank smoke/repeated-solve cases.
-Touched C++ passed `clang-format --dry-run --Werror`, and `git diff --check`
-passed. These checks do not exercise the full default fracture history.
-The full Release suite, single-precision build, LaTeX rebuild, and benchmark
-comparison were not rerun for this commit.
-
-## Scope and conventions
+## Scope and current status
 
 `PhaseFieldElasticMaterial` and `plugin::PhaseFieldIntegrator` implement
-quasi-static isotropic brittle fracture with quadratic degradation and a
-second-order AT2 crack functional. Displacement `u` and damage `phi` are the two
-unknown blocks, in that order. `phi=0` is intact and `phi=1` is cracked. There is
-no inertia, viscosity, plasticity, temperature evolution, or explicit crack-face
-contact. The shear examples are plane strain; all constitutive tensors remain
-three-dimensional with `eps_zz=eps_yz=eps_xz=0`. This is not the complete dynamic
-Borden model.
+small-strain isotropic elasticity coupled to an AT2 damage field. The unknown
+blocks are displacement `u` and damage `phi`, in that order. There is no inertia,
+viscosity, plasticity or explicit crack-face contact. Two-dimensional mechanics
+is plane strain, with three-dimensional constitutive tensors.
 
-The reference and current configurations coincide to small-strain accuracy:
-`eps=sym(grad(u))`. The integrator constructs `F=I+grad(u)` only to use the
-material interface; its B matrix and tangent are small-strain quantities. Do
-not enable the inherited large-deformation flag for this formulation.
-Coefficients, material, point storage, and custom quadrature rules are borrowed
-and must outlive the integrator. Materials and storage have mutable scratch and
-are not reentrant or thread-safe. Assembly is host-only.
+The parallel shear example can complete its full displacement range with the
+nested Newton/staggered solver below **in diagnostic bounds mode**. Nodal phase
+overshoot remains a discretization limitation. Completion in that mode is not
+an admissible, mesh-converged reproduction of the published benchmark.
 
-The engineering-strain Voigt vector is
-`e=[eps_xx,eps_yy,eps_zz,2 eps_xy,2 eps_yz,2 eps_xz]`; stress uses unscaled
-shears in the same order. Thus `sigma:deps=s^T de` and `C=ds/de`. Tensor input
-to the spectral decomposition already contains physical shear, so it must not be halved
-again.
+## Conventions, parameters and units
 
-Use a consistent unit system. In the examples, lengths/displacements are metres,
-E and stresses are Pa, energy density and history H are J/m³, and Gc is J/m².
-The length `l` is in metres and residual stiffness `k` is dimensionless. The
-continuation coordinate is dimensionless, not physical time. The integrated
-2D horizontal reaction is force per unit out-of-plane thickness (N/m); multiply
-by the physical thickness in metres for force in N.
+```text
+strain = sym(grad(u))
+phi = 0: intact; phi = 1: fully damaged
+c = 1 - phi: the paper's intactness variable
+l_code = 2*l0_Borden
+```
 
-Require finite `E>0`, `-1<nu<0.5`, `Gc>0`, `l>0`, and `0<=k<1`.
-The defaults are `Gc=2700`, `l=15e-6`, `k=1e-9`. The near-incompressible limit
-is ill-conditioned and is not a mixed incompressibility formulation; `k=0` can
-produce singular displacement blocks. Finite phase values outside [0,1] are
-permitted during nonlinear iterations; the library does not clamp them.
+The shear inputs are in SI units: coordinates and displacement in m, E and
+stress in Pa, positive energy and history H in J/m³, Gc in J/m², and l in m.
+The continuation coordinate is dimensionless, not physical time. The integrated
+2D mechanical residual/reaction has units N/m of out-of-plane thickness; the
+phase residual has units N. Multiply a reaction by thickness in m to obtain N.
 
-## Energies and stress
+Default fracture parameters are Gc=2700, l=15e-6 and residual stiffness k=1e-9.
+The paper sets k=0; the small positive default is an explicit numerical difference.
+Require finite E>0, -1<nu<0.5, Gc>0, l>0 and 0<=k<1. Near-incompressibility can
+be ill-conditioned; this is not a mixed incompressibility formulation.
 
-Write `lambda=E nu/((1+nu)(1-2nu))`, `mu=E/(2(1+nu))`,
-`K=lambda+2mu/3`, `t=tr(eps)`, and `<x>+=max(x,0)`, `<x>-=min(x,0)`.
-All splits recover `psi0=lambda t²/2+mu eps:eps` at zero damage.
+Voigt ordering is `[xx, yy, zz, xy, yz, xz]`. Strain uses engineering shear
+`[eps_xx,eps_yy,eps_zz,2 eps_xy,2 eps_yz,2 eps_xz]`; stress shears are unscaled.
+The 6-by-6 tangent maps engineering strain increments to stress increments.
+Plane strain sets `eps_zz=eps_yz=eps_xz=0` but retains out-of-plane stress.
 
-| `StrainEnergySplit` | `psi+` | `psi-` |
+## Constitutive law
+
+Let `lambda=E*nu/((1+nu)*(1-2*nu))`, `mu=E/(2*(1+nu))`, `K=lambda+2*mu/3`,
+and `t=trace(strain)`. Positive/negative parts mean `max(value,0)` and
+`min(value,0)`. The stored elastic energy is
+
+```text
+psi = g(phi)*psi_positive + psi_negative
+g   = (1-k)*(1-phi)^2 + k
+g'  = -2*(1-k)*(1-phi)
+g'' = 2*(1-k)
+```
+
+| Split | Positive energy | Negative energy |
 | --- | --- | --- |
-| `MieheSpectral` | `lambda <t>+²/2 + mu eps+:eps+` | `lambda <t>-²/2 + mu eps-:eps-` |
-| `AmorVolumetricDeviatoric` | `K <t>+²/2 + mu dev(eps):dev(eps)` | `K <t>-²/2` |
-| `Isotropic` | `psi0` | `0` |
+| Miehe spectral | `lambda/2*max(t,0)^2 + mu*strain_positive:strain_positive` | `lambda/2*min(t,0)^2 + mu*strain_negative:strain_negative` |
+| Amor volumetric/deviatoric | `K/2*max(t,0)^2 + mu*dev(strain):dev(strain)` | `K/2*min(t,0)^2` |
+| Isotropic | Full undamaged elastic energy | Zero |
 
-Here `eps±=sum_i <eps_i>± n_i tensor n_i` and
-`dev(eps)=eps-t I/3`. The spectral definitions adapt Miehe, Hofacker and
-Welschinger (2010), §3.1.1–3.1.2, equations (13), (19), p. 2768.
-The volumetric/deviatoric split adapts Amor, Marigo and Maurini (2009), §4.3,
-equations (33)–(35), p. 1217. The isotropic option degrades compression too.
-Neither split is a geometric nonpenetration constraint.
+The shear example uses the spectral split. The other splits remain available
+as library models. Isotropic degradation reduces compression as well as tension;
+neither split implements geometric nonpenetration.
 
-The stored energy is `psi=g(phi) psi+ + psi-`, with
-`g=(1-k)(1-phi)²+k`, `g'=-2(1-k)(1-phi)`, `g''=2(1-k)`.
-This normalized degradation follows Borden et al.'s author report, §2.2,
-equation (7), rather than Miehe's unnormalized additive residual stiffness.
-Consequently `g(0)=1` exactly. The AT2 fracture density is
-`Gc/2 (phi²/l + l |grad(phi)|²)`. Substitution of `c=1-phi`, `l=2 epsilon`
-in Borden's equation (6) gives this density. These are notation adaptations;
-the discrete derivatives below are derived for this implementation.
+These energies adapt Borden et al. [1], §2.2, equations (7), (14)–(16), and the
+Miehe/Amor sources [2,3]. Stress is the derivative with respect to engineering
+strain `e`: `s=g*s_positive+s_negative`; the material tangent is `C=ds/de`.
+The stress derivative with respect to phase is `g'*s_positive`.
 
-Define `s+=d psi+/de`, `s-=d psi-/de`, `s=g s+ + s-`,
-`C=g d s+/de + d s-/de`. The phase stress derivative is `g' s+`.
-All material getters route through public `EvaluateResponse(computeTangent)`,
-which obtains strain, elastic constants, and degradation once per call and
-dispatches to one private analytic helper per split. Its owning `Response`
-contains positive energy, positive stress, total stress, and `g' s+`;
-`tangent` is an `std::optional<Eigen::Matrix6r>`, engaged exactly when requested.
-`EvaluateResponse(false)` skips tangent assembly, rather than supplying a
-misleading zero stiffness. There is no persistent response cache. Each residual
-point uses one stress-only response and each Jacobian point one tangent response,
-including both coupling blocks. History updates remain in the integrator with
-the unchanged strict `psi+ > H_committed` active-derivative choice. Standalone
-getters still reevaluate on each call; callers needing several quantities should
-retain a local response. No autodiff is used by this material.
-The isotropic and Amor formulas below are original elementary
-differentiations of the stated energies, not additional cited formulas. For a
-symmetric strain increment D:
+The spectral tangent uses an analytic matrix-function derivative rather than
+derivatives of individual eigenvectors. For `strain=Q*diag(a)*Q^T`, define
+`f(a)=max(a,0)` and divided differences L:
 
 ```text
-Isotropic:
-  psi+   = lambda/2 t^2 + mu eps:eps
-  sigma+ = lambda t I + 2 mu eps
-  sigma- = 0
-  C[D]   = g (lambda tr(D) I + 2 mu D)
-Amor:
-  psi+   = K/2 max(t,0)^2 + mu dev(eps):dev(eps)
-  sigma+ = K max(t,0) I + 2 mu dev(eps)
-  sigma- = K min(t,0) I
-  C[D]   = K (g h(t) + 1-h(t)) tr(D) I + 2 mu g dev(D)
+L_ij = (f(a_i)-f(a_j))/(a_i-a_j)   for opposite signs
+L_ij = 1                         for positive/same-nonnegative pairs
+L_ij = 0                         for negative/same-nonpositive pairs
+L_ij = 1/2                       when both values are zero
+D strain_positive[D] = Q * (L elementwise (Q^T*D*Q)) * Q^T
 ```
 
-Here `h(t)=1` for positive t, `0` for negative t, and `1/2` at zero.
-The zero-trace Amor tangent deliberately corrects the previous AD branch
-selection, which assigned zero to both volumetric branch derivatives.
-Complementary slopes `h` and `1-h` instead give the centered volumetric tangent
-`K (g+1)/2` at zero trace and recover intact bulk stiffness when `g=1`, including
-at zero strain and in pure shear. At damage greater than zero this is a
-generalized derivative choice, not classical differentiability at the switch.
-Every tangent column uses an engineering-Voigt basis increment (off-diagonal
-tensor entries are 1/2 for a unit engineering shear). The material tangents
-are symmetric energy derivatives on smooth branches, with symmetric centered
-choices at the switches.
+The trace derivative similarly chooses 1, 0, or 1/2 at positive, negative, or
+zero trace. These are centered generalized derivatives at nonsmooth switches;
+repeated nonzero roots are handled without an eigenvalue-gap regularization.
+Positive and negative contributions are weighted directly to retain very small
+residual stiffness without cancellation. Each tangent column uses the correct
+engineering-Voigt basis increment. `EvaluateResponse(true)` returns stress,
+positive energy/stress, phase derivative, and an owning optional tangent;
+`EvaluateResponse(false)` skips tangent computation.
 
-For the spectral branch, differentiating eigenvectors with autodiff gives
-incorrect tangents at repeated eigenvalues. The implementation instead uses
-the matrix-function derivative. For `eps=Q diag(a) Q^T` and symmetric increment
-`D`, let `f(a)=max(a,0)` and
+## AT2 equation and history
+
+The fracture density is
 
 ```text
-D eps+[D] = Q (L elementwise-multiply (Q^T D Q)) Q^T
-L_ij = (f(a_i)-f(a_j))/(a_i-a_j)                 if signs differ
-L_ij = 1                                      if both nonnegative, not both zero
-L_ij = 0                                      if both nonpositive, not both zero
-L_ij = 1/2                                    if both zero
-D sigma+[D] = lambda h(tr(eps)) tr(D) I + 2 mu D eps+[D]
-D sigma[D] = lambda tr(D) I + 2 mu D + (g-1) D sigma+[D]
+Gc/2 * (phi^2/l + l*|grad(phi)|^2).
 ```
 
-`h(t)` is 1 for positive t, 0 for negative t, and 1/2 at zero. This is the
-repository's derivation: differentiate `Q f(diag(a)) Q^T` off repeated roots,
-then take the same-sign divided-difference limit. No small eigenvalue-gap
-regularization is needed. Each engineering-Voigt basis increment supplies one
-column of C. The implementation weights positive and negative stresses/slopes
-directly to avoid cancellation of very small residual stiffness in pure tension.
-The centered generalized slope at zero is a stated branch choice,
-not a claim of classical differentiability there. Repeated nonzero principal
-strains are smooth and checked by directional finite differences.
+Substituting `c=1-phi` and `l=2*l0` in Borden's equation (6) gives this expression.
+Thus the default l=15 µm matches the paper's l0=7.5 µm; halving the code's l
+would change the model.
 
-## Residual and consistent four-block Jacobian
-
-At a quadrature point, let `B u_e=e`, `N^T phi_e=phi`, and
-`G^T phi_e=grad(phi)`, where rows of G are physical shape gradients. Set
-`H=max(H_n,psi+(e))` from the last committed value H_n. With
-`w=ip.weight*det(dX/dxi)`, element contributions are
+History is stored per quadrature point, initially zero:
 
 ```text
-Ru   += w B^T s
-Rphi += w [g' H N + Gc (l G G^T phi_e + phi/l N)]
-Kuu      += w B^T C B
-Ku_phi   += w (B^T g' s+) N^T
-Kphi_u   += w g' N chi (s+)^T B
-Kphi_phi += w [Gc l G G^T + (Gc/l + g'' H) N N^T]
+H_trial = max(H_committed, psi_positive(current strain))
+-Gc*l*Laplacian(phi) + (Gc/l + 2*(1-k)*H_trial)*phi = 2*(1-k)*H_trial.
 ```
 
-`chi=1` when `psi+>H_n`, otherwise 0, including equality. This explicitly
-chooses the inactive derivative at the history switch. On the active branch
-the cross blocks transpose each other; on unloading `Kphi_u=0` while `Ku_phi`
-generally remains nonzero. The full Jacobian is therefore generally
-nonsymmetric. There is no geometric stiffness in this small-strain formulation.
-External mechanical loads subtract their weak-form contribution from Ru.
-Natural phase boundary conditions are `grad(phi) dot n=0` in the examples.
+This adapts the history substitution in [1], equations (20)–(22). Natural phase
+boundary conditions are `grad(phi) dot n=0`. At fixed displacement/history, the
+AT2 phase equation is linear. The spectral mechanical equation is generally
+nonlinear even at fixed phi, because its strain decomposition changes with u.
 
-Both assemblies use the same rule: by default order
-`2 max(p_u,p_phi)+1`; `SetIntRule` supplies a borrowed override. Spectral splits
-are nonpolynomial, so convergence studies must also increase quadrature order.
-Point storage binds the displacement finite element and the exact rule object;
-reset it if either changes. Local element displacement arrays are
-component-major regardless of global MFEM ordering.
+`BeginStep` initializes trial history from committed history. Every residual
+or Jacobian evaluation recomputes it from the same committed state; rejected
+Newton iterates do not accumulate maxima. Only a converged load step commits.
+Failure restores unknowns and history, including nested-transaction rejection.
+AMR/repartition after history develops requires a transfer not provided here;
+the examples refine only before initialization. Restart serialization is not
+implemented.
 
-The history substitution is not direct constrained minimization of damage.
-Only the quadrature history H is guaranteed nondecreasing across accepted
-steps. Arbitrary FE meshes and higher-order spaces do not have a discrete
-maximum principle, and pointwise `phi_(n+1)>=phi_n` or `0<=phi<=1` is not imposed.
-The examples check coefficient bounds after acceptance and fail if violated;
-this diagnostic does not implement a bound-constrained solve or cut back an
-inadmissible phase state. For higher-order elements coefficient bounds alone
-do not establish bounds everywhere inside the element. No physical energy
-check should use the inherited unavailable element-energy method.
+## Discrete residual and Jacobian
 
-## State lifecycle and solver
+With `B*u_e=e`, `N^T*phi_e=phi`, physical shape-gradient matrix G, and quadrature
+weight `w=ip.weight*det(dX/dxi)`, the implementation's contributions are
 
-History initializes to zero. `BeginStep` copies committed history to trial;
-every residual/Jacobian evaluation recomputes trial history from H_n and the
-current fields, so rejected Newton iterates do not accumulate maxima. Accepted
-steps commit the final residual's trial history. Failure rolls history and
-unknowns back; nested rejection prevents the enclosing transaction committing.
-Geometry/refinement changes after history develops require an admissible state
-transfer that is not implemented. The examples refine only before initialization
-and do not perform AMR during fracture. Restart serialization is not provided.
+```text
+Ru       += w * B^T*s
+Rphi     += w * [g'*H*N + Gc*(l*G*G^T*phi_e + phi/l*N)]
+Kuu      += w * B^T*C*B
+Ku_phi   += w * (B^T*g'*s_positive)*N^T
+Kphi_u   += w * g'*N*chi*s_positive^T*B
+Kphi_phi += w * [Gc*l*G*G^T + (Gc/l + g''*H)*N*N^T]
+```
 
-Despite its name, `NewtonForPhaseField` performs block Gauss-Seidel updates:
-solve the displacement diagonal block, reevaluate both residuals, solve the
-phase diagonal block, and repeat. It does not use the cross blocks for a
-monolithic Newton solve and does not perform an energy line search. Both block
-residual norms must satisfy their own `max(rel_tol*reference_norm,abs_tol)` from
-iteration zero. Each block independently fixes its reference at its first
-nonzero residual norm in the current solve, including evaluations between block
-updates. An initial nonzero reference is retained; an initially zero block uses
-only `abs_tol` until coupling activates it, then establishes its relative
-reference even when `abs_tol=0`. A supplied RHS is subtracted on every evaluation.
-After either field update both residuals are recomputed at the same current state. A block
-within tolerance can skip its current solve, but its convergence is never
-latched: an update to the other field can reactivate it. Acceptance requires
-both current residuals to pass simultaneously. The shared
-absolute tolerance acts on blocks with different units and may need problem-
-specific scaling. The MPI example uses 15 sweeps by default, relative tolerance
-`1e-5` in double precision (`1e-4` in single), and zero absolute tolerance for
-both blocks. Its references reset for each attempted increment. This avoids
-skipping phase updates because of a displacement-derived absolute threshold,
-but very small reference residuals can demand accuracy below floating-point
-resolution. Full-fracture convergence with this setting remains to be verified.
-The serial example retains its existing absolute-tolerance policy.
+Here `chi=1` when the current positive energy exceeds committed history and
+zero otherwise, including equality. The cross blocks transpose on active
+history; unloading generally gives a nonsymmetric full Jacobian. No geometric
+stiffness is required in small strain. These discrete derivatives are derived
+for this implementation from the stated laws.
 
-Adaptive continuation restores the accepted solution before prescribing each
-trial boundary value. Failed solves halve the increment; successful solves
-grow it by at most 1.2 up to `-dt-max`. CLI inputs require finite
-`0<dt-min<=dt<=dt-max` and `dt-min<dt-max`. `-steps` counts attempts, including
-rejections. Exhaustion or failure to reach the final coordinate is reported.
+Both assemblies use the same rule, default order `2*max(p_u,p_phi)+1`.
+`SetIntRule` can supply a borrowed rule. Spectral splits are nonpolynomial, so
+quadrature sensitivity remains part of numerical verification. Local element
+displacement arrays are component-major regardless of the global ordering.
 
-## Serial and MPI shear examples
+## One staggered algorithm with inner mechanical Newton
 
-Both examples set `E=210e9 Pa`, `nu=0.3`, use the spectral split, and require a
-2D planar mesh with domain attribute 1 and bottom/top attributes 11/12. Bottom
-and top vertical displacement are zero; bottom horizontal displacement is zero
-and top horizontal displacement ramps to `-disp`. The MPI example additionally
-requires right attribute 13 and left attributes 14/15 and imposes zero vertical
-displacement there, leaving horizontal motion free, following the side rollers
-in Borden et al. (2012), §4.1, Figure 5(a), p. 85
-([journal article](https://doi.org/10.1016/j.cma.2012.01.008)). It combines
-component-specific owned true-DOF lists for both residual elimination and trial
-boundary values. The serial example still leaves the outer sides traction-free,
-so the two examples currently solve different boundary-value problems. Crack
-faces are traction-free in both. There is no prescribed phase boundary or initial diffuse
-crack; the supplied mesh defines the notch.
+`NewtonForPhaseField` uses the following procedure at a fixed load increment:
 
-The serial default mesh is `data/crack_square2d.msh`; MPI defaults to
-`data/crack_square2d_quad.msh`, with different refinement defaults. Use the same
-explicit mesh and final refinement when comparing ranks. `-lr` is optional
-problem-specific initial refinement, with different serial/MPI selection rules.
-The MPI polynomial crack-path selector is a legacy heuristic in metres, not a
-predicted path or portable refinement criterion for arbitrary meshes.
+1. Hold phi fixed and Newton-solve displacement using the current Kuu.
+2. Solve the phase equation at the updated u and trial H.
+3. Reevaluate both residuals at that common state. Repeat until both pass.
+4. Commit history only after outer convergence; otherwise roll back the attempt.
 
-| Serial | MPI |
+The existing configured linear solver is reused for each block. The inner loop
+does not create another history transaction or commit state. There is no fixed
+two-pass acceptance, equation-scaling callback, constitutive cap or inner line
+search. The assembled cross blocks remain available for verification and other
+callers, but this staggered solver uses diagonal blocks.
+
+Outer goals are `max(rtol*reference, block_atol)`. The displacement reference is
+its first nonzero residual in the attempted step. The phase reference is taken
+after the first completed mechanical subsolve, with a first-subsequent-nonzero
+fallback. An initial phase imbalance is still checked before any acceptance.
+
+Each inner mechanical solve freezes its own initial norm and uses
+
+```text
+inner_goal = min(max(inner_rtol*inner_initial_norm, inner_atol), outer_u_goal).
+```
+
+An inner iteration-limit failure, iterative linear-solver failure, or nonfinite
+correction/residual rejects the load attempt before updating phase. The inner
+solve can take zero corrections when already converged. Both outer blocks must
+still pass after the phase update; mechanical convergence is never latched.
+
+The library retains `SetAbsTol()` as a shared fallback. `SetBlockAbsTol(u,phi)`
+sets separate floors and `ClearBlockAbsTol()` restores that fallback.
+`SetMechanicsNewton(iterations,rtol,atol)` configures the inner solve.
+
+Parallel-example defaults, in its SI units:
+
+| Control | Default |
 | --- | --- |
-| `Mesh`, `FiniteElementSpace`, `GridFunction` | `ParMesh`, `ParFiniteElementSpace`, `ParGridFunction` |
-| `BlockNonlinearForm` | `ParBlockNonlinearForm` with Hypre ParCSR gradient blocks |
-| UMFPack diagonal solves (SuiteSparse required) | Distributed MUMPS diagonal solves by default (`-ls direct`, MFEM MPI + MUMPS required); `-ls gmres` retains systems/scalar BoomerAMG, 2000 iterations, restart 50, relative tolerance `1e-10` (`1e-5` single) |
-| True-DOF vector prolonged for output, including nonconforming meshes | Each rank owns its true DOFs; `SetFromTrueDofs` populates shared/local output fields |
-| Continuous H1 stress projection | Discontinuous stress projection |
+| Outer relative tolerance, `-rtol` | 1e-5 (1e-4 for single precision) |
+| Outer mechanics floor, `-u-atol` | 1e-2 N/m |
+| Outer phase floor, `-phi-atol` | 1e-6 N |
+| Maximum outer sweeps, `-ni` | 1000 |
+| Maximum inner Newton corrections, `-u-ni` | 30 |
+| Inner relative tolerance, `-u-rtol` | 1e-8 (1e-5 for single precision) |
+| Inner absolute tolerance, `-u-inner-atol` | 1e-3 N/m |
 
-In `pPhaseField_shear`, `-il 1` (or `--info-level 1`) prints a rank-zero
-summary after every linear solve, labeled by block. Direct solves report the true
-relative residual and maximum-rank analysis/factorization and solve times, with
-no Krylov iteration or preconditioned-residual labels. For `-ls gmres` the summary reports total iterations across restarts, the true
-relative residual `||b-Ax||/||b||`, the preconditioned final/initial residual
-ratio reported by MFEM, convergence status, and maximum-rank setup/solve times. Summaries include solves in
-rejected continuation attempts. The default `-il 0` disables these summaries
-and their extra matrix multiply/global norms. A zero denominator reports zero
-for a zero numerator, otherwise infinity. This option controls linear summaries;
-existing nonlinear progress output is unchanged.
+These are problem-specific tolerances. Separate floors prevent a tiny new load
+increment from demanding another relative reduction of an already accepted
+residual. The serial example has its own existing tolerances but uses the same
+nested solver. Logs distinguish outer sweeps from inner mechanical iterations.
 
-With `-ls gmres`, the default displacement AMG uses `SetSystemsOptions(2)` with the existing
-`Ordering::byVDIM` space. `-uamg scalar` restores the previous scalar AMG
-settings; `-uamg elasticity` and `-uamg elasticity-no-refine` enable MFEM's
-rigid-body-mode interpolation with/without interpolation refinement.
-`NewtonForPhaseField::SetBlockSolvers(displacement, phase)` borrows separate
-linear solvers; `SetSolver(shared)` retains the original shared-solver behavior.
-AMG is rebuilt for each new tangent, so this change does not reuse stale
-hierarchies or alter nonlinear acceptance/tolerances. See
-[Eight-rank AMG tuning](phase-field-amg-tuning.md) for measurements and limits.
-See [direct solver selection](phase-field-direct-solver.md) for capability gates,
-factorization semantics, verification, and the unchanged staggered iteration.
+Failed attempts halve the increment. Successful increments grow by at most 1.2
+up to `-dt-max`; the controller also uses the outer iteration budget, so changing
+`-ni` can change the load sequence. `-steps` counts attempts including failures.
+The driver checks that the requested final continuation coordinate was reached.
 
-The forms own their integrators and are destroyed before the borrowed material
-and point storage. Reaction output assembles an unconstrained internal residual
-and sums top horizontal true-DOF entries. MPI reduces the owned entries once;
-global DOF counts, residual norms and diagnostics are collective on all ranks,
-with CSV output only on rank zero. There are no global solution gathers.
-ParaView writes use MFEM's parallel data collection. `-no-vis` disables both
-ParaView and reaction CSV; `-od` changes the ParaView directory, while CSV is
-written in the working directory.
+### Independent implementation that informed the solver
 
-From the repository root, these matched small runs use explicit inputs and
-write no output files:
+[PhaseFieldX 0.4.0, commit a9714c1](https://github.com/CastillonMiguel/phasefieldx/tree/a9714c122497f8829860efc68d776e4324d48eca)
+was deployed with DOLFINx 0.11.0 and PETSc/MUMPS and run on a matching 4,096-quad
+mesh. Its [history solver](https://github.com/CastillonMiguel/phasefieldx/blob/a9714c122497f8829860efc68d776e4324d48eca/src/phasefieldx/Element/Phase_Field_Fracture/solver/solver_history.py#L176-L406)
+uses nonlinear displacement subsolves, separate inner tolerances, and projected
+history. This motivated completing the mechanical subsolve and using physically
+scaled absolute floors here, rather than changing the fracture law.
 
-```bash
-cmake --preset debug
-cmake --build --preset debug --parallel 4
-build/debug/bin/PhaseField_shear -m "$PWD/data/crack_square2d_quad.msh" \
-  -r 0 -disp 1e-9 -tf 1 -dt 1 -dt-max 1 -steps 1 -no-vis
-mpiexec -n 1 build/debug/bin/pPhaseField_shear -m "$PWD/data/crack_square2d_quad.msh" \
-  -rs 0 -rp 0 -disp 1e-9 -tf 1 -dt 1 -dt-max 1 -steps 1 -no-vis
-mpiexec -n 2 build/debug/bin/pPhaseField_shear -m "$PWD/data/crack_square2d_quad.msh" \
-  -rs 0 -rp 0 -disp 1e-9 -tf 1 -dt 1 -dt-max 1 -steps 1 -no-vis
-ctest --preset debug
-```
+The upstream [shear example](https://github.com/CastillonMiguel/phasefieldx/blob/a9714c122497f8829860efc68d776e4324d48eca/examples/PhaseFieldFracture/plot_1712.py#L254-L335)
+specifies two passes per increment. That policy completed the matching coarse
+case through 0.0134 mm, with peak reaction 0.61610 kN/mm of thickness. It did
+not require outer coupled convergence and exhibited nodal overshoot. A separate
+convergence-controlled comparison exhausted 1000 passes at 0.0117 mm. Thus an
+external example's completion is not proof that our coupled criteria should
+pass in two sweeps. The reference's numerical methods differ; it is evidence
+for solver design, not an independent certification of this formulation.
 
-For force curves, run the absolute executable and mesh paths from a disposable
-working directory with `-vis`. Record source revision and local diff, preset,
-MFEM precision/version/capabilities, mesh, order/refinement, all CLI parameters,
-solver tolerances, ranks/threads and accepted increments. The default parameters
-are inspired by Borden's shear problem (author report §4.1); these tiny smoke
-runs do not validate crack propagation, mesh convergence, or a published curve.
+## Shear setup, ownership and execution
 
-## Verification and API migration
+The MPI example uses the spectral material with E=210 GPa and nu=.3. The
+provided mesh is a 1 mm square with a 0.5 mm notch ending at the centre and a
+10 µm mouth opening. Borden [1], §4.1/Figures 5–7 uses a zero-width slit and
+cubic C2 T-splines, so the geometry/discretization are not identical.
 
-`phase_field_test` checks engineering shear, compression/split behavior,
-constitutive tangents, repeated principal strains, active and inactive history
-Jacobians, initial phase residual, nonzero RHS, phase-aware stress output, and
-all von Mises shear terms. `czm_history_test` contains `PhaseFieldHistory` and
-`PhaseFieldIntegrator` lifecycle tests for deterministic trial evaluation and
-nested commit/rollback. CTest also includes serial, one-rank and two-rank smoke
-runs. Run full Debug and Release suites for solver/numerical changes; smoke
-success alone establishes neither benchmark agreement nor performance.
+| Boundary attribute | MPI displacement condition |
+| --- | --- |
+| 11, bottom | ux=uy=0 |
+| 12, top | ux ramps to `-disp`, uy=0 |
+| 13, right; 14/15, left | uy=0; horizontal motion free |
+| Notch faces | Traction-free |
 
-Replace the old `StrainEnergyType` enum with `StrainEnergySplit` and choose
-`MieheSpectral`, `AmorVolumetricDeviatoric`, or `Isotropic` explicitly. The old
-`Borden` label is not an energy split and has no compatibility alias. Removed
-fallbacks that returned zero energy are unsupported rather than physical zero.
-Supply `PhaseFieldFractureParameters` to change Gc, l and k. Material instances
-are noncopyable/nonmovable; E/nu coefficients remain borrowed. Stress output
-must call `StressCoefficient::SetPhaseField` as well as `SetDisplacement`.
+The side restraints follow Figure 5(a), also independently implemented by the
+PhaseFieldX example. No phase Dirichlet condition or initial diffuse crack is
+imposed. The serial example still leaves the outer sides traction-free and is
+therefore a different boundary-value problem.
 
-The imported custom 3-by-3 eigensolver has been removed. The unused-by-material
-`util::StrainSplit` helper retains its positive/negative tensor return contract
-using `Eigen::SelfAdjointEigenSolver`, but now requires finite symmetric input
-and built-in floating-point scalars. Autodiff instantiations are explicitly
-unsupported; no AD-to-real conversion is performed. The material continues to
-use Eigen with the analytic spectral derivative above. `eigen_decomp_test`
-checks reconstruction, orthogonality, repeated eigenvalues, scaling and physical
-shear splitting; the former custom-solver AD comparison is no longer verification
-coverage. Unrelated autodiff tests and the autodiff dependency remain.
+`-rs 3 -rp 2` gives 4,096 Q1 quads with nominal h=15.625 µm; the MPI defaults
+`-rs 3 -rp 4` give h≈3.906 µm, near the paper's smallest element size. Matching
+h does not establish equal Q1/spline accuracy. Mesh, load-increment and quadrature
+convergence are still needed.
 
-## References and verification provenance
+MPI uses `ParMesh`, `ParFiniteElementSpace`, `ParGridFunction` and
+`ParBlockNonlinearForm` with Hypre ParCSR gradient blocks. Each rank solves and
+sums owned true DOFs; output fields are prolonged to local/shared DOFs. Reactions
+are the unconstrained top-horizontal residual summed once across ranks. CSV
+writing is rank-zero-only; norm, reaction and timing collectives run on all ranks.
+There are no global solution gathers.
 
-- C. Miehe, M. Hofacker, F. Welschinger, *A phase field model for rate-independent
-  crack propagation: Robust algorithmic implementation based on operator splits*,
-  Computer Methods in Applied Mechanics and Engineering 199 (2010), 2765–2778.
-  [DOI](https://doi.org/10.1016/j.cma.2010.04.011).
-  Equations (13), (19), (23), pp. 2768–2769 were checked in the
-  [mirrored primary article](https://www.scribd.com/document/585804616/miehe2010).
-  The repository uses a different iterative block order and normalized g.
-- H. Amor, J.-J. Marigo, C. Maurini, *Regularized formulation of the variational
-  brittle fracture with unilateral contact: Numerical experiments*, Journal of
-  the Mechanics and Physics of Solids 57 (2009), 1209–1229.
-  [DOI](https://doi.org/10.1016/j.jmps.2009.04.011).
-  §4.3, equations (33)–(35), p. 1217 were checked against the locally retained
-  primary-article extraction `/tmp/opencode/amor-2009.txt`; the DOI endpoint
-  was unavailable during this review. The split is adapted, not its full solver.
-- M. J. Borden, C. V. Verhoosel, M. A. Scott, T. J. R. Hughes, C. M. Landis,
-  *A phase-field description of dynamic brittle fracture*, ICES Report 11-14
-  (2011), [author report](https://www.oden.utexas.edu/media/reports/2011/1114.pdf).
-  §2.2, equations (6)–(12), pp. 5–6, and §4.1 were checked in the author report
-  and retained extraction. The journal version is CMAME 217–220 (2012), 77–95,
-  [DOI](https://doi.org/10.1016/j.cma.2012.01.008); equation/page references here
-  identify the report, not an unverified journal pagination.
+`-ls direct` requires MFEM MPI+MUMPS and uses separate distributed factorizations
+for u and phi. `-ls gmres` uses separate GMRES/BoomerAMG solvers; `-uamg` selects
+MFEM's systems/scalar/elasticity interpolation bundles. Matrices are rebound
+on every update. `-il 1` reports linear residuals and timings. The target requires
+MPI; MUMPS-dependent tests are gated separately. Serial uses UMFPack/SuiteSparse.
 
-## Review verification, 2026-09-05
-
-Verified against base revision `528c91c09c4d0d6a95a1396eeb345a14678ce5d0`
-plus this uncommitted phase-field diff, using the repository Debug/Release
-presets, GCC 15.2.0 and MFEM 4.9.1 in double precision. MFEM has MPI and
-SuiteSparse enabled, OpenMP and CUDA disabled; assembly used the CPU.
-Release flags were `-O3 -DNDEBUG`. No random data or solver option files were
-used. Single-precision compilation was not performed.
-
-Commands completed:
+Forms own their integrators; coefficients, material and point storage are
+borrowed and outlive the forms. `IntegrationPointStorage` binds the reference
+finite element and exact rule object. Reset it after geometry/topology/rule
+changes, transferring accepted history first. Materials and storage contain
+mutable scratch and are not thread-safe; these Eigen-based kernels are host-only.
 
 ```bash
-cmake --preset debug
-cmake --preset release
-cmake --build --preset debug --parallel 4
-cmake --build --preset release --parallel 4
-build/debug/bin/phase_field_test
-build/release/bin/phase_field_test
-ctest --test-dir build/debug --output-on-failure
-ctest --test-dir build/release --output-on-failure
-git diff --check
+cmake --build build/release --target pPhaseField_shear --parallel 4
+# From a disposable directory, with REPO set to the absolute repository path:
+mpiexec -n 8 "$REPO/build/release/bin/pPhaseField_shear" \
+  -m "$REPO/data/crack_square2d_quad.msh" -rp 2 -rs 3 -ls direct
 ```
 
-Both full suites passed **106/106**, including serial/one-rank/two-rank shear
-smokes; both focused executables passed **11/11**. MPI initially could not open
-PMIx sockets in the sandbox; the full suites passed outside that restriction.
-SemismoothContact has no current test registration; its unrelated stash was
-preserved. Existing rigid-obstacle contact tests remain part of the base suite.
+`-no-vis` disables both ParaView and CSV. `-od` controls the ParaView directory;
+`p_phase_field_force.csv` is written and flushed in the working directory.
 
-Matched Release output runs used the quadrilateral mesh, order 1, no refinement,
-`-disp 1e-9 -tf 1 -dt 0.25 -dt-max 0.25 -steps 4 -vis`, with serial `-r 0`
-and MPI `-rs 0 -rp 0`. All four increments converged and all three CSVs agreed
-at their printed precision, ending at reaction **64.3949 N/m**. Artifacts and
-logs are under `/tmp/phase-review/{serial,one,two}`. A Debug serial output run
-with the same mesh, `-r 0 -lr 1 -disp 1e-9 -tf 1 -dt 1 -dt-max 1 -steps 1
--vis` also converged, exercising nonconforming output reconstruction.
+## Bounds and verification limits
 
-A deliberately larger matched run on the unrefined mesh with `-disp 1e-7`
-and four increments converged algebraically on the first increment but failed
-the phase coefficient bound check in serial and MPI. This is an observed
-limitation of the unconstrained history formulation on that discretization;
-no bounds were clamped and no tolerance was relaxed. The default full fracture
-run, a published reaction-curve comparison, mesh/quadrature convergence, and
-full-fracture/scaling benchmarks remain unperformed. Subsequent bounded AMG
-performance measurements are recorded in [Eight-rank AMG tuning](phase-field-amg-tuning.md).
+The history method guarantees nondecreasing committed H, not discrete bounds
+or nodal monotonicity of phi. Consistent Q1 reaction–diffusion assembly need not
+satisfy a discrete maximum principle; an accurate linear solve can overshoot.
+There is no phase clipping or constitutive floor. The quadratic law extrapolated
+outside [0,1] can regain stiffness and has no intended physical interpretation.
 
-### Local response reuse measurement, 2026-09-05
+By default `-strict-phase-bounds` aborts on nodal bounds violations after an
+accepted solve. `-diagnostic-phase-bounds` instead reports the nodal and assembly
+quadrature ranges and continues solely for diagnosis. Nonfinite coefficients
+always abort. These modes do not implement bound-constrained evolution or a
+pre-commit admissibility retry. Nodal bounds also do not establish pointwise
+bounds for higher-order elements. Do not use the unavailable inherited element
+energy method for physical energy checks or globalization.
 
-This measurement compares the dirty analytic implementation present at the start
-of the response-reuse edit (same base revision above, **not** the committed AD
-implementation) with the public response and split helpers. Existing
-`build/release` configuration was reused: GCC 15.2.0, `-O3 -DNDEBUG`, MFEM 4.9.1
-double precision, CPU i9-10900KF. No reconfiguration was needed.
+The retained uncapped algorithm completed the eight-rank Release diagnostic
+case through 0.1 mm using `-rp 2 -rs 3 -ls direct -diagnostic-phase-bounds`, the
+default tolerances above, and default initial/max/min increments 1e-6/1e-2/1e-14.
+It accepted 146 steps without rejection, used at most 4 inner corrections and 515 outer sweeps,
+and recorded 91 nodal-bound violations. This addresses the observed algebraic
+stopping problem, not all benchmark-validation requirements. The 0.1 mm target
+is beyond the paper's 0.0134 mm comparison range.
 
-The temporary harness `/tmp/opencode/phase-response-bench.cpp` uses the element
-assembly wrappers in `tests/phase_field_test.cpp`: one unit-square Q1 quad,
-order-3 quadrature (four points), spectral plane strain, E=10, nu=0.25,
-Gc=2.5, l=0.3, k=0.01 in consistent arbitrary units. The fixed fields are
-`u=(0.018x+0.004y, 0.004x-0.007y)`, `phi=0.2+0.03x+0.02y`. Committed history
-is zero; the active trial is repeatedly evaluated inside one begin/rollback
-transaction. Each batch assembles 100,000 residual/Jacobian pairs, including
-wrapper allocation and block copying, and accumulates `||R||2+||J||F`.
-One warmup batch is excluded, followed by seven timed batches. No solver,
-nonlinear iterations, MPI collectives, visualization, or random data are involved.
+Regression coverage in `tests/phase_field_test.cpp` checks engineering shear,
+compression and split limits, zero strain, repeated roots, tiny residual
+stiffness, centered material and four-block Jacobian differences, the homogeneous
+AT2 balance, phase-aware postprocessing, independent tolerance floors, fixed-phase
+inner Newton and transactional failure. `czm_history_test.cpp` retains the
+quadrature-history and nested-lifecycle tests. One- and two-rank CTest cases
+exercise direct/iterative assembly and solver rebinding. Single-precision builds,
+full mesh/increment convergence, strict admissibility and published-curve
+agreement have not been established.
 
-`bash /tmp/opencode/build-phase-bench.sh before` was run **before source edits**;
-the same script with `after` rebuilt the harness after the Release libraries.
-Both binaries were run from `/tmp/opencode` with
-`OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`. Initial median seconds per batch
-were **1.21573 before / 0.87769 after** (27.8% less time). A subsequent
-before/after pair under `/usr/bin/time -f 'peak_RSS_kB=%M'` gave medians
-**1.18381 / 0.89050 seconds** (24.8% less time); peak process RSS was
-27,336 / 26,892 KiB. CPU affinity/frequency were not pinned. All batch checksums
-agreed at 17 printed digits, ending at **13309887.659665646** including warmup.
-This supports a local assembly improvement only, not a full-solve or scaling claim.
+After cleanup, full Debug and Release builds and `ctest --test-dir
+build/<configuration> --output-on-failure -j 4` each passed 179 enabled tests
+(two existing benchmark tests disabled). The eight-rank diagnostic rerun
+completed in 631.78 s and matched the pre-cleanup uncapped force CSV at printed
+precision. These checks establish implementation/regression consistency, not
+physical admissibility or mesh/increment convergence.
 
-Coefficient-counter assertions now verify one E and one nu evaluation per point
-in both residual and Jacobian, for all three splits with active and inactive
-history (previously residual: two; Jacobian: four active / three inactive).
-The existing four-block directional-difference test now covers all three splits;
-a focused response test checks getters, snapshot reuse, and optional-tangent
-presence. Full rebuilds with `cmake --build build/{debug,release} --parallel 4`
-and `ctest --test-dir build/{debug,release} --output-on-failure` each passed
-**119/119**, including serial/one-rank/two-rank shear smokes. The focused Debug
-`ctest --test-dir build/debug -R PhaseField --output-on-failure` passed 22/22.
-Single-precision builds and a before/after full nonlinear solve were not run.
+## References
+
+1. M. J. Borden, C. V. Verhoosel, M. A. Scott, T. J. R. Hughes and C. M. Landis,
+   *A phase-field description of dynamic brittle fracture*, Computer Methods in
+   Applied Mechanics and Engineering 217–220 (2012), 77–95.
+   [DOI](https://doi.org/10.1016/j.cma.2012.01.008). Journal §2.2, equations
+   (6)–(7), (14)–(22), and §4.1/Figures 5–7 were checked against the Zotero PDF.
+2. C. Miehe, M. Hofacker and F. Welschinger, *A phase field model for
+   rate-independent crack propagation: Robust algorithmic implementation based
+   on operator splits*, CMAME 199 (2010), 2765–2778.
+   [DOI](https://doi.org/10.1016/j.cma.2010.04.011). Spectral split/history in
+   §3.1 and shear benchmark/loading in §5.2.
+3. H. Amor, J.-J. Marigo and C. Maurini, *Regularized formulation of the
+   variational brittle fracture with unilateral contact: Numerical experiments*,
+   Journal of the Mechanics and Physics of Solids 57 (2009), 1209–1229.
+   [DOI](https://doi.org/10.1016/j.jmps.2009.04.011), §4.3, equations (33)–(35).
+4. M. Castillon, *PhaseFieldX*, version 0.4.0, source commit a9714c1. The pinned
+   source links above identify the solver and shear driver used for comparison.

@@ -596,6 +596,8 @@ void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     MFEM_VERIFY( oper != nullptr && blockOper != nullptr, "The phase-field operator is not set (use SetOperator)." );
     MFEM_VERIFY( prec != nullptr, "The phase-field linear solver is not set (use SetSolver)." );
     MFEM_VERIFY( x.Size() == Height(), "The phase-field solution vector has the wrong size." );
+    mechanicsIterations = 0;
+    maxMechanicsIterationsUsed = 0;
 
     SolutionSnapshot solution_snapshot( x );
     IntegratorStep integrator_step( *this, oper );
@@ -616,8 +618,19 @@ void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     mfem::real_t norm_p = 0.;
     mfem::real_t norm0_u = 0.;
     mfem::real_t norm0_p = 0.;
-    mfem::real_t norm_goal_u = abs_tol;
-    mfem::real_t norm_goal_p = abs_tol;
+    const mfem::real_t abs_u = blockAbsoluteTolerances ? blockAbsoluteTolerances->displacement : abs_tol;
+    const mfem::real_t abs_p = blockAbsoluteTolerances ? blockAbsoluteTolerances->phase : abs_tol;
+    mfem::real_t norm_goal_u = abs_u;
+    mfem::real_t norm_goal_p = abs_p;
+    bool phaseReferenceReady = false;
+    const auto establishPhaseReference = [&]()
+    {
+        if ( phaseReferenceReady && norm0_p == 0. && norm_p > 0. && mfem::IsFinite( norm_p ) )
+        {
+            norm0_p = norm_p;
+            norm_goal_p = std::max( rel_tol * norm0_p, abs_p );
+        }
+    };
     // Both residuals must belong to the same current (u, phi). Recompute
     // both after either update; convergence of one block is never latched.
     const auto evaluateResidual = [&]()
@@ -636,13 +649,9 @@ void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
         if ( norm0_u == 0. && norm_u > 0. && mfem::IsFinite( norm_u ) )
         {
             norm0_u = norm_u;
-            norm_goal_u = std::max( rel_tol * norm0_u, abs_tol );
+            norm_goal_u = std::max( rel_tol * norm0_u, abs_u );
         }
-        if ( norm0_p == 0. && norm_p > 0. && mfem::IsFinite( norm_p ) )
-        {
-            norm0_p = norm_p;
-            norm_goal_p = std::max( rel_tol * norm0_p, abs_tol );
-        }
+        establishPhaseReference();
     };
     const auto getBlockGradient = [&]() -> mfem::BlockOperator&
     {
@@ -659,9 +668,8 @@ void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
     prec->iterative_mode = false;
     phaseLinearSolver.iterative_mode = false;
 
-    // One block-Newton correction per sweep, not a converged nonlinear
-    // displacement subsolve. Even exact diagonal solves can converge slowly
-    // through coupling; a small phase residual alone does not imply equilibrium.
+    // Each sweep solves mechanics at fixed phase, then updates phase. Only
+    // convergence of both residuals at the final common state accepts the step.
     for ( it = 0; true; it++ )
     {
         if ( MyRank() == 0 )
@@ -696,18 +704,60 @@ void NewtonForPhaseField::Mult( const mfem::Vector& b, mfem::Vector& x ) const
             break;
         }
 
-        // Skip only at the current state. A subsequent phase update can
-        // reactivate displacement, which is checked on the next sweep.
-        if ( norm_u > norm_goal_u )
+        // A mechanics subsolve may take zero corrections, but phase is held
+        // fixed throughout it. No inner solve commits quadrature history.
         {
-            prec->SetOperator( getBlockGradient().GetBlock( 0, 0 ) );
-            prec->Mult( r_u, c_u );
-            add( cur_u, -1., c_u, cur_u );
-            ProcessNewState( x );
-            evaluateResidual();
+            const auto& options = mechanicsNewton;
+            const mfem::real_t innerGoal = std::max( options.relativeTolerance * norm_u, options.absoluteTolerance );
+            bool innerConverged = false;
+            for ( int inner = 0;; ++inner )
+            {
+                const mfem::real_t goal = std::min( innerGoal, norm_goal_u );
+                if ( MyRank() == 0 )
+                {
+                    mfem::out << "  Mechanics Newton [sweep " << it << ", inner " << inner << "]: ||r_u|| = " << norm_u
+                              << ", goal = " << goal << '\n';
+                }
+                if ( !mfem::IsFinite( norm_u ) || !mfem::IsFinite( norm_p ) )
+                {
+                    break;
+                }
+                if ( norm_u <= goal )
+                {
+                    innerConverged = true;
+                    break;
+                }
+                if ( inner >= options.maxIterations )
+                {
+                    break;
+                }
+                prec->SetOperator( getBlockGradient().GetBlock( 0, 0 ) );
+                prec->Mult( r_u, c_u );
+                const auto* iterative = dynamic_cast<const mfem::IterativeSolver*>( prec );
+                const bool finiteCorrection = mfem::IsFinite( Norm( c_u ) );
+                if ( ( iterative && !iterative->GetConverged() ) || !finiteCorrection )
+                {
+                    break;
+                }
+                add( cur_u, -1., c_u, cur_u );
+                ++mechanicsIterations;
+                maxMechanicsIterationsUsed = std::max( maxMechanicsIterationsUsed, inner + 1 );
+                ProcessNewState( x );
+                evaluateResidual();
+            }
+            if ( !innerConverged )
+            {
+                if ( MyRank() == 0 )
+                {
+                    mfem::out << "  Inner mechanics Newton did not converge; rejecting load attempt.\n";
+                }
+                converged = false;
+                break;
+            }
+            phaseReferenceReady = true;
+            establishPhaseReference();
         }
 
-        if ( norm_p > norm_goal_p )
         {
             phaseLinearSolver.SetOperator( getBlockGradient().GetBlock( 1, 1 ) );
             phaseLinearSolver.Mult( r_p, c_p );

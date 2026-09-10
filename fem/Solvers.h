@@ -2,9 +2,12 @@
 #include "mfem.hpp"
 #include <CircularBuffer.hpp>
 #include <Eigen/Dense>
+#include <algorithm>
 #include <cstddef>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -166,6 +169,22 @@ protected:
     mutable mfem::BlockNonlinearForm* blockOper{ nullptr };
     mfem::Array<int> block_trueOffsets;
     mfem::Solver* phaseSolver{ nullptr };
+    struct BlockAbsoluteTolerances
+    {
+        mfem::real_t displacement;
+        mfem::real_t phase;
+    };
+    struct MechanicsNewtonOptions
+    {
+        int maxIterations;
+        mfem::real_t relativeTolerance;
+        mfem::real_t absoluteTolerance;
+    };
+    std::optional<BlockAbsoluteTolerances> blockAbsoluteTolerances;
+    MechanicsNewtonOptions mechanicsNewton{
+        30, std::max( mfem::real_t( 1e-8 ), 10 * std::numeric_limits<mfem::real_t>::epsilon() ), 0. };
+    mutable int mechanicsIterations{ 0 };
+    mutable int maxMechanicsIterationsUsed{ 0 };
 
 public:
     NewtonForPhaseField() : NewtonLineSearch()
@@ -194,6 +213,35 @@ public:
 
     virtual void SetOperator( const mfem::Operator& op );
     virtual void Mult( const mfem::Vector& b, mfem::Vector& x ) const;
+    /// Override the inherited shared absolute tolerance for the two outer blocks.
+    void SetBlockAbsTol( mfem::real_t displacement, mfem::real_t phase )
+    {
+        MFEM_VERIFY( mfem::IsFinite( displacement ) && displacement >= 0. && mfem::IsFinite( phase ) && phase >= 0.,
+                     "Block absolute tolerances must be finite and nonnegative." );
+        blockAbsoluteTolerances = BlockAbsoluteTolerances{ displacement, phase };
+    }
+    void ClearBlockAbsTol() noexcept
+    {
+        blockAbsoluteTolerances.reset();
+    }
+    /// Configure the Newton subsolve with phi fixed. Its target is capped by
+    /// the current outer displacement goal. Failure rejects the whole load step;
+    /// inner iterations never commit history. No inner line search is performed.
+    void SetMechanicsNewton( int maxIterations, mfem::real_t relativeTolerance, mfem::real_t absoluteTolerance )
+    {
+        MFEM_VERIFY( maxIterations > 0 && mfem::IsFinite( relativeTolerance ) && relativeTolerance >= 0. &&
+                         relativeTolerance < 1. && mfem::IsFinite( absoluteTolerance ) && absoluteTolerance >= 0.,
+                     "Inner Newton requires a positive budget, 0<=rtol<1, and a finite nonnegative atol." );
+        mechanicsNewton = MechanicsNewtonOptions{ maxIterations, relativeTolerance, absoluteTolerance };
+    }
+    int GetNumMechanicsIterations() const noexcept
+    {
+        return mechanicsIterations;
+    }
+    int GetMaxMechanicsIterationsUsed() const noexcept
+    {
+        return maxMechanicsIterationsUsed;
+    }
 };
 
 class ALMBase : public mfem::IterativeSolver, public NonlinearStepContext
