@@ -418,7 +418,6 @@ int RunExample( int argc, char* argv[] )
         nonlinearSolver.SetDelta( 1. / loadSteps );
         nonlinearSolver.SetMaxDelta( 1. / loadSteps );
         nonlinearSolver.SetMinDelta( std::max( static_cast<mfem::real_t>( 1e-10 ), precisionTolerance ) );
-        nonlinearSolver.SetMaxStep( 10 * loadSteps );
         nonlinearSolver.SetTrialStateFunc(
             [&]( const mfem::real_t pseudoTime, mfem::Vector& trialUnknown )
             {
@@ -639,7 +638,6 @@ int RunExample( int argc, char* argv[] )
     nonlinearSolver.SetDelta( 1. / loadSteps );
     nonlinearSolver.SetMaxDelta( 1. / loadSteps );
     nonlinearSolver.SetMinDelta( std::max( static_cast<mfem::real_t>( 1e-10 ), precisionTolerance ) );
-    nonlinearSolver.SetMaxStep( 10 * loadSteps );
     nonlinearSolver.SetTrialStateFunc(
         [&]( const mfem::real_t pseudoTime, mfem::Vector& trialDisplacement )
         {

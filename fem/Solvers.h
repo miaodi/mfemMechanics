@@ -351,8 +351,12 @@ template <typename Newton>
 class MultiNewtonAdaptive : public Newton
 {
 public:
+    /// Limit total attempts (accepted and rejected) per Mult; zero means unlimited (the default).
+    /// Unlimited solves still stop on minimum increments or lack of representable pseudo-time progress.
+    /// Legacy int step numbers and zero-based callback attempt indices saturate at INT_MAX.
     void SetMaxStep( const int step )
     {
+        MFEM_VERIFY( step >= 0, "The adaptive Newton attempt limit must be nonnegative; zero means unlimited." );
         max_steps = step;
     }
 
@@ -401,7 +405,7 @@ public:
     }
 
 protected:
-    int max_steps{ 100 };
+    int max_steps{ 0 };
     mutable mfem::Vector cur;
     mutable mfem::real_t max_delta{ 1. }, min_delta{ 0. };
     mfem::real_t initial_pseudo_time_increment{ 0. };

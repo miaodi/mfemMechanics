@@ -1275,6 +1275,104 @@ TEST( NewtonLineSearch, AcceptsExactFullStepForLinearProblem )
     EXPECT_NEAR( solution( 0 ), 0., kTightTolerance );
 }
 
+TEST( MultiNewtonAdaptive, DefaultAndExplicitUnlimitedExceedFormerAttemptLimit )
+{
+    for ( const bool explicitUnlimited : { false, true } )
+    {
+        ZeroResidualOperator nonlinearOperator;
+        IdentitySolver linearSolver;
+        plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch> solver;
+        solver.SetOperator( nonlinearOperator );
+        solver.SetSolver( linearSolver );
+        solver.iterative_mode = true;
+        solver.SetMaxIter( 2 );
+        solver.SetDelta( 1. / 256. );
+        solver.SetMaxDelta( 1. / 256. );
+        if ( explicitUnlimited )
+        {
+            solver.SetMaxStep( 1 );
+            solver.SetMaxStep( 0 );
+        }
+        int attempts = 0;
+        solver.SetTrialStateFunc(
+            [&]( const mfem::real_t time, mfem::Vector& x )
+            {
+                ++attempts;
+                x( 0 ) = time;
+            } );
+        solver.SetDataCollectionFunc( [&]( int attempt, int, mfem::real_t ) { EXPECT_EQ( attempt, attempts - 1 ); } );
+        mfem::Vector solution( 1 ), rhs;
+        solution = 0.;
+        solver.Mult( rhs, solution );
+        EXPECT_TRUE( solver.GetConverged() );
+        EXPECT_EQ( attempts, 256 );
+        EXPECT_EQ( solver.StepNumber(), 256 );
+        EXPECT_EQ( solver.GetCurrentPseudoTime(), 1. );
+        EXPECT_EQ( solution( 0 ), 1. );
+    }
+}
+
+TEST( MultiNewtonAdaptive, FiniteBudgetCountsRejectedAttemptsAndPreservesAcceptedState )
+{
+    SwitchableResidualOperator nonlinearOperator;
+    IdentitySolver linearSolver;
+    plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch> solver;
+    solver.SetOperator( nonlinearOperator );
+    solver.SetSolver( linearSolver );
+    solver.iterative_mode = true;
+    solver.SetMaxIter( 2 );
+    solver.SetDelta( .25 );
+    solver.SetMaxDelta( .25 );
+    solver.SetMaxStep( 2 );
+    int attempts = 0;
+    solver.SetTrialStateFunc(
+        [&]( const mfem::real_t time, mfem::Vector& x )
+        {
+            nonlinearOperator.SetReject( ++attempts == 2 );
+            x( 0 ) = time;
+        } );
+    mfem::Vector solution( 1 ), rhs;
+    solution = 0.;
+    solver.Mult( rhs, solution );
+    EXPECT_FALSE( solver.GetConverged() );
+    EXPECT_EQ( attempts, 2 );
+    EXPECT_EQ( solver.StepNumber(), 1 );
+    EXPECT_EQ( solver.GetCurrentPseudoTime(), .25 );
+    EXPECT_EQ( solver.GetPseudoTimeIncrement(), 0. );
+    EXPECT_EQ( solution( 0 ), .25 );
+}
+
+TEST( MultiNewtonAdaptive, UnlimitedCutbacksStopWithoutRepresentableProgress )
+{
+    ConstantResidualOperator nonlinearOperator;
+    IdentitySolver linearSolver;
+    plugin::MultiNewtonAdaptive<plugin::NewtonLineSearch> solver;
+    solver.SetOperator( nonlinearOperator );
+    solver.SetSolver( linearSolver );
+    solver.iterative_mode = true;
+    solver.SetMaxIter( 1 );
+    solver.SetDelta( .5 );
+    solver.SetMinDelta( 0. );
+    solver.SetPseudoTimeInterval( 1., 2. );
+    int attempts = 0;
+    solver.SetTrialStateFunc(
+        [&]( mfem::real_t, mfem::Vector& x )
+        {
+            ++attempts;
+            x( 0 ) = 99.;
+        } );
+    mfem::Vector solution( 1 ), rhs;
+    solution = 3.;
+    solver.Mult( rhs, solution );
+    EXPECT_FALSE( solver.GetConverged() );
+    EXPECT_GT( attempts, 1 );
+    EXPECT_LE( attempts, std::numeric_limits<mfem::real_t>::digits );
+    EXPECT_EQ( solver.StepNumber(), 0 );
+    EXPECT_EQ( solver.GetCurrentPseudoTime(), 1. );
+    EXPECT_EQ( solver.GetPseudoTimeIncrement(), 0. );
+    EXPECT_EQ( solution( 0 ), 3. );
+}
+
 TEST( MultiNewtonAdaptive, AppliesTrialStateAtGlobalPseudoTime )
 {
     ZeroResidualOperator nonlinearOperator;

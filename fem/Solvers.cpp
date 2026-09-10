@@ -1230,9 +1230,10 @@ void MultiNewtonAdaptive<Newton>::Mult( const mfem::Vector& b, mfem::Vector& x )
 {
     MFEM_VERIFY( this->iterative_mode,
                  "MultiNewtonAdaptive requires iterative_mode=true to preserve trial state and accepted solutions." );
-    MFEM_VERIFY( initial_pseudo_time_increment > 0., "The initial pseudo-time increment must be positive." );
-    MFEM_VERIFY( max_delta > 0. && min_delta >= 0. && min_delta < max_delta,
-                 "Adaptive pseudo-time bounds must satisfy 0 <= minimum < maximum." );
+    MFEM_VERIFY( mfem::IsFinite( initial_pseudo_time_increment ) && initial_pseudo_time_increment > 0.,
+                 "The initial pseudo-time increment must be finite and positive." );
+    MFEM_VERIFY( mfem::IsFinite( max_delta ) && mfem::IsFinite( min_delta ) && max_delta > 0. && min_delta >= 0. && min_delta < max_delta,
+                 "Adaptive pseudo-time bounds must be finite and satisfy 0 <= minimum < maximum." );
 
     Newton::lambda = initial_pseudo_time;
     mfem::real_t step_size = std::min( initial_pseudo_time_increment, max_delta );
@@ -1242,11 +1243,17 @@ void MultiNewtonAdaptive<Newton>::Mult( const mfem::Vector& b, mfem::Vector& x )
     cur = x;
 
     int count = 0;
-    for ( ; count < max_steps && Newton::lambda < final_pseudo_time; count++ )
+    for ( ; ( max_steps == 0 || count < max_steps ) && Newton::lambda < final_pseudo_time;
+          count += ( count < std::numeric_limits<int>::max() ) )
     {
         const mfem::real_t remaining = final_pseudo_time - Newton::lambda;
         const bool reaches_target = step_size >= remaining;
         const mfem::real_t trial_increment = reaches_target ? remaining : step_size;
+        // A zero minimum must not allow retries forever after cutback underflow or rounding stagnation.
+        if ( !mfem::IsFinite( trial_increment ) || Newton::lambda + trial_increment <= Newton::lambda )
+        {
+            break;
+        }
         MFEM_VERIFY( trial_increment > min_delta || reaches_target,
                      "Required pseudo-time increment is smaller than the minimum bound." );
 
@@ -1275,7 +1282,7 @@ void MultiNewtonAdaptive<Newton>::Mult( const mfem::Vector& b, mfem::Vector& x )
             Newton::lambda = reaches_target ? final_pseudo_time : Newton::lambda + trial_increment;
             Newton::Delta_lambda = 0.;
             cur = x;
-            Newton::step++;
+            Newton::step += ( Newton::step < std::numeric_limits<int>::max() );
 
             try
             {
