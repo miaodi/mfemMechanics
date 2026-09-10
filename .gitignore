@@ -7,8 +7,6 @@
 /.ignore/
 /compile_commands.json
 /.vscode/*
-!/.vscode/extensions.json
-!/.vscode/settings.json
 .DS_Store
 ._*
 
