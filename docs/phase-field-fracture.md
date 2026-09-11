@@ -1,6 +1,6 @@
 # Small-strain AT2 phase-field fracture
 
-## Scope and current status
+## Scope
 
 `PhaseFieldElasticMaterial` and `plugin::PhaseFieldIntegrator` implement
 small-strain isotropic elasticity coupled to an AT2 damage field. The unknown
@@ -8,8 +8,10 @@ blocks are displacement `u` and damage `phi`, in that order. There is no inertia
 viscosity, plasticity or explicit crack-face contact. Two-dimensional mechanics
 is plane strain, with three-dimensional constitutive tensors.
 
-The parallel shear example can complete its full displacement range with the
-nested Newton/staggered solver below. Nodal phase overshoot remains a
+The parallel shear example completes its full displacement range using a
+staggered outer iteration with inner mechanical Newton solves. **The outer
+iteration is not coupled Newton and does not generally converge quadratically:
+crack propagation can require hundreds of sweeps.** Nodal phase overshoot remains a
 discretization limitation assessed in postprocessing. Completion is not
 an admissible, mesh-converged reproduction of the published benchmark.
 
@@ -144,20 +146,68 @@ Both assemblies use the same rule, default order `2*max(p_u,p_phi)+1`.
 quadrature sensitivity remains part of numerical verification. Local element
 displacement arrays are component-major regardless of the global ordering.
 
-## One staggered algorithm with inner mechanical Newton
+## Staggered solver and convergence
 
-`NewtonForPhaseField` uses the following procedure at a fixed load increment:
+Despite its class name, `NewtonForPhaseField` is a nonlinear block
+Gauss–Seidel solver for the coupled problem. Each load increment follows this
+procedure:
 
 1. Hold phi fixed and Newton-solve displacement using the current Kuu.
 2. Solve the phase equation at the updated u and trial H.
 3. Reevaluate both residuals at that common state. Repeat until both pass.
 4. Commit history only after outer convergence; otherwise roll back the attempt.
 
-The existing configured linear solver is reused for each block. The inner loop
-does not create another history transaction or commit state. There is no fixed
-two-pass acceptance, equation-scaling callback, constitutive cap or inner line
-search. The assembled cross blocks remain available for verification and other
-callers, but this staggered solver uses diagonal blocks.
+The configured linear solver is reused for each block. The inner loop does not
+create another history transaction or commit state. Both residuals must pass at
+the same displacement/phase state; convergence of mechanics is never latched
+across a phase update. There is no inner line search.
+
+### Why hundreds of outer sweeps can be necessary
+
+**`-ni` limits staggered sweeps, not Newton corrections. A 20-iteration Newton
+rule of thumb does not apply to this outer loop.** Only the fixed-phase
+mechanical subproblem uses Newton iteration. The phase subproblem is linear at
+fixed displacement/history.
+
+A full coupled Newton method would compute both corrections together:
+
+```text
+[ Kuu      Ku_phi   ] [ delta_u   ] = -[ Ru   ]
+[ Kphi_u   Kphi_phi ] [ delta_phi ]    [ Rphi ]
+```
+
+The staggered method instead solves with Kuu and Kphi_phi in sequence. Although
+the integrator assembles the cross derivatives, this solver does not use them
+to predict the simultaneous response of both fields. Its local convergence is
+generally linear when the fixed-point iteration is contractive, rather than
+quadratic as for smooth, nonsingular Newton close to a solution.
+
+During crack propagation, a phase update changes stiffness, displacement
+redistributes, and the changed crack-driving energy activates further damage.
+This strong feedback can make the staggered contraction very slow; the
+residual may also grow before entering a contracting regime. As an illustration,
+an error reduction factor of 0.98 per sweep takes about 570 sweeps to reduce
+the error by 1e-5. This is an illustration, not a measured factor for the example.
+
+**Retain the 1000-sweep default for the verified shear setup:** the propagation
+run needed up to **515 outer sweeps**, while any mechanical subsolve needed at
+most **4 Newton corrections**. A generous outer budget is necessary for this
+method and configuration to finish without premature rejection. Exactly 1000
+is neither a mathematical minimum nor a guarantee for other meshes or loads;
+it provides headroom over the observed requirement.
+
+Load cutbacks do not replace adequate coupling iterations. With `-ni 20` and
+`-u-atol 1e2`, the example stalls at 11.531% of the load: each mechanical solve
+reduces its residual from about 100 to 2.6e-8 N/m, but the phase update restores
+an imbalance slightly above the 100 N/m outer goal. Repeated cutbacks reach
+the minimum increment without resolving that imbalance. Raising the sweep
+budget addresses this failure; lowering the minimum increment does not.
+
+The large budget accommodates slow convergence rather than accelerating it.
+A globalized coupled Newton or accelerated staggered method would be a separate
+solver design, with history/spectral branch handling and convergence checks.
+
+### Stopping criteria and load continuation
 
 Outer goals are `max(rtol*reference, block_atol)`. The displacement reference is
 its first nonzero residual in the attempted step. The phase reference is taken
@@ -186,10 +236,13 @@ Parallel-example defaults, in its SI units:
 | Outer relative tolerance, `-rtol` | 1e-5 (1e-4 for single precision) |
 | Outer mechanics floor, `-u-atol` | 1e-2 N/m |
 | Outer phase floor, `-phi-atol` | 1e-6 N |
-| Maximum outer sweeps, `-ni` | 1000 |
+| Maximum staggered outer sweeps, `-ni` | **1000** |
 | Maximum inner Newton corrections, `-u-ni` | 30 |
 | Inner relative tolerance, `-u-rtol` | 1e-8 (1e-5 for single precision) |
 | Inner absolute tolerance, `-u-inner-atol` | 1e-3 N/m |
+| Initial / maximum / minimum increment, `-dt` / `-dt-max` / `-dt-min` | 1e-6 / 1e-2 / 1e-14 |
+| Final continuation coordinate, `-tf` | 1 |
+| Final top displacement, `-disp` | 1e-4 m |
 
 These are problem-specific tolerances. Separate floors prevent a tiny new load
 increment from demanding another relative reduction of an already accepted
@@ -201,14 +254,14 @@ up to `-dt-max`; the controller also uses the outer iteration budget, so changin
 `-ni` can change the load sequence. `-steps` counts attempts including failures.
 The driver checks that the requested final continuation coordinate was reached.
 
-### Independent implementation that informed the solver
+### Independent solver comparison
 
 [PhaseFieldX 0.4.0, commit a9714c1](https://github.com/CastillonMiguel/phasefieldx/tree/a9714c122497f8829860efc68d776e4324d48eca)
 was deployed with DOLFINx 0.11.0 and PETSc/MUMPS and run on a matching 4,096-quad
 mesh. Its [history solver](https://github.com/CastillonMiguel/phasefieldx/blob/a9714c122497f8829860efc68d776e4324d48eca/src/phasefieldx/Element/Phase_Field_Fracture/solver/solver_history.py#L176-L406)
 uses nonlinear displacement subsolves, separate inner tolerances, and projected
-history. This motivated completing the mechanical subsolve and using physically
-scaled absolute floors here, rather than changing the fracture law.
+history. It provides an independent comparison for the subsolve structure and
+physically scaled stopping criteria.
 
 The upstream [shear example](https://github.com/CastillonMiguel/phasefieldx/blob/a9714c122497f8829860efc68d776e4324d48eca/examples/PhaseFieldFracture/plot_1712.py#L254-L335)
 specifies two passes per increment. That policy completed the matching coarse
@@ -238,8 +291,9 @@ PhaseFieldX example. No phase Dirichlet condition or initial diffuse crack is
 imposed. The serial example still leaves the outer sides traction-free and is
 therefore a different boundary-value problem.
 
-`-rs 3 -rp 2` gives 4,096 Q1 quads with nominal h=15.625 µm; the MPI defaults
-`-rs 3 -rp 4` give h≈3.906 µm, near the paper's smallest element size. Matching
+The MPI defaults `-rs 3 -rp 2 -lr 0` give 4,096 Q1 quads with nominal
+h=15.625 µm, a coarse solver demonstration. Explicitly selecting `-rp 4`
+gives h≈3.906 µm, near the paper's smallest element size. Matching
 h does not establish equal Q1/spline accuracy. Mesh, load-increment and quadrature
 convergence are still needed.
 
@@ -251,7 +305,7 @@ writing is rank-zero-only; norm, reaction and timing collectives run on all rank
 There are no global solution gathers.
 
 `-ls direct` requires MFEM MPI+MUMPS and uses separate distributed factorizations
-for u and phi. `-ls gmres` uses separate GMRES/BoomerAMG solvers; `-uamg` selects
+for u and phi. The default `-ls gmres` uses separate GMRES/BoomerAMG solvers; `-uamg` selects
 MFEM's systems/scalar/elasticity interpolation bundles. Matrices are rebound
 on every update. `-il 1` reports linear residuals and timings. The target requires
 MPI; MUMPS-dependent tests are gated separately. Serial uses UMFPack/SuiteSparse.
@@ -266,13 +320,61 @@ mutable scratch and are not thread-safe; these Eigen-based kernels are host-only
 cmake --build build/release --target pPhaseField_shear --parallel 4
 # From a disposable directory, with REPO set to the absolute repository path:
 mpiexec -n 8 "$REPO/build/release/bin/pPhaseField_shear" \
-  -m "$REPO/data/crack_square2d_quad.msh" -rp 2 -rs 3 -ls direct
+  -m "$REPO/data/crack_square2d_quad.msh"
 ```
 
 `-no-vis` disables both ParaView and CSV. `-od` controls the ParaView directory;
 `p_phase_field_force.csv` is written and flushed in the working directory.
 
-## Bounds and verification limits
+## Verification
+
+### Full-load shear runs
+
+The coarse setup above completes the full 0.1 mm displacement on one and eight
+MPI ranks. Eight-rank Release tolerance comparisons give:
+
+| GMRES controls | Accepted steps | Rejections | Maximum outer sweeps | Maximum inner corrections |
+| --- | ---: | ---: | ---: | ---: |
+| `-u-atol 1e2 -ni 1000` | 146 | 0 | 353 | 4 |
+| `-u-atol 1e-2 -ni 1000` (defaults) | 146 | 0 | 515 | 4 |
+
+The tighter run matched the direct-solver reference force CSV at printed
+precision on the same 146 load samples. The looser run differed by up to
+1,673 N/m, or 0.123% of the tighter run's peak reaction. Retain the tighter
+tolerance and allow the outer iteration to converge rather than loosening the
+goal. `-ni 20` explicitly overrides the working default; omit it or use
+`-ni 1000`.
+
+With default controls and an explicit mesh path, the one-rank run also completed
+146 steps without rejection, with the same maximum sweep/correction counts.
+Its force CSV matched the eight-rank run and the direct reference at printed
+precision. Wall times were 286.41 s on eight ranks and 1523.10 s on one rank;
+these timings are not a scaling study.
+
+### Reproducibility and regression coverage
+
+These runs used source `15aa715` plus the default-control changes in this
+section, the existing Release preset build, GNU C++, MFEM version integer
+40901 in double precision with MPI/MUMPS enabled and MFEM OpenMP disabled,
+and the host-only assembly path. The GMRES settings were relative tolerance
+1e-10, restart 50 and maximum 2000 iterations, with systems AMG for mechanics;
+the mesh, material, loading and nonlinear settings are specified above.
+
+Regression coverage in `tests/phase_field_test.cpp` checks engineering shear,
+compression and split limits, zero strain, repeated roots, tiny residual
+stiffness, centered material and four-block Jacobian differences, the homogeneous
+AT2 balance, phase-aware postprocessing, independent tolerance floors, fixed-phase
+inner Newton and transactional failure. `czm_history_test.cpp` covers
+quadrature-history and nested-lifecycle behavior. One- and two-rank CTest cases
+exercise direct/iterative assembly and solver rebinding.
+
+Full Debug and Release builds and
+`ctest --test-dir build/<configuration> --output-on-failure -j 4` each passed
+all 179 enabled tests (two existing contact benchmark tests disabled).
+Logs and force curves for the failure and comparisons are under
+`/tmp/opencode/shear-tuning-20260910/` in the validation workspace.
+
+### Bounds and interpretation limits
 
 The history method guarantees nondecreasing committed H, not discrete bounds
 or nodal monotonicity of phi. Consistent Q1 reaction–diffusion assembly need not
@@ -289,34 +391,12 @@ pointwise bounds for higher-order elements. The serial example retains its
 existing nodal-bound check. Do not use the unavailable inherited element energy
 method for physical energy checks or globalization.
 
-Before removal of the bounds diagnostic, the retained uncapped algorithm
-completed the eight-rank Release case through 0.1 mm using `-rp 2 -rs 3
--ls direct` and the former diagnostic-continuation flag, with the tolerances
-above and default initial/max/min increments 1e-6/1e-2/1e-14.
-It accepted 146 steps without rejection, used at most 4 inner corrections and 515 outer sweeps,
-and an earlier diagnostic of the same numerical path recorded 91 nodal-bound
-violations. This addresses the observed algebraic
-stopping problem, not all benchmark-validation requirements. The 0.1 mm target
-is beyond the paper's 0.0134 mm comparison range.
-
-Regression coverage in `tests/phase_field_test.cpp` checks engineering shear,
-compression and split limits, zero strain, repeated roots, tiny residual
-stiffness, centered material and four-block Jacobian differences, the homogeneous
-AT2 balance, phase-aware postprocessing, independent tolerance floors, fixed-phase
-inner Newton and transactional failure. `czm_history_test.cpp` retains the
-quadrature-history and nested-lifecycle tests. One- and two-rank CTest cases
-exercise direct/iterative assembly and solver rebinding. Single-precision builds,
-full mesh/increment convergence, strict admissibility and published-curve
+Bounds diagnostics on the direct reference recorded nodal violations at 91
+accepted steps. The completed runs therefore establish algebraic convergence
+and regression consistency, not physical admissibility. The 0.1 mm target is
+beyond the paper's 0.0134 mm comparison range. Single-precision builds, full
+mesh/increment/quadrature convergence, strict admissibility and published-curve
 agreement have not been established.
-
-After cleanup, full Debug and Release builds and `ctest --test-dir
-build/<configuration> --output-on-failure -j 4` each passed 179 enabled tests
-(two existing benchmark tests disabled). The eight-rank cleanup rerun
-completed in 631.78 s and matched the pre-cleanup uncapped force CSV at printed
-precision. These checks establish implementation/regression consistency, not
-physical admissibility or mesh/increment convergence.
-The later removal of phase-bound diagnostics was Release-built; its follow-up
-eight-rank run was interrupted, so the completion results above predate that removal.
 
 ## References
 

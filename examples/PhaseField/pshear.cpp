@@ -222,7 +222,7 @@ int RunExample( int argc, char* argv[], MPI_Comm communicator )
     const char* meshFile = "data/crack_square2d_quad.msh";
     const char* outputDirectory = "ParaView";
     const char* displacementAMG = "systems";
-    const char* linearSolver = "direct";
+    const char* linearSolver = "gmres";
     mfem::real_t relativeTolerance = std::is_same_v<mfem::real_t, float> ? 1e-4f : 1e-5;
     mfem::real_t displacementAbsoluteTolerance = 1e-2;
     mfem::real_t phaseAbsoluteTolerance = 1e-6;
@@ -231,9 +231,12 @@ int RunExample( int argc, char* argv[], MPI_Comm communicator )
     int innerNewtonIterations = 30;
     int order = 1;
     int serialRefinementLevels = 3;
-    int parallelRefinementLevels = 4;
+    // A reproducible coarse demonstration; use -rp 4 for the finer mesh study.
+    int parallelRefinementLevels = 2;
     int localRefinementLevels = 0;
     int maximumSteps = 100000;
+    // Crack propagation needed 515 outer sweeps in the eight-rank coarse run.
+    // A small budget can exhaust load cutbacks even when inner Newton converges.
     int maximumSweeps = 1000;
     int outputInterval = 20;
     int infoLevel = 0;
@@ -259,7 +262,7 @@ int RunExample( int argc, char* argv[], MPI_Comm communicator )
     args.AddOption( &relativeTolerance, "-rtol", "--relative-tolerance",
                     "Nonlinear relative tolerance for both blocks." );
     args.AddOption( &linearSolver, "-ls", "--linear-solver",
-                    "Block linear solver: direct (default, requires MFEM MUMPS) or gmres (BoomerAMG)." );
+                    "Block linear solver: gmres (default, BoomerAMG) or direct (requires MFEM MUMPS)." );
     args.AddOption( &displacementAMG, "-uamg", "--displacement-amg",
                     "GMRES-only displacement AMG: systems (default), scalar, elasticity, or elasticity-no-refine." );
     args.AddOption( &meshFile, "-m", "--mesh", "Mesh file to use." );
@@ -281,7 +284,7 @@ int RunExample( int argc, char* argv[], MPI_Comm communicator )
     args.AddOption( &minimumPseudoTimeStep, "-dt-min", "--minimum-step", "Minimum continuation increment." );
     args.AddOption( &maximumSteps, "-steps", "--maximum-steps", "Maximum continuation attempts." );
     args.AddOption( &maximumSweeps, "-ni", "--nonlinear-iterations",
-                    "Maximum block-Newton sweeps per continuation attempt (not GMRES iterations)." );
+                    "Maximum outer staggered sweeps per continuation attempt (default 1000; not GMRES iterations)." );
     args.AddOption( &outputInterval, "-oi", "--output-interval", "Accepted steps between ParaView writes." );
     args.AddOption( &outputDirectory, "-od", "--output-directory", "ParaView output directory." );
     args.AddOption( &output, "-vis", "--visualization", "-no-vis", "--no-visualization",
