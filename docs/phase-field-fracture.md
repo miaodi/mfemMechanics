@@ -9,8 +9,8 @@ viscosity, plasticity or explicit crack-face contact. Two-dimensional mechanics
 is plane strain, with three-dimensional constitutive tensors.
 
 The parallel shear example can complete its full displacement range with the
-nested Newton/staggered solver below **in diagnostic bounds mode**. Nodal phase
-overshoot remains a discretization limitation. Completion in that mode is not
+nested Newton/staggered solver below. Nodal phase overshoot remains a
+discretization limitation assessed in postprocessing. Completion is not
 an admissible, mesh-converged reproduction of the published benchmark.
 
 ## Conventions, parameters and units
@@ -280,19 +280,22 @@ satisfy a discrete maximum principle; an accurate linear solve can overshoot.
 There is no phase clipping or constitutive floor. The quadratic law extrapolated
 outside [0,1] can regain stiffness and has no intended physical interpretation.
 
-By default `-strict-phase-bounds` aborts on nodal bounds violations after an
-accepted solve. `-diagnostic-phase-bounds` instead reports the nodal and assembly
-quadrature ranges and continues solely for diagnosis. Nonfinite coefficients
-always abort. These modes do not implement bound-constrained evolution or a
-pre-commit admissibility retry. Nodal bounds also do not establish pointwise
-bounds for higher-order elements. Do not use the unavailable inherited element
-energy method for physical energy checks or globalization.
+The MPI example does not use phase extrema to accept or reject a solve. It
+checks finite displacement/phase coefficients, nonlinear convergence and the
+final load target. Bounds must be assessed separately during mesh, quadrature
+and load-increment verification; there is no bound-constrained evolution or
+pre-commit admissibility retry. Nodal bounds alone also do not establish
+pointwise bounds for higher-order elements. The serial example retains its
+existing nodal-bound check. Do not use the unavailable inherited element energy
+method for physical energy checks or globalization.
 
-The retained uncapped algorithm completed the eight-rank Release diagnostic
-case through 0.1 mm using `-rp 2 -rs 3 -ls direct -diagnostic-phase-bounds`, the
-default tolerances above, and default initial/max/min increments 1e-6/1e-2/1e-14.
+Before removal of the bounds diagnostic, the retained uncapped algorithm
+completed the eight-rank Release case through 0.1 mm using `-rp 2 -rs 3
+-ls direct` and the former diagnostic-continuation flag, with the tolerances
+above and default initial/max/min increments 1e-6/1e-2/1e-14.
 It accepted 146 steps without rejection, used at most 4 inner corrections and 515 outer sweeps,
-and recorded 91 nodal-bound violations. This addresses the observed algebraic
+and an earlier diagnostic of the same numerical path recorded 91 nodal-bound
+violations. This addresses the observed algebraic
 stopping problem, not all benchmark-validation requirements. The 0.1 mm target
 is beyond the paper's 0.0134 mm comparison range.
 
@@ -308,10 +311,12 @@ agreement have not been established.
 
 After cleanup, full Debug and Release builds and `ctest --test-dir
 build/<configuration> --output-on-failure -j 4` each passed 179 enabled tests
-(two existing benchmark tests disabled). The eight-rank diagnostic rerun
+(two existing benchmark tests disabled). The eight-rank cleanup rerun
 completed in 631.78 s and matched the pre-cleanup uncapped force CSV at printed
 precision. These checks establish implementation/regression consistency, not
 physical admissibility or mesh/increment convergence.
+The later removal of phase-bound diagnostics was Release-built; its follow-up
+eight-rank run was interrupted, so the completion results above predate that removal.
 
 ## References
 

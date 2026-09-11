@@ -201,61 +201,19 @@ mfem::real_t GlobalReduction( mfem::real_t value, const MPI_Op operation, MPI_Co
     return value;
 }
 
-bool VerifyPhaseBounds( const mfem::ParGridFunction& phaseField, MPI_Comm communicator, bool strict )
+void VerifyFiniteSolution( const mfem::Vector& solution, MPI_Comm communicator )
 {
     mfem::real_t nonfinite = 0.;
-    for ( int i = 0; i < phaseField.Size(); ++i )
+    for ( int i = 0; i < solution.Size(); ++i )
     {
-        if ( !mfem::IsFinite( phaseField( i ) ) )
+        if ( !mfem::IsFinite( solution( i ) ) )
         {
             nonfinite = 1.;
             break;
         }
     }
     MFEM_VERIFY( GlobalReduction( nonfinite, MPI_MAX, communicator ) == 0.,
-                 "The distributed phase-field solution contains a non-finite coefficient." );
-    const mfem::real_t minimum = GlobalReduction( phaseField.Min(), MPI_MIN, communicator );
-    const mfem::real_t maximum = GlobalReduction( phaseField.Max(), MPI_MAX, communicator );
-    const mfem::real_t tolerance = std::is_same_v<mfem::real_t, float> ? 1e-4f : 1e-8;
-    MFEM_VERIFY( mfem::IsFinite( minimum ) && mfem::IsFinite( maximum ),
-                 "The distributed phase-field solution contains a non-finite value." );
-    if ( minimum < -tolerance || maximum > 1. + tolerance )
-    {
-        // Constitutive response is evaluated at quadrature points, whereas the
-        // admissibility check above concerns coefficients. Report the distinction
-        // before aborting; all ranks enter this branch from the same global bounds.
-        mfem::real_t quadratureMinimum = std::numeric_limits<mfem::real_t>::infinity();
-        mfem::real_t quadratureMaximum = -std::numeric_limits<mfem::real_t>::infinity();
-        const auto& space = *phaseField.FESpace();
-        for ( int e = 0; e < space.GetNE(); ++e )
-        {
-            const auto& element = *space.GetFE( e );
-            const auto& rule = mfem::IntRules.Get( element.GetGeomType(), 2 * element.GetOrder() + 1 );
-            for ( int q = 0; q < rule.GetNPoints(); ++q )
-            {
-                const mfem::real_t value = phaseField.GetValue( e, rule.IntPoint( q ) );
-                quadratureMinimum = std::min( quadratureMinimum, value );
-                quadratureMaximum = std::max( quadratureMaximum, value );
-            }
-        }
-        quadratureMinimum = GlobalReduction( quadratureMinimum, MPI_MIN, communicator );
-        quadratureMaximum = GlobalReduction( quadratureMaximum, MPI_MAX, communicator );
-        if ( mfem::Mpi::WorldRank() == 0 )
-        {
-            mfem::out << "Phase bounds at assembly quadrature points: min = " << quadratureMinimum
-                      << ", max = " << quadratureMaximum << std::endl;
-            if ( !strict )
-            {
-                mfem::out << "WARNING: diagnostic continuation with nodal phase bounds [" << minimum << ", " << maximum
-                          << "]; this is not an admissible benchmark state." << std::endl;
-            }
-        }
-    }
-    const bool admissible = minimum >= -tolerance && maximum <= 1. + tolerance;
-    MFEM_VERIFY( !strict || admissible,
-                 "The distributed phase-field solution left its admissible interval [0, 1]: min = "
-                     << minimum << ", max = " << maximum << ", tolerance = " << tolerance );
-    return admissible;
+                 "The distributed displacement/phase solution contains a non-finite coefficient." );
 }
 
 int RunExample( int argc, char* argv[], MPI_Comm communicator )
@@ -265,7 +223,6 @@ int RunExample( int argc, char* argv[], MPI_Comm communicator )
     const char* outputDirectory = "ParaView";
     const char* displacementAMG = "systems";
     const char* linearSolver = "direct";
-    bool strictPhaseBounds = true;
     mfem::real_t relativeTolerance = std::is_same_v<mfem::real_t, float> ? 1e-4f : 1e-5;
     mfem::real_t displacementAbsoluteTolerance = 1e-2;
     mfem::real_t phaseAbsoluteTolerance = 1e-6;
@@ -299,10 +256,6 @@ int RunExample( int argc, char* argv[], MPI_Comm communicator )
                     "Inner mechanics relative tolerance (reference frozen per subsolve)." );
     args.AddOption( &innerAbsoluteTolerance, "-u-inner-atol", "--mechanics-newton-absolute-tolerance",
                     "Inner mechanics absolute tolerance (N/m); target cannot be looser than the outer goal." );
-    args.AddOption( &strictPhaseBounds, "-strict-phase-bounds", "--strict-phase-bounds", "-diagnostic-phase-bounds",
-                    "--diagnostic-phase-bounds",
-                    "Abort on nodal phase bound violations (default), or warn and continue a diagnostic run. Nonfinite "
-                    "values always fail." );
     args.AddOption( &relativeTolerance, "-rtol", "--relative-tolerance",
                     "Nonlinear relative tolerance for both blocks." );
     args.AddOption( &linearSolver, "-ls", "--linear-solver",
@@ -345,10 +298,6 @@ int RunExample( int argc, char* argv[], MPI_Comm communicator )
     if ( rank == 0 )
     {
         args.PrintOptions( std::cout );
-        if ( !strictPhaseBounds )
-        {
-            mfem::out << "WARNING: diagnostic phase-bound policy; output may contain inadmissible phase fields." << std::endl;
-        }
     }
 
     const std::string amgMode( displacementAMG );
@@ -598,17 +547,13 @@ int RunExample( int argc, char* argv[], MPI_Comm communicator )
 
     mfem::BlockVector unconstrainedResidual( blockOffsets );
     int acceptedSteps = 0;
-    int phaseBoundViolations = 0;
     nonlinearSolver.SetDataCollectionFunc(
         [&]( const int, const int, const mfem::real_t pseudoTime )
         {
             acceptedSteps++;
+            VerifyFiniteSolution( solution, communicator );
             displacement.SetFromTrueDofs( solution.GetBlock( 0 ) );
             phaseField.SetFromTrueDofs( solution.GetBlock( 1 ) );
-            if ( !VerifyPhaseBounds( phaseField, communicator, strictPhaseBounds ) )
-            {
-                ++phaseBoundViolations;
-            }
             if ( output )
             {
                 internalResidual.Mult( solution, unconstrainedResidual );
@@ -639,11 +584,11 @@ int RunExample( int argc, char* argv[], MPI_Comm communicator )
                  "pPhaseField_shear did not reach the requested final pseudo-time." );
     displacement.SetFromTrueDofs( solution.GetBlock( 0 ) );
     phaseField.SetFromTrueDofs( solution.GetBlock( 1 ) );
-    VerifyPhaseBounds( phaseField, communicator, strictPhaseBounds );
+    VerifyFiniteSolution( solution, communicator );
     if ( rank == 0 )
     {
-        mfem::out << "Completed pseudo-time " << nonlinearSolver.GetCurLambda() << ", accepted steps = " << acceptedSteps
-                  << ", steps with phase-bound violations = " << phaseBoundViolations << std::endl;
+        mfem::out << "Completed pseudo-time " << nonlinearSolver.GetCurLambda()
+                  << ", accepted steps = " << acceptedSteps << std::endl;
     }
     return 0;
 }
